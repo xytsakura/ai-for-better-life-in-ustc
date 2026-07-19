@@ -426,7 +426,7 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
     "artifact_id": {"type": "string"},
     "artifact_type": {
       "type": "string",
-      "enum": ["course_report", "ingestion_receipt", "retrieval_result", "study_answer", "deletion_receipt"]
+      "enum": ["course_report", "ingestion_receipt", "retrieval_result", "study_answer", "deletion_receipt", "source_list"]
     },
     "schema_version": {"const": "1.0"},
     "data": {"type": "object"},
@@ -468,6 +468,7 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
 | `study.search` | `course_id`、`query`、`top_k` | `retrieval_result`：`chunks`、`citations`、`data_scope` |
 | `study.answer` | `course_id`、`question` | `study_answer`：`answer`、`citations`、`confidence` |
 | `study.delete` | `document_id` | `deletion_receipt`：`document_id`、`status`、`invalidated_at` |
+| `study.list_sources` | `course_id`、可选 `knowledge_space` | `source_list`：`sources`、`data_scope`、`generated_at` |
 
 具体业务 Schema 由各 Agent 文档定义，Gateway 只校验版本化 envelope 和已注册 skill 的输入/输出 Schema 引用。
 

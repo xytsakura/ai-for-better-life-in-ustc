@@ -104,7 +104,7 @@ sequenceDiagram
     G->>R: 查询匹配能力
     R-->>G: Agent Card 与技能候选
     G->>A: 创建 A2A Task
-    A-->>G: working / input-required
+    A-->>G: TASK_STATE_WORKING / TASK_STATE_INPUT_REQUIRED
     G-->>U: 流式进度或追问
     A->>M: 调用数据工具
     M->>D: 按权限读取
