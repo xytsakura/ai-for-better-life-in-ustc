@@ -17,7 +17,13 @@
 - 官方文章链接已验证可访问：<https://mp.weixin.qq.com/s/AZKK8QSrTQWR3u0yO4d_kA>
 - 队伍名称为 `AI for better life In ustc`，队长负责主要协调工作。
 - 队伍共有 3 名本科生，已完成报名，参加本科生组的智能体赛道。
-- GitHub 私有仓库计划使用 `xytsakura/ai-for-better-life-in-ustc`。
+- GitHub 私有仓库为 `xytsakura/ai-for-better-life-in-ustc`。
 - 两名队友的 GitHub 用户名为 `wml-wml294` 和 `ysyzynx`，邀请时只使用 GitHub 用户名，不记录个人邮箱。
 - 官方文章发布时间为 2026 年 6 月 24 日；原文报名截止为 2026 年 7 月 12 日，本队已在截止流程中完成报名。
 - 赛道分为“算力平台赛道”和“智能体赛道”，每队最多 4 人且至少 1 名本科生，每队只能报一个赛道。
+- 2026 年 7 月 19 日会议确定：核心产品是校园 Agent 协议调度与集成框架，课程评价和课程资料助手是两个验证 Demo。
+- 第一版采用白名单第三方 Agent 真实接入；A2A 负责 Agent 间通信，MCP 负责工具与数据连接，OpenAPI/JSON Schema 负责平台接口契约。
+- 评课社区使用 Flask 会话 Cookie 和 CSRF，不存在可共享的通用用户 API token。搜索 URL 的短期 token 不是登录凭据。
+- 评课社区登录凭据不得提取到聊天、写入文档或提交仓库；登录限定内容优先通过用户本地 Connector 访问。
+- 评课社区代码的 AGPLv3 不覆盖用户点评和课程附件的内容版权。未经授权不得批量复制或公开再分发。
+- 文档目录按 `architecture/`、`designs/`、`research/`、`meetings/`、`decisions/` 分类；代码目录只在实施计划批准且确有内容时创建。
