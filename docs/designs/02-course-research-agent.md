@@ -13,6 +13,7 @@
 - 生成中文 Deep Research 报告，明确列出结论、证据、时间、新旧点评差异、分歧观点和不确定性。
 - 汇总课程字段、评分维度、点评观点、课程要求、教师信息、课程主页和允许访问的附件元数据。
 - 对课程级摘要建立缓存，并在出现新点评或可见性变化时做增量刷新。
+- 在统一 AgentTemplate 下支持不同用户选择不同模型，并复用公共证据或经校验的公共标准答案。
 - 必须支持公开模式；登录增强模式是获得平台授权且安全测试通过后的条件能力，登录凭据不离开用户设备，不共享队长或任何成员的 Cookie。
 - 为演示和评测提供可重复的数据集、指标和错误处理路径。
 
@@ -188,26 +189,31 @@
 
 ### 10.1 缓存层级
 
-- 搜索缓存：自然语言查询到课程候选的短期缓存，TTL 5 到 15 分钟。
-- 课程结构化快照缓存：按公开/登录增强模式分离；无额外授权时最长 24 小时，不持久化原始 HTML 或完整点评正文。
-- 课程摘要缓存：按课程、教师、可见范围、报告模板和模型版本区分；无额外授权时最长 24 小时，只保存摘要、必要短证据、来源和采集时间。
-- 附件元数据缓存：只保存授权范围内的文件名、类型、来源上下文和本地处理状态。
+本 Agent 使用 Harness 的五层缓存语义：
+
+- L1 来源快照：自然语言查询到课程候选、公开课程字段和公开页面版本；搜索 TTL 5 到 15 分钟，其余公开快照无额外授权时最长 24 小时。
+- L2 解析与索引：清洗后的允许字段、短证据、内容版本和结构化索引，不持久化原始 HTML 或完整点评正文。
+- L3 证据与检索：规范化问题到 `EvidenceBundle`，记录课程、教师、可见范围、查询和检索策略版本。
+- L4 公共标准答案：经引用、事实性和安全校验的 `AnswerArtifact`，记录模板、提示、生成模型、证据版本和时间。
+- L5 私人生成：结合用户个人偏好、登录证据或个人记忆的报告，只进入用户私有空间或本地加密缓存。
+
+不同模型可以共享 L1-L3。L4 命中时不调用用户模型，并明确显示生成模型与时间；用户选择“用我的模型重新生成”时复用 L3，把新回答和 usage 写入本人 L5。用户 BYOK 结果默认不能晋升为 L4。
 
 ### 10.2 缓存键
 
-公开摘要缓存键：
+公开证据缓存键：
 
 ```text
-course_summary:v1:public:icourse:<course_id>:template=<template_version>:model=<model_id>
+course_evidence:v1:public:icourse:<course_id>:data=<data_version>:retriever=<retriever_version>:policy=<policy_version>
 ```
 
-登录增强摘要缓存键：
+公共标准答案缓存键：
 
 ```text
-course_summary:v1:local:<local_scope_id>:icourse:<course_id>:template=<template_version>:model=<model_id>
+course_answer:v1:<question_hash>:evidence=<evidence_version>:template=<template_version>:prompt=<prompt_version>:generator=<provider_id>/<model_id>:policy=<policy_version>
 ```
 
-`local_scope_id` 是每次本地授权随机生成的不透明标识，不由 Cookie、用户名、邮箱或学号哈希得到。附件处理缓存必须绑定本地设备和授权版本，不进入公共共享缓存。
+私人生成缓存键至少包含 `subject_id`、`agent_profile_id`、`provider_id`、`model_id`、`private_data_version`、`prompt_version` 和 `policy_version`。`local_scope_id` 是每次本地授权随机生成的不透明标识，不由 Cookie、用户名、邮箱或学号哈希得到。附件处理与登录增强生成必须绑定本地设备和授权版本，不进入 L1-L4 或公共共享缓存。
 
 ### 10.3 增量刷新
 
@@ -220,6 +226,7 @@ course_summary:v1:local:<local_scope_id>:icourse:<course_id>:template=<template_
 5. 若点评可见范围变化，重新计算对应可见范围的摘要，不污染公开缓存。
 6. 若点评被删除、隐藏、屏蔽或从公开变为受限，立即在对应快照写入 tombstone，并从摘要、证据表和搜索索引移除；不能只处理新增内容。
 7. 若附件变化，只更新附件元数据；附件内容摘要需用户本地授权后再处理。
+8. Template、Prompt、Model capability 或 Policy 版本变化时按所在层精确失效；更换用户模型不应强制重建 L1-L3。
 
 缓存不是内容所有权。来源页面消失、维护者提出删除、授权到期或可见范围收紧时，即使 TTL 未到也必须立即失效并重建；所有缓存结果展示来源和采集时间。
 
@@ -249,6 +256,7 @@ course_summary:v1:local:<local_scope_id>:icourse:<course_id>:template=<template_
 - 报告默认仅供本地使用；若用户导出可分享版本，系统必须重新生成公开模式报告。
 - 对附件内容处理采用本地解析优先；使用远端模型前必须明确告知哪些脱敏片段将离开设备并再次确认，默认不上传登录受限内容。
 - 登录增强证据使用短期本地引用，会话结束可一键清除，不进入 Gateway 公共事件、公共缓存或共享 RAG。
+- 登录增强、私人偏好和个人记忆默认由本地 Runner 处理。不能因 Runner 离线或模型失败静默切换到平台或第三方云模型。
 
 ## 12. 隐私、版权与授权
 

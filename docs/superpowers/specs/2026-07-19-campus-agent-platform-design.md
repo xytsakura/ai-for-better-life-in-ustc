@@ -3,14 +3,14 @@
 ## 1. 状态
 
 - 设计日期：2026-07-19
-- 版本：0.2（发布前审计修订版）
-- 状态：已获队长批准，完成三轮初审和本轮三路独立审计，待团队审阅后进入实施计划
+- 版本：0.3（个人 Agent Harness 集成审计版）
+- 状态：已获队长批准，完成 v0.3 规格、安全与跨文档审计，待团队审阅后进入实施计划
 - 项目：AI for better life In ustc
 - 赛事：一〇七杯，本科生组，智能体赛道
 
 ## 2. 背景与问题
 
-团队希望建设校园 Agent 的统筹层，而不是只实现一个校园问答功能。不同校园 Agent 应保持独立开发和部署，通过统一协议被发现、调用和组合。比赛版本用课程评价 Deep Research 和课程资料复习助手作为验证案例。
+团队希望建设校园 Agent 的统筹层，而不是只实现一个校园问答功能。不同团队的独立校园 Agent 通过统一协议被发现、调用和组合；平台同时提供共享 Agent Harness，让每个用户可以按经济能力与隐私需求选择模型、知识空间和执行位置来维护个人 Agent。比赛版本仍只有课程评价 Deep Research 和课程资料复习助手两个业务 Demo；外部通知 Agent 只证明标准接入，双模型/双运行时只证明 Harness 可替换性，不作为额外业务 Demo 扩大范围。
 
 ## 3. 交付范围
 
@@ -23,7 +23,9 @@
 5. Agent 协议调研；
 6. 评课社区公开/登录能力、认证和内容边界调研；
 7. 会议记录与项目路线图；
-8. 全局 README 和安全忽略规则。
+8. 个人 Agent Harness 与混合模型运行时独立设计；
+9. 多模型、BYOK、本地 Runner 技术调研和 ADR-0003；
+10. 全局 README、威胁模型、审计和路线图同步更新。
 
 ## 4. 核心架构决策
 
@@ -37,9 +39,14 @@
 - 设计兼容 OpenTelemetry，MVP 先交付结构化日志和 correlation ID，核心链路稳定后再部署 Collector；
 - Gateway 不承载具体课程业务逻辑；
 - 登录凭据由 Connector 管理，不跨 Agent 透传。
-- Gateway 使用版本化 `TaskRequest`、`TaskEvent`、`ArtifactEnvelope` 和 `FileRef` 连接三个子系统；文件先进入受控文件区，A2A 任务只传安全引用，部署需要时再升级为 S3/MinIO。
+- Gateway 使用版本化 `TaskRequest`、`TaskEvent`、`ArtifactEnvelope` 和 `FileRef` 连接平台组件；文件先进入受控文件区，A2A 任务只传安全引用，部署需要时再升级为 S3/MinIO。
 - 比赛 MVP 采用纵向闭环优先：PostgreSQL/pgvector、受控本地文件区和结构化日志是基线；Redis、S3/MinIO、完整 OpenTelemetry、LangGraph 和登录增强 Connector 均为条件采用。
 - 外部示例 Agent 固定实现 `campus.notice.lookup`，用独立进程、标准 Agent Card 和固定任务证明 Gateway 无业务代码改动接入。
+- 个人 Agent 采用 `AgentTemplate + AgentProfile + ModelProfile`，不为每个用户部署公网 A2A endpoint；
+- 模型 provider 是 Harness 内部 adapter，A2A 与 MCP 边界不变；
+- 运行时采用平台/团队托管测试模型 + 只出站本地 Runner，普通用户真实 BYOK 不进入比赛版服务器；
+- 数据 scope 先于模型路由，禁止静默 provider/key/runtime fallback，MVP 只允许白名单 `base_url`；
+- 缓存分为来源、解析/索引、证据/检索、公共 AnswerArtifact 和私人生成五层，不同模型共享公共证据而不共享私人回答。
 
 ## 5. 评课社区约束
 
@@ -52,11 +59,15 @@
 - 未获授权前不批量复制或公开再分发完整点评和课程附件。
 - 队长在 2026-07-21 前联系维护者，2026-07-27 前无明确授权则采用保守降级：仅公开模式、单并发低频访问；搜索缓存 5 至 15 分钟，课程元数据/摘要最长 24 小时；不保存原始 HTML 或全量点评，不处理登录受限附件，不公开登录增强报告。
 
-## 6. 三个子系统的接口边界
+## 6. 四个子系统的接口边界
 
 ### Gateway
 
-输入是用户任务或 A2A 请求；输出是标准任务状态和 Artifact。它依赖 Registry、Policy、Task Store 和 A2A Client，不依赖评课社区页面结构。
+输入是用户任务或 A2A 请求；输出是标准任务状态和 Artifact。它依赖 Registry、Profile Resolver、Policy、Task Store、Runner Lease Manager 和 A2A Client，不依赖评课社区页面结构。
+
+### 个人 Agent Harness
+
+输入是已验证的 TaskRequest 与 `agent_profile_id`；输出是 TaskEvent、Artifact 和 UsageRecord。它负责 Template/Profile/Model 执行快照、模型 adapter、MCP 工具、L1-L5 缓存、预算和输出校验。Profile、密钥、预算与 Runner 治理字段不进入第三方 A2A payload。
 
 ### 课程评价 Agent
 
@@ -75,6 +86,9 @@
 - 数据源限流或页面变化：返回部分结果和来源状态，不生成无证据结论；
 - 附件解析失败：只保留文件类型、课程页来源和处理状态，不保存或返回受限下载地址，不阻塞其他证据；
 - 私有资料无权访问：在检索前拒绝，不将内容交给模型后再过滤。
+- 模型能力不足、预算超限或 Runner 离线：返回专用错误；可用公共缓存仍可展示，但不静默调用其他模型；
+- 用户请求切换 provider、key 归属或执行位置：显示数据范围与成本影响，确认后生成新执行票据；
+- key 撤销或 lease 过期：停止排队、重试和结果提交，不复用旧授权。
 
 ## 8. 评测与验收
 
@@ -105,6 +119,14 @@
 - 删除资料后索引和缓存同步失效。
 - 登录受限且未获入库授权的附件不进入服务器文件区、哈希、向量、Artifact 或共享缓存。
 
+### 个人 Agent Harness
+
+- 同一 AgentTemplate 在平台/团队测试模型和本地 Runner 模型上执行，模板业务流程代码不变；
+- L3 公共证据可跨 Profile 复用，L4 命中不调用用户模型，主动重新生成写入本人 L5；
+- 用户 A 的 ModelProfile、私人记忆和 L5 对用户 B 零可见；
+- 模型 capability 不匹配、预算超限、Runner 离线和 key 撤销可解释失败；
+- provider/base URL allowlist、Runner lease 重放、密钥 DLP 和禁止静默 fallback 测试通过。
+
 ### 量化通过阈值
 
 | 模块 | 指标 | 通过阈值 |
@@ -117,6 +139,10 @@
 | 课程资料 | Recall@5 / 引用正确率 / 忠实度 | 不低于 80% / 90% / 90% |
 | 课程资料 | 权限隔离 | 100% 通过 |
 | 课程资料 | 删除后残留命中 | 0 条，60 秒内失效 |
+| Harness | 同一模板双执行模式固定任务完成率 | 100% |
+| Harness | L4 命中时用户模型调用 | 0 次 |
+| Harness | 跨用户 ModelProfile/记忆/L5 泄漏 | 0 次 |
+| Harness | Runner 重放、任意 base URL、静默 fallback、成本滥用 | 100% 被拒绝 |
 | 安全 | SSRF、FileRef 越权、提示注入、恶意文件/Artifact 固定用例 | 100% 被拒绝 |
 
 ## 9. 非目标
@@ -127,13 +153,15 @@
 - 全量镜像评课社区；
 - 自动收集或公开再分发版权不明确的教材、往年题和附件；
 - 在文档阶段锁定未经原型验证的所有依赖版本。
+- 收集普通用户真实托管 BYOK、任意模型 `base_url`、自动模型竞价/failover、多设备 Runner、开放模板市场和费用代收。
 
 ## 10. 文档验收
 
-- 三份独立设计的目标、边界、数据流、错误处理、测试和 MVP 完整；
-- 总体架构与三份设计没有协议或职责冲突；
+- 四份独立设计的目标、边界、数据流、错误处理、测试和 MVP 完整；
+- 总体架构与四份设计没有协议或职责冲突；
 - 评课社区结论有公开页面或开源代码证据；
 - README 准确反映“设计阶段”，不声称代码已经实现；
 - 路线图能够在 2026-09-06 前形成稳定演示；
 - 仓库中不存在账号密码、Cookie、搜索 token、文件哈希样例或私人资料。
 - 竞品、技术选型、威胁模型、审计发现和修复状态有独立文档，可区分一手事实、项目推断与未决风险。
+- 个人 Agent Harness 的正式规格单列于[个人 Agent Harness 与混合模型运行时设计规格](./2026-07-19-personal-agent-harness-design.md)，主规格只维护跨模块边界与总体验收。

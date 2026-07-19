@@ -32,3 +32,9 @@
 - 比赛 MVP 采用纵向闭环优先：PostgreSQL、受控文件区、结构化日志为基线；Redis、MinIO、完整 OpenTelemetry、LangGraph 和登录增强 Connector 条件采用。
 - 未获评课社区明确授权时，登录受限点评和附件不进入服务器事件、对象存储、哈希、向量、Artifact 或共享缓存；公开模式使用短 TTL。
 - 网页、点评、外部 Agent 输出和用户文件均按不可信输入处理，实施必须覆盖 SSRF、提示注入、恶意文件、FileRef 越权和任务重放。
+- 2026 年 7 月 19 日新增产品方向：平台提供统一校园 Agent Harness，用户通过 `AgentTemplate + AgentProfile` 维护个人 Agent，可选择不同模型、知识空间、记忆、预算和执行位置。
+- 模型提供方属于 Harness 内部 adapter，不是 A2A Agent 或 MCP Tool；外部独立 Agent 继续使用 A2A，Agent 内部工具继续使用 MCP。
+- 个人模型支持 `platform_sponsored`、`managed_byok`、`local_runner` 三类设计；比赛 MVP 不收集普通用户真实托管 BYOK，真实用户 key 优先保留在只出站本地 Runner。
+- 平台模型 provider 和 `base_url` 必须白名单；不允许静默切换 provider、密钥归属或本地/托管执行，私人数据远端发送必须逐次确认。
+- 缓存按公开来源、解析/索引、证据/检索、公共 AnswerArtifact、私人生成五层治理；不同模型可复用公共证据，私人回答、记忆和用户级 usage 不跨用户命中。
+- 当前文档版本升级为 `v0.3`；新增 ADR-0003、个人 Agent Harness 设计、模型/BYOK/Runner 调研和相应安全审计。三路独立审计和修复复审已通过，代码目录仍须在实施计划批准后创建。

@@ -13,15 +13,16 @@
 1. 课程评价 Agent：先做端到端闭环，用来验证协议调度、工具调用、权限与结果展示。
 2. 课程资料与复习知识助手：第二个 Demo，证明调度层可以接入 RAG、资料导入、引用和个人知识库隔离。
 3. 外部示例 Agent：在第一周接入独立的 `campus.notice.lookup` Agent，尽早证明调度层不是只为两个内置 Demo 写死。
+4. 个人 Agent Harness：用 `AgentTemplate + AgentProfile` 证明同一校园能力可选择不同模型，并通过公共证据缓存与本地 Runner 兼顾成本、复用和隐私。
 
-优先级顺序是：协议调度层 + 最小外部 Agent + 课程评价公开模式端到端 > 课程资料 RAG > 评测与安全 > 视频、文档和答辩材料。评课社区登录增强、Redis、S3/MinIO、完整 OpenTelemetry 和重排模型不进入默认关键路径。
+优先级顺序是：协议调度层 + 最小外部 Agent + 课程评价公开模式端到端 > 个人 Agent 最小 Profile/Adapter/Runner 证明 > 课程资料 RAG > 评测与安全 > 视频、文档和答辩材料。评课社区登录增强、真实用户托管 BYOK、任意 provider、自动模型路由、Redis、S3/MinIO、完整 OpenTelemetry 和重排模型不进入默认关键路径。
 
 ## 3. 里程碑
 
 | 日期 | 里程碑 | 必须达到的状态 |
 | --- | --- | --- |
 | 2026-07-21 | 题目与系统边界冻结 | 明确作品名称、调度层核心卖点、两个 Demo 范围 |
-| 2026-07-27 | 标准主干与外部接入跑通 | 官方 SDK spike 完成；内部 Agent 和独立 `campus.notice.lookup` Agent 可被发现、调用并返回统一 Artifact，Gateway 业务代码无特例 |
+| 2026-07-27 | 标准主干、外部接入与 Harness spike 跑通 | 官方 SDK spike 完成；内部 Agent 和独立 `campus.notice.lookup` Agent 可被发现并返回统一 Artifact；Profile 解析、平台测试模型与本地 Runner 完成同一固定任务 |
 | 2026-08-03 | 课程评价 Agent E2E | 从用户问题到工具调用、结果聚合、页面展示完整跑通 |
 | 2026-08-10 | RAG 导入与检索 MVP | 合规样例资料可以导入、分块、入库、检索 |
 | 2026-08-17 | 双 Demo 可演示 | 课程评价与课程资料 RAG 都能按脚本稳定演示 |
@@ -41,6 +42,7 @@
 - 两个 Demo 的边界文档。
 - 合规资料来源清单初版。
 - 竞品技术调研、威胁模型、审计闭环和 MVP 取舍 ADR。
+- 个人 Agent Harness、模型 provider/BYOK/Runner 技术调研和 ADR-0003。
 - 由队长暂代数据合规联系人，在 2026-07-21 前向 `service@icourse.club` 发送比赛用途、只读接口、缓存期限、速率限制、附件摘要和演示授权咨询，并记录邮件内容。
 
 重点：
@@ -55,6 +57,9 @@
 交付物：
 
 - A2A 1.0 Agent Card、任务、Artifact 和 MCP 工具最小闭环；锁定通过 spike 的 SDK 版本。
+- AgentTemplate、AgentProfile、ModelProfile、CapabilitySnapshot 最小 Schema 与 Profile Resolver。
+- 一个 OpenAI-compatible adapter、两个 provider capability 配置、Usage Ledger 和预算硬限制。
+- 一个只出站 CLI Runner：短期配对、单任务 lease、一个设备和一个并发任务。
 - 最小后端服务：会话、工具调用、Agent 路由、错误返回。
 - 最小前端页面：选择 Demo、输入问题、展示调用轨迹；优先 React + Vite 或团队熟悉的更轻方案。
 - 课程评价 Agent 的数据模型和假数据样例。
@@ -66,6 +71,7 @@
 - 先跑通一个最小闭环：用户问题进入调度层，调度层选择 Agent，Agent 调用工具，前端展示结构化结果。
 - 日志中记录每一步调用，方便演示“不是普通聊天壳”。
 - PostgreSQL 事件表、受控本地文件区和结构化日志先行；此时不部署 Redis、MinIO 和完整 OTel 后端。
+- 同一课程模板必须在平台/团队测试模型与本地 Runner 模型各跑一次；若 7 月 27 日仍不稳定，按 ADR-0003 降级，不得收集普通用户真实托管 key 赶进度。
 
 ### 第 2 周：2026-07-28 至 2026-08-03
 
@@ -76,6 +82,7 @@
 - 评价检索、筛选、总结和引用展示。
 - 第一版演示脚本。
 - 冻结 30 到 50 条课程评价评测夹具和公开缓存/删除策略。
+- 落地 L3 公共证据、L4 公共 AnswerArtifact 和 L5 私人生成的最小缓存路径；缓存响应显示 generator、evidence 与时间。
 
 重点：
 
@@ -106,7 +113,9 @@
 
 - 课程资料 RAG 完整演示脚本。
 - 两个 Demo 都接入统一调度层前端。
+- 前端可查看个人 Agent Profile、当前 provider/runtime、预算与缓存命中，并显式选择“用我的模型重新生成”。
 - 权限隔离测试：学生 A 的私有资料不被学生 B 检索到。
+- 模型与缓存隔离测试：学生 A 的 ModelProfile、私人记忆和 L5 不被学生 B 读取；Runner 离线时不切到云模型。
 - 小规模固定问答评测集。
 
 重点：
@@ -169,12 +178,14 @@
 职责：
 
 - Agent 注册、能力描述、调度和工具调用。
+- Profile Resolver、ModelAdapter、Usage Ledger、Runner lease 与显式 fallback/egress。
 - 会话、权限上下文、日志和错误处理。
 - 后端接口、部署脚本和基础测试。
 
 优先交付：
 
 - 统一协议层。
+- 个人 Agent Harness 最小运行时。
 - 课程评价 Agent 后端链路。
 - RAG Agent 后端链路集成。
 
@@ -185,6 +196,7 @@
 - 合规样例数据整理。
 - 文档导入、解析、分块、向量索引和混合检索。
 - 引用、评测集、指标和失败案例分析。
+- L1-L5 缓存版本、失效与跨用户隔离测试。
 
 优先交付：
 
@@ -203,6 +215,7 @@
 优先交付：
 
 - 两个 Demo 的统一入口。
+- Profile/模型/执行位置、预算和缓存来源的可解释展示。
 - 演示脚本。
 - 提交材料初版与最终版。
 
@@ -214,7 +227,8 @@
 2. 课程评价 Agent 先端到端，验证调度层价值。
 3. RAG Agent 复用调度层接入方式，避免做成孤立模块。
 4. 权限隔离和引用能力必须早测，否则后期难补。
-5. 演示视频和设计文档必须在 2026 年 8 月底形成初版。
+5. Harness 只证明一个模板、两种执行位置、三类关键缓存；不得扩成完整模型平台。
+6. 演示视频和设计文档必须在 2026 年 8 月底形成初版。
 
 任何功能如果不能服务这条路径，都应该推迟或砍掉。
 
@@ -231,6 +245,9 @@
 | 部署环境不稳定 | 现场或评审无法复现 | 准备本地演示、截图、录屏和一键启动说明 |
 | 基础设施堆叠 | Redis/MinIO/OTel/LangGraph 排障挤占业务 | 默认不用；只有两天 spike 或明确瓶颈证明价值后加入 |
 | 外部内容攻击 | Agent、点评或文件触发 SSRF、提示注入或解析漏洞 | 白名单仍按不可信输入处理，执行固定安全测试 |
+| BYOK 或私有数据泄露 | key/私人 chunk 进入日志、A2A、公共缓存或远端模型 | 普通用户 key 留在本地 Runner；scope 先于路由；DLP 和跨用户零命中测试 |
+| 多模型兼容被高估 | OpenAI-compatible provider 忽略 tools/JSON/reasoning 语义 | 维护 capability snapshot；固定探测；不匹配明确失败 |
+| Harness 扩张抢主线 | 多 provider、自动路由、Runner 运维拖垮双 Demo | 只做一个 adapter、两个配置、一个设备和一个并发；7 月 27 日触发降级 |
 
 ## 8. 停止规则
 
@@ -241,6 +258,7 @@
 - 2026 年 8 月 20 日：如果重排模型效果不稳定，改为全文检索 + 向量检索加权融合。
 - 2026 年 7 月 24 日：如果 LangGraph spike 没有显著简化课程研究流程，改用显式 Python pipeline + PostgreSQL checkpoint。
 - 2026 年 7 月 27 日：如果 Redis、MinIO 或完整 OTel 尚未证明必要，保持 PostgreSQL 事件表、受控本地文件区和结构化日志。
+- 2026 年 7 月 27 日：如果 Profile 解析、平台测试模型、本地 Runner、lease 与 L3/L4/L5 隔离 spike 不能稳定通过，保留规格和接口测试，演示降级为平台模型 + 本地 mock provider；不阻塞 Gateway、两个 Demo 和外部 Agent。
 - 2026 年 8 月 24 日：如果外部 Agent 功能扩展阻塞，保持 `campus.notice.lookup` 确定性最小能力，但仍必须作为独立进程按接入文档发布 A2A 1.0 Agent Card 并真实注册，不能退化为 Gateway 进程内 mock。
 - 2026 年 8 月 27 日：如果自动增量更新不稳定，改为手动重新导入并保留版本记录。
 - 2026 年 8 月 31 日：停止新增功能，进入材料和稳定性优先。
@@ -252,6 +270,7 @@
 - 一个端到端课程评价 Demo。
 - 一个课程资料 RAG Demo，至少支持公共资料和个人私有资料隔离。
 - 一个独立进程的 `campus.notice.lookup` 外部 Agent，Gateway 业务代码零改动接入。
+- 一个最小个人 Agent Harness：同一模板可配置不同模型，至少保留平台/团队测试调用、本地 Runner 接口和分层缓存证据；即使降级也不能牺牲密钥与权限边界。
 - 一份能讲清楚架构、合规、评测和演示流程的设计文档。
 - 一段稳定录屏。
 
@@ -262,6 +281,8 @@
 - 当前功能是否可以从零启动并演示。
 - 是否有未记录来源的数据或资料。
 - 是否有 API key、密码或个人敏感信息进入仓库。
+- 是否有用户 ModelProfile、私人记忆或 L5 缓存跨用户命中。
+- 是否发生未经确认的 provider/key/runtime fallback 或私人数据远端 egress。
 - 是否有权限越界的检索结果。
 - 是否有 Agent Card SSRF、提示注入、恶意文件/Artifact 或 FileRef 越权回归。
 - 是否有无法解释的模型回答。
