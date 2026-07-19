@@ -13,7 +13,7 @@
 
 ## 2. 设计原则
 
-- **标准优先**：使用 A2A、MCP、OpenAPI 和 JSON Schema，不重新发明完整协议。
+- **标准优先**：锁定 A2A Protocol 1.0 `HTTP+JSON`、MCP 2025-06-18 授权语义、OpenAPI 3.1 和 JSON Schema 2020-12，不重新发明完整协议。
 - **独立边界**：Gateway 不读取业务 Agent 内部状态，业务 Agent 不直接依赖平台数据库结构。
 - **最小可用**：比赛版只实现白名单接入、两个 Demo 和一个外部示例 Agent。
 - **凭据不转发**：用户或数据源凭据不作为 Agent 任务参数跨服务透传。
@@ -126,6 +126,8 @@ sequenceDiagram
 
 登录凭据属于数据连接器，不属于 A2A 任务载荷。Gateway 只接收权限范围和连接器返回的结构化数据，不接收原始 Cookie。
 
+三个子系统通过版本化 `TaskRequest`、`TaskEvent`、`ArtifactEnvelope` 和 `FileRef` 交换数据。用户文件先进入对象存储，A2A 任务只携带限定权限的文件引用；Gateway 编排 A2A 任务，业务 Agent 在内部编排 MCP 工具。
+
 ## 7. 技术选型
 
 - Python 作为 Gateway、Agent 和 Connector 的主要实现语言；
@@ -161,7 +163,7 @@ tests                    协议、集成、评测和端到端测试
 ## 9. MVP 验收
 
 - 两个 Demo Agent 以独立进程发布 Agent Card，并通过 A2A 被 Gateway 调用；
-- 一个最小外部示例 Agent 根据接入文档完成白名单注册，无需修改 Gateway；
+- 一个独立部署/独立进程的最小外部示例 Agent 根据接入文档完成白名单注册，无需修改 Gateway，不能用进程内 mock 代替；
 - 用户能看到任务进度、追问、完成、失败、超时和取消状态；
 - 课程评价报告包含来源、时间和样本说明；
 - 课程资料回答包含引用，并遵守公共/私有空间隔离；

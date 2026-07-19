@@ -50,6 +50,49 @@
 - 分歧与偏差说明：样本数量、时间分布、极端评价、匿名/仅学生可见内容限制、可见性差异。
 - 附件清单：只展示文件名、类型、来源页面、是否需要登录、摘要状态；不公开镜像下载链接，不上传附件全文到公共服务。
 
+### 5.3 与 Gateway 的最小契约
+
+课程评价 Agent 在 Agent Card `skills` 中声明 `course_research`，接收版本化 `TaskRequest`：
+
+```json
+{
+  "schema_version": "1.0",
+  "task_type": "course_research",
+  "message": "调研这门课程的工作量和学习收获",
+  "inputs": [],
+  "data": {
+    "query": "调研这门课程的工作量和学习收获",
+    "access_mode": "public",
+    "course_filters": {
+      "teacher": null,
+      "term_range": ["2024秋", "2026春"]
+    }
+  }
+}
+```
+
+最终返回 `course_report` Artifact：
+
+```json
+{
+  "artifact_id": "artifact_example",
+  "artifact_type": "course_report",
+  "schema_version": "1.0",
+  "data": {
+    "candidates": [],
+    "summary": "基于当前可见来源生成的摘要。",
+    "dimensions": {},
+    "evidence": [],
+    "data_scope": "public",
+    "generated_at": "2026-07-19T00:00:00Z"
+  },
+  "files": [],
+  "citations": []
+}
+```
+
+`access_mode` 只允许 `public` 或 `local_authenticated`。后者表示本地 Connector 已生成脱敏结构化输入，不表示 Gateway 获得用户 Cookie。
+
 ## 6. 课程消歧
 
 自然语言查询先进入候选召回，再进行消歧排序。候选来源包括课程名、课程号、教师名、院系、课程类型和点评内容搜索。系统应把“同名课程不同教师”“同一课程不同学期”“课程号前缀相同但课程不同”分开呈现。
@@ -249,6 +292,19 @@ course_summary:v1:local:<user_scope_hash>:icourse:<course_id>:template=<template
 - 偏差处理质量：是否正确标注样本少、时间旧、观点冲突和登录可见范围。
 - 合规性：是否泄露 Cookie、用户身份、长篇原文或附件内容。
 - 可用性：从输入查询到首屏报告的耗时和失败可恢复率。
+
+MVP 在固定数据、模型版本和测试环境下采用以下通过阈值：
+
+| 指标 | 通过阈值 |
+|---|---:|
+| 课程候选 Recall@5 | 不低于 95% |
+| 自动消歧 Top-1 准确率 | 不低于 85% |
+| 关键结论证据覆盖率 | 不低于 95% |
+| 人工核验的结论忠实度 | 不低于 90% |
+| 登录凭据、用户身份和受限下载地址泄露 | 0 次 |
+| 相同公开课程重复查询缓存命中率 | 不低于 90% |
+| 缓存命中后的 P95 首屏响应 | 不高于 5 秒 |
+| 未缓存公开调研的 P95 完成时间 | 不高于 60 秒 |
 
 ## 15. 测试
 

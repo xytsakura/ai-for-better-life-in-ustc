@@ -11,6 +11,8 @@
 
 不建议自定义完整 Agent 协议，也不建议 MCP-only。自定义协议短期看似快，但会把发现、生命周期、流式、取消、追问、兼容性和文档成本都压回团队；MCP-only 会混淆“Agent 间任务协作”和“Agent 内部工具访问”两个边界。
 
+版本基线：MVP 锁定 A2A Protocol 1.0 的 `HTTP+JSON` binding，请求统一携带 `A2A-Version: 1.0`，不接受空版本静默回退到 0.3。线级状态只使用 `TASK_STATE_UNSPECIFIED`、`TASK_STATE_SUBMITTED`、`TASK_STATE_WORKING`、`TASK_STATE_COMPLETED`、`TASK_STATE_FAILED`、`TASK_STATE_CANCELED`、`TASK_STATE_INPUT_REQUIRED`、`TASK_STATE_REJECTED`、`TASK_STATE_AUTH_REQUIRED`。Agent Card 按 1.0 的 `supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes`、`skills` 和安全字段校验。MCP HTTP 授权语义锁定到 2025-06-18 规范，并在实施原型后锁定官方 SDK 版本。
+
 ## 2. 项目约束
 
 团队由三名本科生组成，比赛目标需要可演示、可说明、能体现技术路线，同时开发时间有限。因此协议选择要满足：
@@ -31,6 +33,7 @@ A2A 文档把 A2A 和 MCP 明确区分为互补关系：A2A 面向 Agent 到 Age
 主要来源：
 
 - [A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/)
+- [A2A 1.0 Specification（TaskState、AgentCard、Versioning）](https://a2a-protocol.org/latest/specification/)
 - [Agent Discovery](https://a2a-protocol.org/latest/topics/agent-discovery/)
 - [Life of a Task](https://a2a-protocol.org/latest/topics/life-of-a-task/)
 - [Streaming and Asynchronous Operations](https://a2a-protocol.org/latest/topics/streaming-and-async/)
@@ -38,7 +41,7 @@ A2A 文档把 A2A 和 MCP 明确区分为互补关系：A2A 面向 Agent 到 Age
 ### 3.2 适合本项目的能力
 
 - Agent Card：适合白名单注册、能力发现、端点记录和演示说明。
-- Task 生命周期：适合统一 `submitted`、`working`、`input_required`、`completed`、`failed`、`cancelled` 等状态。
+- Task 生命周期：A2A 1.0 线级使用标准 `TASK_STATE_*` 枚举；平台 UI 可映射为 `submitted`、`working`、`input_required`、`completed`、`failed`、`cancelled` 等内部状态。
 - Context：适合把同一次用户会话或相关任务串起来，并控制可转发上下文。
 - Streaming：适合演示中实时展示 Agent 输出。
 - Async 与 polling：适合较慢任务和非流式前端。

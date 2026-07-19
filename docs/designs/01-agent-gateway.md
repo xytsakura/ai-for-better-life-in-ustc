@@ -19,6 +19,14 @@ MVP 允许白名单第三方 Agent 按协议真实接入，同时保留两个内
 - 观测：OpenTelemetry。
 - 平台 REST 接口：OpenAPI 3.1 + JSON Schema 2020-12。
 
+### 1.1 协议基线
+
+- Agent-to-Agent 互联锁定为 A2A Protocol 1.0，MVP 只采用 `HTTP+JSON` binding，不跟随 `latest` 自动升级。
+- Gateway 每个 A2A 请求都发送 `A2A-Version: 1.0`。空版本会被解释为旧版 0.3，因此平台拒绝缺失版本头的接入，版本不支持时按规范处理 `VersionNotSupportedError`。
+- Agent Card 的 `supportedInterfaces[].protocolVersion` 必须为 `1.0`，`protocolBinding` 必须为 `HTTP+JSON`；若原型验证后官方 SDK 只能支持其他 binding，必须统一修改 ADR 和全部文档，不能混用。
+- 平台数据库和 UI 可以使用内部状态名，但协议边界只收发 A2A 1.0 标准 `TaskState`，映射由 A2A Adapter 集中维护。
+- MCP HTTP 授权语义锁定到 2025-06-18 规范。实施原型选定支持该规范的官方 SDK 后，必须将版本写入依赖锁文件和 ADR。
+
 ## 2. 目标
 
 - 接入白名单内的独立第三方 Agent，并通过 A2A 与其交换任务。
@@ -83,6 +91,36 @@ internal demo agent
 
 A2A Agent 在 `/.well-known/agent-card.json` 发布标准 Agent Card，其中包含 Agent 名称、说明、版本、接口、能力、安全声明、输入输出模式和 skills。平台不修改该标准结构，而是在 Registry 中保存经过校验的 Agent Card 快照和平台治理字段。
 
+MVP 校验器至少检查 `name`、`description`、`version`、`supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes` 和 `skills`。每个 `supportedInterfaces` 项必须包含 HTTPS `url`、`protocolBinding: "HTTP+JSON"` 和 `protocolVersion: "1.0"`；每个 skill 至少包含 `id`、`name`、`description` 和 `tags`。需要认证时，`securitySchemes` 与 `securityRequirements` 的引用必须一致且不得包含密钥明文。
+
+标准 A2A 1.0 Agent Card 最小示例：
+
+```json
+{
+  "name": "Course Research Demo Agent",
+  "description": "Generate an evidence-based course research report",
+  "version": "0.1.0",
+  "supportedInterfaces": [
+    {
+      "url": "https://course-research.example.edu/a2a",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "capabilities": {"streaming": true},
+  "defaultInputModes": ["text/plain", "application/json"],
+  "defaultOutputModes": ["text/markdown", "application/json"],
+  "skills": [
+    {
+      "id": "course_research",
+      "name": "Course Research",
+      "description": "Research a course with evidence and timestamps",
+      "tags": ["course", "research"]
+    }
+  ]
+}
+```
+
 以下是平台注册记录的关键字段，不是对 A2A Agent Card 的重新定义：
 
 - `agent_id`：平台内唯一标识，例如 `ustc-campus-qa`.
@@ -90,7 +128,7 @@ A2A Agent 在 `/.well-known/agent-card.json` 发布标准 Agent Card，其中包
 - `owner`：负责团队或联系人，不写个人敏感信息。
 - `a2a_endpoint`：A2A 服务入口。
 - `card_url`：Agent Card 发现地址，可选。
-- `capabilities`：能力列表，例如 `course_research`、`study_rag`、`campus_service`。
+- `skills_index`：从标准 Agent Card `skills[].id` 和 `skills[].tags` 生成的平台注册索引，例如 `course_research`、`study_rag`、`campus_service`。
 - `input_modes`：支持输入，例如 `text/plain`、`application/json`.
 - `output_modes`：支持输出，例如 `text/plain`、`application/json`.
 - `supports_streaming`：是否支持 A2A 流式事件。
@@ -118,9 +156,9 @@ MVP 可以先用一个受版本控制的 `agents.allowlist.example.json` 说明�
   "owner": "AI for better life In ustc",
   "a2a_endpoint": "https://course-research.example.edu/a2a",
   "card_url": "https://course-research.example.edu/.well-known/agent-card.json",
-  "capabilities": [
+  "skills_index": [
     {
-      "name": "course_research",
+      "id": "course_research",
       "description": "Generate an evidence-based course research report",
       "input_modes": ["text/plain"],
       "output_modes": ["text/markdown", "application/json"],
@@ -165,7 +203,7 @@ MVP 不做复杂语义市场匹配，优先使用可解释的规则路由。
 
 1. 过滤 `status != enabled` 的 Agent。
 2. 过滤不支持输入或输出模态的 Agent。
-3. 根据 `task_type` 和 `capabilities.name` 精确匹配。
+3. 根据 `task_type` 和平台注册的 `skills_index[].id`/`tags` 匹配；`task_type` 是可扩展 skill hint，不是 Gateway 硬编码枚举。
 4. 若多个 Agent 匹配，优先选择健康状态正常、最近失败率低、支持流式返回的 Agent。
 5. 若仍有多个候选，MVP 采用配置优先级；后续再加入 embedding 召回或学习型策略。
 6. 如果没有候选，返回可解释错误，并建议用户换一种任务类型或启用内部 Demo。
@@ -198,21 +236,23 @@ MVP 不做复杂语义市场匹配，优先使用可解释的规则路由。
 
 ### 7.2 Task 状态
 
-平台内部状态采用下划线命名，并映射到 A2A 的标准状态。A2A `input-required`、`auth-required` 和 `canceled` 在平台内分别表示为 `input_required`、`auth_required` 和 `cancelled`；平台额外保留路由和取消请求的中间状态。
+平台内部状态采用小写下划线命名，A2A Adapter 显式映射到 A2A 1.0 线级枚举。业务代码不得在 A2A 请求或响应中使用内部状态字符串。
 
-| 平台状态 | 含义 | 典型来源 |
-| --- | --- | --- |
-| `submitted` | 平台已收到请求，尚未发送给 Agent | REST API |
-| `routed` | 已选定 Agent | Router |
-| `working` | Agent 已接收并处理中 | A2A task event |
-| `input_required` | Agent 需要用户追问补充 | A2A task state |
-| `auth_required` | Agent 需要用户完成授权 | A2A task state |
-| `completed` | Agent 完成并返回最终结果 | A2A artifact / final event |
-| `failed` | Agent 或平台处理失败 | A2A error / gateway error |
-| `rejected` | Agent 拒绝当前任务 | A2A task state |
-| `cancel_requested` | 用户请求取消，等待 Agent 确认 | REST API |
-| `cancelled` | 任务已取消 | A2A `canceled` result |
-| `timeout` | 超过平台或 Agent 时间限制 | gateway timer |
+| 平台状态 | A2A 1.0 wire `TaskState` | 含义 |
+|---|---|---|
+| `submitted` | `TASK_STATE_SUBMITTED` | 平台已收到并创建外部任务 |
+| `routed` | 无，仅平台内部 | 已选定 Agent、尚未创建外部任务 |
+| `working` | `TASK_STATE_WORKING` | Agent 已接收并处理中 |
+| `input_required` | `TASK_STATE_INPUT_REQUIRED` | Agent 需要用户补充信息 |
+| `auth_required` | `TASK_STATE_AUTH_REQUIRED` | Agent 需要用户完成授权 |
+| `completed` | `TASK_STATE_COMPLETED` | Agent 完成并返回最终结果 |
+| `failed` | `TASK_STATE_FAILED` | Agent 或平台处理失败 |
+| `rejected` | `TASK_STATE_REJECTED` | Agent 拒绝当前任务 |
+| `cancel_requested` | 无，仅平台内部 | 用户请求取消，等待 Agent 确认 |
+| `cancelled` | `TASK_STATE_CANCELED` | A2A 任务已取消 |
+| `timeout` | 无，仅平台内部 | 超过平台时限并发出 best-effort 取消 |
+
+`TASK_STATE_UNSPECIFIED` 一律视为协议错误，不映射为正常业务状态。
 
 状态流转：
 
@@ -251,10 +291,10 @@ Authorization: Bearer <platform-user-token>
 
 ```text
 event: task.status
-data: {"task_id":"task_01JZEXAMPLE","status":"working","agent_id":"campus-qa-demo"}
+data: {"task_id":"task_01JZEXAMPLE","status":"working","agent_id":"course-research-demo"}
 
 event: task.delta
-data: {"task_id":"task_01JZEXAMPLE","delta":"可以通过图书馆官网的通知栏目查询"}
+data: {"task_id":"task_01JZEXAMPLE","delta":"正在聚合不同学期的课程评价"}
 
 event: task.completed
 data: {"task_id":"task_01JZEXAMPLE","artifact_id":"art_01JZEXAMPLE"}
@@ -363,15 +403,84 @@ artifacts
 
 `user_id_hash` 使用稳定哈希或演示账号标识，不在 MVP 中保存真实学号、手机号、邮箱等敏感信息。
 
-### 10.2 JSON Schema 草案
+### 10.2 共享 Envelope 与文件引用
+
+Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
+
+| 契约 | 必填字段 | 用途 |
+|---|---|---|
+| `TaskRequest` | `task_type`、`message`、`inputs`、`schema_version` | 创建可扩展任务 |
+| `TaskEvent` | `task_id`、`seq`、`event_type`、`occurred_at`、`payload` | 保证 SSE 与轮询使用同一事件源 |
+| `ArtifactEnvelope` | `artifact_id`、`artifact_type`、`schema_version`、`data` | 承载课程报告、导入回执、检索结果和回答 |
+| `FileRef` | `file_id`、`owner_scope`、`media_type`、`size_bytes` | 引用平台暂存文件，不传原始凭据或任意 URL |
+
+`ArtifactEnvelope` 的最小 JSON Schema：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.edu/schemas/artifact-envelope-v1.json",
+  "type": "object",
+  "required": ["artifact_id", "artifact_type", "schema_version", "data"],
+  "properties": {
+    "artifact_id": {"type": "string"},
+    "artifact_type": {
+      "type": "string",
+      "enum": ["course_report", "ingestion_receipt", "retrieval_result", "study_answer", "deletion_receipt"]
+    },
+    "schema_version": {"const": "1.0"},
+    "data": {"type": "object"},
+    "files": {"type": "array", "items": {"$ref": "file-ref-v1.json"}, "default": []},
+    "citations": {"type": "array", "items": {"type": "object"}, "default": []}
+  },
+  "additionalProperties": false
+}
+```
+
+`FileRef` 的最小 JSON Schema：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.edu/schemas/file-ref-v1.json",
+  "type": "object",
+  "required": ["file_id", "owner_scope", "media_type", "size_bytes"],
+  "properties": {
+    "file_id": {"type": "string"},
+    "owner_scope": {"type": "string", "enum": ["public", "course_shared", "private"]},
+    "media_type": {"type": "string"},
+    "size_bytes": {"type": "integer", "minimum": 1},
+    "display_name": {"type": "string"}
+  },
+  "additionalProperties": false
+}
+```
+
+原始文件先通过 Gateway 文件暂存接口进入对象存储，再把 `FileRef` 放入 A2A 结构化 Data Part。MVP 不通过 A2A 传输原始二进制，也不允许 Agent 接收任意外部 URL 后自行下载。Gateway 只生成短期、限定对象的内部读取授权，授权值不进入 Artifact、日志或数据库正文。
+
+### 10.3 三模块操作契约
+
+| `task_type` | Request `data` 最小字段 | Artifact 类型与最小字段 |
+|---|---|---|
+| `course_research` | `query`、`access_mode`、可选 `course_filters` | `course_report`：`candidates`、`summary`、`dimensions`、`evidence`、`data_scope`、`generated_at` |
+| `study.ingest` | `course_id`、`knowledge_space`、`file_refs`、`source_policy` | `ingestion_receipt`：`job_id`、`status`、`accepted_files` |
+| `study.ingestion_status` | `job_id` | `ingestion_receipt`：`job_id`、`status`、`progress`、`errors` |
+| `study.search` | `course_id`、`query`、`top_k` | `retrieval_result`：`chunks`、`citations`、`data_scope` |
+| `study.answer` | `course_id`、`question` | `study_answer`：`answer`、`citations`、`confidence` |
+| `study.delete` | `document_id` | `deletion_receipt`：`document_id`、`status`、`invalidated_at` |
+
+具体业务 Schema 由各 Agent 文档定义，Gateway 只校验版本化 envelope 和已注册 skill 的输入/输出 Schema 引用。
+
+### 10.4 TaskRequest JSON Schema 草案
 
 ```json
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.edu/schemas/task-create.json",
   "type": "object",
-  "required": ["task_type", "message"],
+  "required": ["schema_version", "task_type", "message", "inputs", "data"],
   "properties": {
+    "schema_version": {"const": "1.0"},
     "task_type": {
       "type": "string",
       "minLength": 2,
@@ -382,6 +491,15 @@ artifacts
       "type": "string",
       "minLength": 1,
       "maxLength": 4000
+    },
+    "inputs": {
+      "type": "array",
+      "items": {"$ref": "file-ref-v1.json"},
+      "default": []
+    },
+    "data": {
+      "type": "object",
+      "default": {}
     },
     "context_id": {
       "type": "string",
@@ -411,6 +529,8 @@ OpenAPI 3.1 文档由 FastAPI 自动生成后人工补充描述。核心接口�
 | `GET` | `/v1/tasks/{task_id}/events` | 订阅 SSE 事件 |
 | `POST` | `/v1/tasks/{task_id}/cancel` | 请求取消任务 |
 | `POST` | `/v1/tasks/{task_id}/messages` | 回复 Agent 的追问 |
+| `POST` | `/v1/files` | 暂存用户授权文件并返回 `FileRef` |
+| `DELETE` | `/v1/files/{file_id}` | 删除未入库或已撤回的暂存文件 |
 | `GET` | `/v1/agents` | 查看可用白名单 Agent |
 | `POST` | `/v1/admin/agents/validate` | 校验 Agent Card 草稿 |
 | `POST` | `/v1/admin/agents` | 管理员启用白名单 Agent |
@@ -426,8 +546,14 @@ Authorization: Bearer <platform-user-token>
 
 ```json
 {
+  "schema_version": "1.0",
   "task_type": "course_research",
   "message": "请比较这门课近两年的工作量、给分和学习收获。",
+  "inputs": [],
+  "data": {
+    "query": "请比较这门课近两年的工作量、给分和学习收获。",
+    "access_mode": "public"
+  },
   "stream": true,
   "metadata": {
     "demo_scene": "course-selection"
@@ -684,6 +810,9 @@ run_minimal_agent(card=card, handler=handle_task)
 - 任务、事件、artifact 能在数据库中查询。
 - 日志和 trace 能通过 `task_id` 关联一次完整调用。
 - 仓库、配置和日志中没有真实密钥。
+- 三个独立 Agent 各执行 20 条固定脚本任务，端到端完成率不低于 90%。
+- A2A 版本协商、状态映射、权限拒绝和凭据脱敏自动化测试通过率为 100%。
+- SSE 断开重连测试 10 次均能通过同一 `task_id` 恢复，且不重复生成最终 Artifact。
 
 ## 18. MVP 与后续边界
 

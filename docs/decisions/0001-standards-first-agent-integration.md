@@ -26,8 +26,8 @@ A2A 负责 Agent 发现和 Agent-to-Agent 任务，MCP 负责 Agent 对工具与
 
 采用第三种方案：
 
-- 外部和内部业务 Agent 通过 A2A 接入；
-- 数据源与工具通过 MCP 暴露给 Agent；
+- 外部和内部业务 Agent 通过 A2A Protocol 1.0 `HTTP+JSON` binding 接入，请求必须携带 `A2A-Version: 1.0`；
+- 数据源与工具通过 MCP 暴露给 Agent，HTTP 授权语义锁定到 2025-06-18 规范；
 - Gateway 管理白名单、能力索引、路由和任务代理；
 - JSON Schema 2020-12 是共享业务载荷的契约来源，OpenAPI 3.1 描述平台 REST API；
 - OpenTelemetry 负责跨服务可观测性；
@@ -49,3 +49,5 @@ A2A 负责 Agent 发现和 Agent-to-Agent 任务，MCP 负责 Agent 对工具与
 ## 复审条件
 
 若官方 SDK 无法在一周内跑通 Agent Card、任务创建和 SSE，则允许保留兼容层并缩减传输能力，但对外契约仍应尽量保持 A2A 兼容，而不是直接改为私有协议。
+
+若官方 SDK 不支持 A2A 1.0 `HTTP+JSON`，团队必须在 ADR 中明确改为另一个 A2A 1.0 binding 并同步所有文档；不得在同一 MVP 中混用 0.3、1.0 或多种 binding。

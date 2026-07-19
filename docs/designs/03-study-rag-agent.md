@@ -12,7 +12,7 @@
 
 ## 2. 目标
 
-- 支持导入 PDF、PPTX、DOCX、图片和 OCR 后文本。
+- 架构预留 PDF、PPTX、DOCX、图片和 OCR 文本；比赛 MVP 固定支持文本型 PDF、PPTX 基础文本和 PNG/JPEG 图片 OCR 三类输入，DOCX 与扫描版 PDF 整体 OCR 延后。
 - 建立公共课程知识库、课程共享空间和个人私有空间三层资料域。
 - 对资料做来源准入、内容指纹、去重、版本记录和增量更新。
 - 支持结构化解析、分块、元数据入库和向量化索引。
@@ -124,13 +124,13 @@ MVP 中建议采用“白名单来源 + 手动导入”的方式：团队先准�
 
 不同文件类型使用统一的解析接口：
 
-- PDF：提取文本、页码、标题层级、图片和表格；扫描版 PDF 进入 OCR。
+- PDF：MVP 提取文本型 PDF 的文本、页码和基础标题结构；扫描版 PDF 整体 OCR 延后。
 - PPTX：按幻灯片提取标题、正文、备注和图片 OCR 文本。
-- DOCX：提取标题层级、段落、表格和页内结构。
+- DOCX（MVP 后）：提取标题层级、段落、表格和页内结构。
 - 图片：直接 OCR，保留图片尺寸、置信度和版面区域。
 - OCR 文本：记录来源文件和 OCR 引擎版本，低置信度片段参与检索但降低权重。
 
-解析结果需要保留 `page_number`、`slide_number`、`section_path` 和 `bbox` 等定位信息，保证回答引用可以回到原文位置。MVP 可以先实现 PDF 文本型解析、PPTX 基础解析和图片 OCR，扫描版 PDF 作为增强项。
+解析结果需要保留 `page_number`、`slide_number`、`section_path` 和 `bbox` 等定位信息，保证回答引用可以回到原文位置。MVP 必须实现文本型 PDF、PPTX 基础文本和 PNG/JPEG 图片 OCR；DOCX、扫描版 PDF 整体 OCR、复杂表格与公式版面解析属于增强项。
 
 ## 10. 分块策略
 
@@ -231,8 +231,10 @@ MVP 可以先实现全文检索与向量检索的加权融合，重排模型作�
 - 私有资料查询必须满足 `owner_user_id = current_user_id`。
 - 课程共享资料必须满足用户拥有该课程空间授权。
 - 公共资料可以被所有演示用户访问，但仍需遵守来源许可。
-- 检索日志只保存必要信息，不记录个人敏感原文。
+- 检索日志只保存文档/分块标识、分数和脱敏查询摘要，不保存私有原文、完整用户问题或生成提示词。
 - 演示环境使用模拟账号和合规样例资料。
+- 管理员读取私有资料必须形成审计事件，记录操作者、原因和时间；默认管理界面不提供私有原文浏览。
+- 自动化测试使用两个相互隔离的演示账号验证跨用户检索为零命中。
 
 ## 17. 删除、失效与增量更新
 
@@ -279,6 +281,19 @@ MVP 评测集建议手工构造 40 到 60 条问题，覆盖：
 - P95 端到端延迟。
 - 导入成功率。
 
+MVP 在固定数据、模型版本和测试环境下采用以下通过阈值：
+
+| 指标 | 通过阈值 |
+|---|---:|
+| 固定评测集 Recall@5 | 不低于 80% |
+| 引用正确率 | 不低于 90% |
+| 人工核验的答案忠实度 | 不低于 90% |
+| 无答案问题正确拒答率 | 不低于 80% |
+| 权限隔离测试 | 100% 通过 |
+| 私有资料删除后残留命中 | 0 条，60 秒内完成失效 |
+| 已完成索引查询的 P95 响应 | 不高于 15 秒 |
+| 三类 MVP 样例文件导入成功率 | 不低于 90% |
+
 比赛演示中优先展示可解释指标，不追求大规模 benchmark。
 
 ## 20. 测试
@@ -286,7 +301,7 @@ MVP 评测集建议手工构造 40 到 60 条问题，覆盖：
 测试分层：
 
 - 单元测试：指纹、分块、元数据过滤、权限判断、引用格式。
-- 集成测试：导入 PDF/PPTX/DOCX/图片后可以检索到目标片段。
+- 集成测试：导入文本型 PDF、PPTX 和 PNG/JPEG 图片后可以检索到目标片段。
 - 权限测试：用户不能检索到其他用户私有资料。
 - 回归测试：删除、失效、版本更新后旧内容不再命中。
 - 质量测试：固定评测集的引用正确率和无答案拒答率。
@@ -300,7 +315,7 @@ MVP 评测集建议手工构造 40 到 60 条问题，覆盖：
 
 - 手动导入合规样例资料。
 - 公共课程知识库和个人私有知识库隔离。
-- PDF 文本解析、PPTX 基础解析、图片 OCR 至少一种可演示链路。
+- 文本型 PDF、PPTX 基础文本和 PNG/JPEG 图片 OCR 三类链路均可演示。
 - 内容指纹、重复文件跳过、文档状态。
 - Postgres + pgvector 混合检索。
 - 带引用的 RAG 回答。
@@ -332,13 +347,60 @@ MVP 评测集建议手工构造 40 到 60 条问题，覆盖：
 
 ## 23. 与调度层的接口
 
-课程资料 Agent 对外暴露少量稳定能力：
+课程资料 Agent 在 Agent Card `skills` 中声明少量稳定能力，并与 Gateway 共享以下 `task_type`：
 
-- `ingest_document`：登记或上传资料，返回导入任务。
-- `get_ingestion_status`：查询导入状态和错误。
-- `search_course_materials`：按用户、课程和问题检索片段。
-- `answer_with_citations`：基于检索结果生成带引用回答。
-- `delete_document`：删除或撤回资料。
-- `list_course_sources`：查看当前课程可用来源。
+- `study.ingest`：登记 Gateway 已暂存的 `FileRef`，返回 `ingestion_receipt`。
+- `study.ingestion_status`：查询导入状态和错误。
+- `study.search`：按用户权限、课程和问题返回 `retrieval_result`。
+- `study.answer`：基于检索结果生成 `study_answer`。
+- `study.delete`：删除或撤回资料，返回 `deletion_receipt`。
+- `study.list_sources`：查看当前课程可用来源。
 
-调度层负责身份、会话、Agent 发现、工具调用编排和跨 Agent 组合；课程资料 Agent 只负责资料生命周期和 RAG 质量。
+文件不作为 A2A raw part 直接传输。前端先调用 Gateway `POST /v1/files` 获得 `FileRef`，`study.ingest` 再接收引用：
+
+```json
+{
+  "schema_version": "1.0",
+  "task_type": "study.ingest",
+  "message": "导入我的复习笔记",
+  "inputs": [
+    {
+      "file_id": "file_example",
+      "owner_scope": "private",
+      "media_type": "application/pdf",
+      "size_bytes": 102400,
+      "display_name": "复习笔记.pdf"
+    }
+  ],
+  "data": {
+    "course_id": "course_example",
+    "knowledge_space": "private",
+    "source_policy": "user_owned"
+  }
+}
+```
+
+回答 Artifact 最少包含答案、证据和权限范围：
+
+```json
+{
+  "artifact_id": "artifact_example",
+  "artifact_type": "study_answer",
+  "schema_version": "1.0",
+  "data": {
+    "answer": "根据已授权资料生成的回答。",
+    "confidence": "medium",
+    "data_scope": ["public", "private"]
+  },
+  "files": [],
+  "citations": [
+    {
+      "document_id": "document_example",
+      "page_number": 12,
+      "space": "private"
+    }
+  ]
+}
+```
+
+Gateway 负责身份上下文、Agent 发现和 A2A 任务编排；课程资料 Agent 在内部通过 MCP 编排导入、检索和文件工具，并只向 Gateway 返回脱敏 Artifact 与观测事件。
