@@ -37,4 +37,12 @@
 - 个人模型支持 `platform_sponsored`、`managed_byok`、`local_runner` 三类设计；比赛 MVP 不收集普通用户真实托管 BYOK，真实用户 key 优先保留在只出站本地 Runner。
 - 平台模型 provider 和 `base_url` 必须白名单；不允许静默切换 provider、密钥归属或本地/托管执行，私人数据远端发送必须逐次确认。
 - 缓存按公开来源、解析/索引、证据/检索、公共 AnswerArtifact、私人生成五层治理；不同模型可复用公共证据，私人回答、记忆和用户级 usage 不跨用户命中。
-- 当前文档版本升级为 `v0.3`；新增 ADR-0003、个人 Agent Harness 设计、模型/BYOK/Runner 调研和相应安全审计。三路独立审计和修复复审已通过，代码目录仍须在实施计划批准后创建。
+- `v0.3` 已形成 ADR-0003、个人 Agent Harness、模型/BYOK/Runner 调研和历史审计基线。
+- `v0.4` 冻结 Personal Main Agent 单跳架构：Main Agent 是唯一用户入口和语义选择者，Gateway 是确定性控制面，Specialist 只允许 `depth=1` 且 `can_delegate=false`。
+- Specialist Catalog 采用三级渐进披露：Main 可见 `CatalogSummary`，候选确定后按需读取 `CapabilityDetail`，完整 `GovernanceDetail` 仅管理员验收使用。
+- 每个用户回合最多一个 Specialist ChildTask；禁止第二 child、递归、fan-out、并行 Specialist 和 Specialist 相互调用。补充输入继续同一个 child。
+- 个人上下文通过字段级 `ContextGrant` 和短期 `AuthorizedContextBundle` 下发；不得传完整 Profile、ModelProfile、API key、Cookie、完整会话或完整私人记忆。
+- Specialist 返回 `SpecialistArtifact`，经 Gateway 校验后由 Main Agent 生成最终 `MainAnswerArtifact`；Specialist 不直接答复用户或写长期记忆。
+- 内置 Specialist 共享 Harness Core，但各自维护领域 pipeline、工具、知识库、业务 Schema、评测集和公共 QA namespace；第三方 Specialist 可以有独立运行时。
+- Main 到单 Specialist 的闭环是比赛硬 MVP；完整 CLI Runner 改为满足主链稳定、安全基线和排期条件后最多两天的增强 spike。
+- 当前仍处于设计与任务文档阶段，不创建空代码脚手架；v0.4 必须经独立架构、契约、安全和范围审计后才能作为当前发布版推送。

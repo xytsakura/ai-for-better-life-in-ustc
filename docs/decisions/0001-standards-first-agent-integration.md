@@ -3,6 +3,7 @@
 - 状态：已接受
 - 日期：2026-07-19
 - 决策者：AI for better life In ustc 团队
+- 编排补充：[ADR-0004：采用 Personal Main Agent 与单跳 Specialist 编排](./0004-personal-main-agent-single-hop-orchestration.md)
 
 ## 背景
 
@@ -28,7 +29,7 @@ A2A 负责 Agent 发现和 Agent-to-Agent 任务，MCP 负责 Agent 对工具与
 
 - 外部和内部业务 Agent 通过 A2A Protocol 1.0 `HTTP+JSON` binding 接入，请求必须携带 `A2A-Version: 1.0`；
 - 数据源与工具通过 MCP 暴露给 Agent，HTTP 授权语义锁定到 2025-06-18 规范；
-- Gateway 管理白名单、能力索引、路由和任务代理；
+- Gateway 管理白名单、能力索引、确定性披露过滤和任务代理；语义选择由 Personal Main Agent 完成；
 - JSON Schema 2020-12 是共享业务载荷的契约来源，OpenAPI 3.1 描述平台 REST API；
 - OpenTelemetry 负责跨服务可观测性；
 - 比赛版不依赖仍处于演进中的开放注册市场。

@@ -1,19 +1,20 @@
-# 课程评价 Deep Research Agent 设计
+# 课程评价 Specialist Sub Agent 设计
 
 ## 1. 背景
 
-参赛作品面向中国科大选课场景：用户用自然语言描述自己关心的课程、教师、上课负担、给分、先修要求或个人偏好，系统从课程字段、公开点评、登录后用户允许访问的点评与附件中提取证据，生成带来源和时间标注的 Deep Research 报告。报告不替代学生自己的判断，也不替代评课社区原站内容，而是把分散信息整理成可追溯、可复核的选课研究结论。
+参赛作品面向中国科大选课场景：用户向平台 Main Agent 描述自己关心的课程、教师、上课负担、给分、先修要求或个人偏好，Main Agent 在确有必要时把问题改写为专业查询，并通过 Gateway 委派给课程评价 Specialist Sub Agent。Specialist 从课程字段、公开点评、登录后用户允许访问的点评与附件中提取证据，返回带来源和时间标注的专业研究材料；它不是用户入口，也不直接完成面向用户的最终措辞。报告不替代学生自己的判断，也不替代评课社区原站内容，而是把分散信息整理成可追溯、可复核的选课研究结论。
 
 评课社区是主要外部来源。公开页面提供课程信息和部分点评，源码显示不同登录身份会影响点评可见范围；登录限定内容必须遵守原站账号、隐私、版权和社区规则边界。产品设计默认把评课社区视为第三方内容平台，不把开源代码许可等同于用户点评或附件内容的转载许可。
 
 ## 2. 目标
 
-- 支持用户用自然语言查询课程、教师或组合条件，例如“计院机器学习哪个老师作业少但收获大”。
+- 支持 Main Agent 把用户的自然语言问题改写为课程、教师或组合条件的专业查询，例如“计院机器学习哪个老师作业少但收获大”。
 - 自动完成课程候选检索、同名课程消歧、教师维度聚合和证据抽取。
 - 生成中文 Deep Research 报告，明确列出结论、证据、时间、新旧点评差异、分歧观点和不确定性。
 - 汇总课程字段、评分维度、点评观点、课程要求、教师信息、课程主页和允许访问的附件元数据。
 - 对课程级摘要建立缓存，并在出现新点评或可见性变化时做增量刷新。
-- 在统一 AgentTemplate 下支持不同用户选择不同模型，并复用公共证据或经校验的公共标准答案。
+- 在统一 Harness 下使用平台批准的模型、MCP 工具、知识库与缓存，并复用公共证据或经校验的公共标准答案；模型与工具都只是 Specialist 域内流水线能力，不是可继续委派的 Agent。
+- 只接收 Gateway 校验后的一级 `ChildTask`，返回统一 `SpecialistArtifact`，由 Main Agent 综合证据并完成最终用户措辞。
 - 必须支持公开模式；登录增强模式是获得平台授权且安全测试通过后的条件能力，登录凭据不离开用户设备，不共享队长或任何成员的 Cookie。
 - 为演示和评测提供可重复的数据集、指标和错误处理路径。
 
@@ -25,11 +26,13 @@
 - 不保存、展示或转发登录 Cookie、CSRF token、会话值、用户邮箱、学号、真实姓名等敏感信息。
 - 不做自动选课、代抢课、刷赞、写点评或任何会改变评课社区状态的操作。
 - 不在 MVP 阶段训练独立推荐模型；先采用检索、证据聚合、规则约束和大模型报告生成。
+- 不作为聊天入口、公开 A2A 入口或可由用户直接选择的 Agent；不接受根任务、二级及更深子任务。
+- 不拥有 `create_child_task` 权限，不调用其他 Agent，也不把 MCP 工具、模型 adapter、知识库或缓存包装成下一级 Agent 调用。
 
 ## 4. 用户故事
 
-1. 作为正在选课的学生，我输入“算法基础 A 和 B 哪个更适合数学基础一般的人”，希望看到课程难度、作业量、收获、给分和近几年点评变化。
-2. 作为对教师风格敏感的学生，我输入“某老师的线代课适合自学能力弱的人吗”，希望系统区分同名课程、教师和学期差异。
+1. 作为正在选课的学生，我向 Main Agent 提问“算法基础 A 和 B 哪个更适合数学基础一般的人”，希望 Main Agent 能基于 Specialist 返回的课程难度、作业量、收获、给分和近几年点评变化给出答复。
+2. 作为对教师风格敏感的学生，我向 Main Agent 提问“某老师的线代课适合自学能力弱的人吗”，希望系统区分同名课程、教师和学期差异。
 3. 作为队伍演示者，我希望系统能展示公开模式与登录增强模式的差别，但不暴露任何 Cookie 或登录专属原文。
 4. 作为内容维护者，我希望每条结论都有来源链接、采集时间和可见范围说明，便于排查幻觉或过期信息。
 5. 作为隐私关注者，我希望系统只给摘要和证据定位，不把用户长点评或附件全文复制到报告中。
@@ -38,61 +41,108 @@
 
 ### 5.1 输入
 
-- 用户自然语言问题。
-- 可选筛选条件：院系、课程类型、课程号、教师、学期范围、校区、评分维度、报告深度。
-- 访问模式：公开模式或登录增强模式。
-- 登录增强模式下的本地浏览器授权状态；服务器端不接收 Cookie。
+- 只接收 Main Agent 编写、Gateway 校验并签发的 `depth = 1` `ChildTask`，不接收用户原始消息或前端直连请求。
+- `query`：完成消歧、检索和证据组织所需的专业查询，不包含完整会话历史。
+- `expected_artifact_type` 与 `output_schema_ref`：Main Agent 指定的材料目标、必需维度和期望引用粒度，不能要求 Specialist 直接向用户定稿。
+- `ContextGrant`：短期、可撤销、绑定 `child_task_id`、Specialist、skill、主体与数据范围的授权；Gateway 在执行前解析并校验，Specialist 不信任调用方自报的 scope。
+- 允许的最小上下文字段仅限课程筛选，以及用户明确同意提供的专业/院系、年级、已修课程引用、课程基础偏好和工作量偏好；字段缺失时不从 Profile、记忆或完整会话自行补全。
+- 访问模式仅为公开模式或登录增强模式。后者只传本地 Connector 的不透明授权/证据引用及允许的脱敏字段，服务器端和 ChildTask 都不接收 Cookie。
+- 禁止输入完整 `Profile`、`AgentProfile`、`ModelProfile`、API key、Cookie、CSRF token、完整会话、个人记忆正文，以及与专业查询无关的身份字段。
 
 ### 5.2 输出
 
-- 课程候选列表和消歧说明。
-- 主报告：摘要结论、适合人群、不适合人群、课程负担、评分与给分、学习收获、教师风格、课程要求、资料可用性、风险和建议。
-- 证据表：来源页面、引用位置、可见范围、采集时间、点评发布时间或更新时间。
-- 分歧与偏差说明：样本数量、时间分布、极端评价、匿名/仅学生可见内容限制、可见性差异。
-- 附件清单：只展示文件名、类型、来源页面、是否需要登录、摘要状态；不公开镜像下载链接，不上传附件全文到公共服务。
+- 统一返回 `SpecialistArtifact`，由 Gateway 做 Schema、引用、scope、敏感字段和状态校验后交回 Main Agent；Specialist 不直接向用户发送消息。
+- `answer` 中可包含课程候选和消歧说明，以及摘要结论、适合/不适合人群、课程负担、评分与给分、学习收获、教师风格、课程要求、资料可用性、风险和建议等专业材料。
+- `evidence` 与 `citations` 记录来源页面、引用位置、可见范围、采集时间、点评发布时间或更新时间。
+- `limitations` 记录样本数量、时间分布、极端评价、匿名/仅学生可见内容限制、可见性差异、未验证事实和建议补充的输入。
+- 附件信息只能作为 `answer`/`evidence` 中的清单字段展示文件名、类型、来源页面、是否需要登录和摘要状态；不公开镜像下载链接，不上传附件全文到公共服务。
 
 ### 5.3 与 Gateway 的最小契约
 
-课程评价 Agent 在 Agent Card `skills` 中声明 `course_research`，接收版本化 `TaskRequest`：
+课程评价 Specialist 只登记在平台内置 Specialist Registry，不出现在用户 Agent 列表或公开 Agent Card 中。Main 到 Gateway 使用 `SpecialistInvokeRequest`；Gateway 分配 child/Grant/Bundle 并完成校验后，才向 Specialist 投递下面的 `SpecialistTaskEnvelope`。Gateway 只在父任务属于 Main Agent、`depth` 精确为 `1`、目标 `specialist_id`/`skill_id` 匹配、预算与 `ContextGrant` 有效且未取消时投递：
 
 ```json
 {
   "schema_version": "1.0",
-  "task_type": "course_research",
-  "message": "调研这门课程的工作量和学习收获",
-  "inputs": [],
-  "data": {
-    "query": "调研这门课程的工作量和学习收获",
-    "access_mode": "public",
-    "course_filters": {
-      "teacher": null,
-      "term_range": ["2024秋", "2026春"]
-    }
-  }
+  "child_task_id": "task_child_example",
+  "root_task_id": "task_example",
+  "parent_task_id": "task_example",
+  "attempt": 1,
+  "depth": 1,
+  "specialist_id": "course-research",
+  "specialist_version": "0.4.0",
+  "skill_id": "course.research",
+  "query": "比较目标课程在 2024 秋至 2026 春的工作量和学习收获，并区分教师差异",
+  "expected_artifact_type": "course_research_material",
+  "output_schema_ref": "schema://specialists/course-research/material/1.0",
+  "authorized_context": {
+    "bundle_id": "bundle_example",
+    "context_grant_id": "grant_example",
+    "root_task_id": "task_example",
+    "child_task_id": "task_child_example",
+    "attempt": 1,
+    "specialist_id": "course-research",
+    "specialist_version": "0.4.0",
+    "skill_id": "course.research",
+    "anonymous_subject_ref": "anon_example",
+    "data_scope": ["public"],
+    "profile_fields": {
+      "major": "计算机类",
+      "grade": "本科二年级",
+      "completed_courses": ["course_ref_linear_algebra"],
+      "workload_preference": "中等"
+    },
+    "knowledge_refs": [],
+    "purpose": "按用户偏好比较课程工作量与学习收获",
+    "egress_policy": {
+      "execution_location": "platform",
+      "allowed_provider_ids": ["platform-demo-provider"],
+      "requires_confirmation": false,
+      "confirmation_ref": null
+    },
+    "policy_version": 1,
+    "nonce": "nonce_example_1234567890",
+    "issued_at": "2026-07-19T00:00:00Z",
+    "expires_at": "2026-07-19T00:05:00Z"
+  },
+  "deadline_at": "2026-07-19T00:05:00Z"
 }
 ```
 
-最终返回 `course_report` Artifact：
+所有状态统一返回 `SpecialistArtifact`。其中 `status` 取 `succeeded`、`input_required`、`failed` 或 `cancelled`；`input_required` 通过问题列表让 Main Agent 向用户补问，并继续同一个 child。即使失败或取消，也保留已知 scope、限制和实际 usage，但不得返回未通过校验的部分答案：
 
 ```json
 {
   "artifact_id": "artifact_example",
-  "artifact_type": "course_report",
+  "artifact_type": "course_research_material",
   "schema_version": "1.0",
-  "data": {
+  "child_task_id": "task_child_example",
+  "status": "succeeded",
+  "specialist_id": "course-research",
+  "specialist_version": "0.4.0",
+  "skill_id": "course.research",
+  "answer": {
     "candidates": [],
-    "summary": "基于当前可见来源生成的摘要。",
-    "dimensions": {},
-    "evidence": [],
-    "data_scope": "public",
-    "generated_at": "2026-07-19T00:00:00Z"
+    "summary": "基于当前可见来源生成的专业摘要。",
+    "dimensions": {}
   },
-  "files": [],
-  "citations": []
+  "evidence": [],
+  "citations": [],
+  "confidence": "medium",
+  "limitations": [],
+  "data_scope": ["public"],
+  "cache_level": "L3",
+  "usage": {
+    "model_input_tokens": 0,
+    "model_output_tokens": 0,
+    "mcp_calls": 0,
+    "cache_hits": 1
+  },
+  "generated_at": "2026-07-19T00:04:30Z"
 }
 ```
 
-`access_mode` 只允许 `public` 或 `local_authenticated`。后者表示本地 Connector 已生成脱敏结构化输入，不表示 Gateway 获得用户 Cookie。
+该契约是严格 one-hop：Specialist 没有 `create_child_task` 权限，不能调用其他 Agent，也不能接受 `depth = 0` 或 `depth > 1` 的任务。它只能在本领域 pipeline/Harness 内调用策略批准的 MCP、模型 adapter、知识库和缓存。Gateway 校验 `SpecialistArtifact` 后交回原 Main Agent，由 Main Agent 结合用户上下文、其他材料和交互状态决定最终措辞；`access_mode = local_authenticated` 仅表示本地 Connector 已生成获授权引用，不表示 Gateway 或 Specialist 获得用户 Cookie。
 
 ## 6. 课程消歧
 
@@ -189,15 +239,15 @@
 
 ### 10.1 缓存层级
 
-本 Agent 使用 Harness 的五层缓存语义：
+本 Specialist 使用 Harness 的五层缓存语义：
 
 - L1 来源快照：自然语言查询到课程候选、公开课程字段和公开页面版本；搜索 TTL 5 到 15 分钟，其余公开快照无额外授权时最长 24 小时。
 - L2 解析与索引：清洗后的允许字段、短证据、内容版本和结构化索引，不持久化原始 HTML 或完整点评正文。
-- L3 证据与检索：规范化问题到 `EvidenceBundle`，记录课程、教师、可见范围、查询和检索策略版本。
-- L4 公共标准答案：经引用、事实性和安全校验的 `AnswerArtifact`，记录模板、提示、生成模型、证据版本和时间。
+- L3 证据与检索：规范化公共专业查询到 `EvidenceBundle`，记录 Specialist、skill、版本、课程、教师、可见范围、查询和检索策略版本；含私人输入的查询只能进入主体隔离的私有层。
+- L4 公共标准答案：只基于公共证据和不含个人字段的公共 QA，经引用、事实性和安全校验后保存 `SpecialistArtifact`，记录 Specialist、skill、版本、模板、提示、生成模型、证据与策略版本和时间。
 - L5 私人生成：结合用户个人偏好、登录证据或个人记忆的报告，只进入用户私有空间或本地加密缓存。
 
-不同模型可以共享 L1-L3。L4 命中时不调用用户模型，并明确显示生成模型与时间；用户选择“用我的模型重新生成”时复用 L3，把新回答和 usage 写入本人 L5。用户 BYOK 结果默认不能晋升为 L4。
+不同模型可以共享不含私人输入的 L1-L3。L4 命中时不调用用户模型，并明确记录生成模型与时间；Main Agent 请求使用用户模型重新生成时复用允许共享的 L3，把新回答和 usage 写入本人 L5。用户 BYOK 结果默认不能晋升为 L4。专业/院系、年级、已修课程、工作量偏好、登录增强证据和任何完整或派生的私人查询都不得写入 L1-L4，也不得影响公共 QA 缓存键或公共命中结果。
 
 ### 10.2 缓存键
 
@@ -207,13 +257,13 @@
 course_evidence:v1:public:icourse:<course_id>:data=<data_version>:retriever=<retriever_version>:policy=<policy_version>
 ```
 
-公共标准答案缓存键：
+公共 QA 缓存必须至少按 `specialist_id`、`skill`、`specialist_version`、`evidence_version` 和 `policy_version` 分区；模板、提示、模型和规范化公共问题也继续参与键生成：
 
 ```text
-course_answer:v1:<question_hash>:evidence=<evidence_version>:template=<template_version>:prompt=<prompt_version>:generator=<provider_id>/<model_id>:policy=<policy_version>
+specialist_qa:v1:specialist=course-research@<specialist_version>:skill=course.research:question=<public_question_hash>:evidence=<evidence_version>:policy=<policy_version>:template=<template_version>:prompt=<prompt_version>:generator=<provider_id>/<model_id>
 ```
 
-私人生成缓存键至少包含 `subject_id`、`agent_profile_id`、`provider_id`、`model_id`、`private_data_version`、`prompt_version` 和 `policy_version`。`local_scope_id` 是每次本地授权随机生成的不透明标识，不由 Cookie、用户名、邮箱或学号哈希得到。附件处理与登录增强生成必须绑定本地设备和授权版本，不进入 L1-L4 或公共共享缓存。
+私人生成缓存键至少包含 `subject_id`、`agent_profile_id`、`provider_id`、`model_id`、`private_data_version`、`prompt_version` 和 `policy_version`。`local_scope_id` 是每次本地授权随机生成的不透明标识，不由 Cookie、用户名、邮箱或学号哈希得到。附件处理、登录增强生成、用户偏好和任何由私人输入派生的 query、evidence、answer 与 usage 必须绑定主体、本地设备和授权版本，只进入 L5 或本地加密缓存，不进入 L1-L4 或公共共享缓存。
 
 ### 10.3 增量刷新
 
@@ -244,7 +294,7 @@ course_answer:v1:<question_hash>:evidence=<evidence_version>:template=<template_
 
 ### 11.2 登录增强模式
 
-登录增强模式优先使用用户本地浏览器连接器。用户在自己的浏览器中登录评课社区，连接器只把当前授权页面的结构化摘要交给本地 Agent，Cookie 不离开设备。该模式不是比赛 MVP 的硬依赖，无明确授权时不对真实登录页面做公开演示。
+登录增强模式优先使用用户本地浏览器连接器。用户在自己的浏览器中登录评课社区，连接器只把当前授权页面的结构化摘要交给本地 Runner 中的 Specialist 域内 pipeline，Cookie 不离开设备。该模式不是比赛 MVP 的硬依赖，无明确授权时不对真实登录页面做公开演示。
 
 登录增强模式规则：
 
@@ -270,14 +320,18 @@ course_answer:v1:<question_hash>:evidence=<evidence_version>:template=<template_
 
 ## 13. 错误处理
 
-- 搜索 token 失败：提示用户稍后重试，并退回课程 URL 直接解析或手动输入课程链接。
-- 搜索结果过多：展示候选并要求用户选择，不生成混淆报告。
+- 非 Gateway 来源、根任务、`depth > 1`、目标 Specialist/skill 不匹配、`ContextGrant` 过期或 scope 越界：Gateway 拒绝投递并记录脱敏审计事件，Specialist 不开始执行。
+- 输入不足：当课程/教师无法消歧、`expected_artifact_type`/`output_schema_ref` 不明确或完成任务所需的最小字段缺失时，返回 `status = input_required` 的 `SpecialistArtifact`，在 `questions` 中列出最少需要补充的问题；Main Agent 向用户询问后继续同一个 child，不自行读取完整 Profile、记忆或会话补全。
+- 搜索 token 失败：向 Main Agent 返回稍后重试、课程 URL 直接解析或手动输入课程链接等可选恢复路径。
+- 搜索结果过多：返回候选与 `input_required`，由 Main Agent 请求用户选择并继续同一个 child，不生成混淆报告。
 - 页面结构变化：返回“解析失败但页面可打开”，记录选择器失败点，保留来源 URL。
-- 登录态失效：只提示用户在本地浏览器重新登录，不要求粘贴 Cookie。
+- 登录态失效：只通过 Main Agent 提示用户在本地浏览器重新登录，不要求粘贴 Cookie。
 - 权限不足：标注“未授权访问”，不尝试绕过。
 - 附件无法解析：保留文件名、类型和来源，正文摘要标记为未处理。
 - 内容冲突：把冲突结论列入“分歧观点”，不强行合并成单一判断。
 - 速率限制或站点不可用：指数退避，使用旧缓存并明确缓存时间。
+- 域内 pipeline、MCP、模型或缓存发生不可恢复失败：停止后续调用，返回 `status = failed`，`limitations` 给出可公开的失败阶段和可重试性；不得泄露提示词、凭据、私有证据或内部堆栈。
+- Gateway 取消父任务或 `ChildTask`：立即传播取消信号，终止排队、重试、MCP 与模型调用，丢弃未校验的部分答案；在可行时返回 `status = cancelled` 和实际 `usage`，Main Agent 不把取消前的草稿当作结论。
 
 ## 14. 评测集与指标
 
@@ -329,6 +383,10 @@ MVP 在固定数据、模型版本和测试环境下采用以下通过阈值：
 - 本地登录测试：用测试账号或人工授权浏览器验证 Cookie 不离开设备，日志中不出现会话值。
 - 安全测试：扫描日志、缓存、报告和错误页面，确保不包含 Cookie、CSRF token、邮箱、学号、文件哈希或会话化下载 URL。
 - 对抗测试：恶意点评或 HTML 中的提示注入不能改变工具调用、数据范围、系统提示和引用；受限附件 URL 不能进入 Artifact。
+- 调度契约测试：只接受 Gateway 校验后的 `depth = 1` `ChildTask`；用户直连、Main Agent 以外父任务、根任务和二级委派均被拒绝，`create_child_task` 与其他 Agent 调用能力不存在。
+- 状态测试：分别验证 `input_required`、`failed`、`cancelled` 的 `SpecialistArtifact` 字段完整、scope 不扩大、usage 可核验；补充输入继续原 child，取消后无继续调用或缓存写入。
+- 出站测试：Gateway 拒绝缺少 `specialist_id`/`specialist_version`、answer、evidence、citations、confidence、limitations、data_scope、cache_level 或 usage 的结果，以及引用越权或含敏感字段的结果。
+- 缓存分区测试：公共 QA 按 Specialist、skill、版本、证据与策略分区；加入年级、已修课程、工作量偏好或登录证据后不得命中或写入公共缓存。
 - 回归测试：固定评测集对比摘要结论、引用数量、消歧结果和错误提示。
 - 人工评审：抽样检查报告是否准确表达原点评分歧，没有把推测写成事实。
 
@@ -336,13 +394,14 @@ MVP 在固定数据、模型版本和测试环境下采用以下通过阈值：
 
 MVP 聚焦公开模式和可演示闭环：
 
-1. 用户输入自然语言查询。
-2. 系统调用公开搜索 token，打开搜索结果并召回课程候选。
-3. 用户确认课程，或系统在置信度足够时自动消歧。
-4. 解析课程页公开字段、评分、点评和附件元数据。
-5. 生成中文 Deep Research 报告，包含摘要、观点聚类、时间维度、证据表和不确定性。
-6. 建立公开课程摘要缓存，并支持新点评增量刷新。
-7. 冻结 30 到 50 条评测夹具：课程 ID、来源快照时间、许可说明、人工标注、模型/提示版本和评审人。
+1. 用户向 Main Agent 输入自然语言查询；Main Agent 决定是否需要课程评价专业材料。
+2. Main Agent 编写 `query`、`expected_artifact_type` 和 `output_schema_ref`，Gateway 生成并校验 `depth = 1` `ChildTask` 与最小 `ContextGrant`。
+3. Specialist 调用公开搜索 token，打开搜索结果并召回课程候选；用户确认需求只能由 Main Agent 发起后续交互，Specialist 不直接追问用户。
+4. Specialist 解析课程页公开字段、评分、点评和附件元数据。
+5. Specialist 返回统一 `SpecialistArtifact`，包含摘要、观点聚类、时间维度、证据、引用、不确定性、scope、缓存层级与 usage；Gateway 校验后交回 Main Agent。
+6. Main Agent 结合用户上下文完成最终中文答复；Specialist 的 answer 不作为未经复核的最终用户措辞。
+7. 建立分区后的公共课程证据/QA 缓存，并支持新点评增量刷新，保证私人输入不进入公共缓存。
+8. 冻结 30 到 50 条评测夹具：课程 ID、来源快照时间、许可说明、人工标注、Specialist/skill/模型/提示/证据/策略版本和评审人。
 
 登录增强模式仅在维护者明确授权、公开模式已稳定且本地 Connector 安全测试通过后作为可选演示：用户打开授权页面，连接器读取当前可见内容并生成仅本地报告。
 
@@ -351,14 +410,18 @@ MVP 不实现站点级批量爬取、不下载全量附件、不训练推荐模�
 ## 17. 演示脚本
 
 1. 展示输入：“我想了解某门课程是否适合基础一般、希望作业不要太多的人。”
-2. 系统返回 3 个课程候选，说明匹配到的课程名、教师、课程号和点评数。
-3. 选择一个课程，系统显示采集进度：课程字段、点评、时间分布、附件元数据。
-4. 展示报告首屏：结论、适合/不适合人群、主要风险。
-5. 展开“证据与来源”：每条结论显示课程页、点评锚点、发布时间/更新时间和采集时间。
-6. 展示“观点分歧”：例如作业负担在不同教师或不同学期之间的差异。
-7. 新增一条模拟点评变化，再模拟一条点评被隐藏，证明增量刷新同时处理新增与撤回。
-8. 展示恶意点评中的提示注入被当作普通证据文本，不触发工具调用。
-9. 可选：仅在授权和安全条件满足时展示本地登录增强；导出公开分享版时重新基于公开可见证据生成报告。
+2. 展示 Main Agent 生成专业 query、expected artifact 与最小 `ContextGrant`，Gateway 仅投递 `depth = 1` `ChildTask`；同时演示直连和二级委派被拒绝。
+3. Specialist 返回 3 个课程候选的 `SpecialistArtifact`；若候选无法消歧，则返回 `input_required`，由 Main Agent 向用户确认后继续原 ChildTask。
+4. 选择一个课程，展示 Specialist 域内采集进度：课程字段、点评、时间分布、附件元数据；不出现其他 Agent 调用。
+5. Gateway 校验 Artifact 后交回 Main Agent，展示由 Main Agent 完成的报告首屏：结论、适合/不适合人群、主要风险。
+6. 展开“证据与来源”：每条结论显示课程页、点评锚点、发布时间/更新时间和采集时间，并展示 confidence、limitations、data_scope、cache_level 与 usage。
+7. 展示“观点分歧”：例如作业负担在不同教师或不同学期之间的差异。
+8. 新增一条模拟点评变化，再模拟一条点评被隐藏，证明增量刷新同时处理新增与撤回；带私人偏好的任务不命中公共 QA 缓存。
+9. 展示恶意点评中的提示注入被当作普通证据文本，不触发工具调用。
+10. 演示一次取消或可控失败：调用停止，Gateway 收到 `cancelled`/`failed` Artifact，Main Agent 不把部分草稿作为答案。
+11. 可选：仅在授权和安全条件满足时展示本地登录增强；导出公开分享版时重新基于公开可见证据生成报告。
+
+演示验收要求：任务链路只有 `Main Agent -> Gateway -> 课程评价 Specialist -> Gateway -> Main Agent` 一跳；Gateway 入站与出站校验均可见；Specialist 无用户入口、无 `create_child_task`、无其他 Agent 调用；成功、输入不足、失败和取消四态均能由 Main Agent 正确收束。原有第 14 节量化指标继续作为内容质量与性能验收阈值。
 
 ## 18. 关键外部边界
 

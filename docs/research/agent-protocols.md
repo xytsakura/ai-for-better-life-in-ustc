@@ -9,6 +9,8 @@
 - OpenAPI 3.1 + JSON Schema 2020-12 用于定义平台 REST API，服务前端、演示脚本、管理接口和自动化测试。
 - OpenTelemetry 用于统一观测 API、路由、A2A 调用、MCP 工具调用和数据库访问。
 
+`v0.4` 的产品入口是 Personal Main Agent。Main Agent 负责语义选择，Gateway 只做确定性目录过滤、授权、父子任务和协议代理；平台到 Specialist 的跨进程调用仍使用 A2A，因此新增单跳父子关系不改变 A2A/MCP 的职责边界。
+
 不建议自定义完整 Agent 协议，也不建议 MCP-only。自定义协议短期看似快，但会把发现、生命周期、流式、取消、追问、兼容性和文档成本都压回团队；MCP-only 会混淆“Agent 间任务协作”和“Agent 内部工具访问”两个边界。
 
 版本基线：MVP 锁定 A2A Protocol 1.0 的 `HTTP+JSON` binding，请求统一携带 `A2A-Version: 1.0`，不接受空版本静默回退到 0.3。线级状态只使用 `TASK_STATE_UNSPECIFIED`、`TASK_STATE_SUBMITTED`、`TASK_STATE_WORKING`、`TASK_STATE_COMPLETED`、`TASK_STATE_FAILED`、`TASK_STATE_CANCELED`、`TASK_STATE_INPUT_REQUIRED`、`TASK_STATE_REJECTED`、`TASK_STATE_AUTH_REQUIRED`。Agent Card 按 1.0 的 `supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes`、`skills` 和安全字段校验。MCP HTTP 授权语义锁定到 2025-06-18 规范，并在实施原型后锁定官方 SDK 版本。
@@ -57,7 +59,7 @@ A2A 文档把 A2A 和 MCP 明确区分为互补关系：A2A 面向 Agent 到 Age
 
 ### 3.4 MVP 取舍
 
-MVP 只实现单 Agent 路由和平台 task 到 A2A task 的一对一映射。多 Agent 协作、父子任务、复杂 planner 暂不实现。A2A 只放在跨进程/跨团队边界，Agent 内部普通函数调用不为追求“协议化”而强制改成 A2A。
+MVP 只实现严格两层的一对一委派：每个用户回合创建一个 Main Agent RootTask，最多再创建一个 `depth=1` Specialist ChildTask。Gateway 维护 parent/child lineage、取消、超时和幂等，Specialist `can_delegate=false`。多个/并行 Specialist、fan-out、`depth=2`、Specialist 相互调用和复杂 planner 暂不实现。A2A 只放在 Gateway 到跨进程/跨团队 Specialist 的边界，Agent 内部普通函数调用不为追求“协议化”而强制改成 A2A。
 
 ## 4. MCP
 
@@ -72,7 +74,7 @@ MCP 官方架构文档将 MCP 描述为应用连接上下文、工具和数据�
 
 ### 4.2 适合本项目的能力
 
-- 内部 Demo Agent 通过 MCP 访问课程资料、校园问答知识库、检索服务或小工具。
+- 内置 Specialist 通过 MCP 访问课程资料、校园问答知识库、检索服务或小工具。
 - 每个 Agent 可以独立管理自己的工具列表和授权边界。
 - Gateway 不需要知道每个工具的细节，只关心 Agent 返回的任务结果。
 - 后续如果接真实校园系统，MCP server 可以作为工具适配层逐步扩展。
@@ -85,7 +87,7 @@ MCP 官方架构文档将 MCP 描述为应用连接上下文、工具和数据�
 
 ### 4.4 MVP 取舍
 
-MVP 中 MCP 只用于内部 Demo Agent 的工具和数据访问。外部白名单 Agent 是否使用 MCP 是它自己的内部实现细节，Gateway 不做强制要求。
+MVP 中 MCP 只用于 Main Agent 和内置 Specialist 的工具与数据访问。外部白名单 Specialist 是否使用 MCP 是它自己的内部实现细节，Gateway 不做强制要求。
 
 ## 5. OpenAPI 3.1 + JSON Schema 2020-12
 
@@ -112,7 +114,7 @@ OpenAPI 3.1.1 规范用于描述 HTTP API 的接口、路径、操作、请求�
 
 ### 5.4 MVP 取舍
 
-只为核心接口写清楚 schema：创建任务、查询任务、SSE 事件、取消、追问、Agent 列表、Agent Card 校验。管理台和复杂配置接口后续再补。
+只为核心接口写清楚 Schema：Main session、CatalogSummary 搜索、CapabilityDetail 查看、ChildTask 创建/查询、SSE 事件、取消、追问、ContextGrant、SpecialistArtifact、MainAnswerArtifact 和 Agent Card 验收。管理台和复杂配置接口后续再补。
 
 ## 6. OpenTelemetry
 
@@ -126,7 +128,7 @@ OpenTelemetry 官方文档将其定位为可观测性框架，覆盖 trace、met
 
 ### 6.2 适合本项目的能力
 
-- 演示一个任务从 REST API 入口、路由、A2A 调用、Agent 处理、MCP 工具调用到结果写入的完整链路。
+- 演示一个任务从 Main Agent、Gateway 父子任务、A2A 调用、Specialist 处理、MCP 工具调用到 Main 最终综合的完整链路。
 - 用 `task_id`、`agent_id`、`context_id` 关联日志、指标和 trace。
 - 快速定位外部 Agent 超时、失败或返回慢的问题。
 
@@ -163,7 +165,7 @@ MVP 先做结构化 JSON 日志、correlation ID 和基础 instrumentation。只
 ### 8.1 优点
 
 - 工具生态清晰，适合把数据库、文件、检索、浏览器等能力接给 Agent。
-- 内部 Demo Agent 调工具会比较自然。
+- 内置 Specialist 调工具会比较自然。
 - 对单 Agent 应用来说架构简单。
 
 ### 8.2 缺点
@@ -181,8 +183,8 @@ MVP 先做结构化 JSON 日志、correlation ID 和基础 instrumentation。只
 
 | 方案 | 适合做什么 | 不适合做什么 | MVP 采用方式 |
 | --- | --- | --- | --- |
-| A2A | 独立 Agent 互联、Agent Card、任务生命周期、流式和异步 | Agent 内部工具连接、数据库适配 | 作为 Gateway 到 Agent 的主协议 |
-| MCP | Agent 内部工具、数据源、上下文能力 | 跨 Agent 任务协调和发现 | 内部 Demo Agent 使用，外部 Agent 自行决定 |
+| A2A | 独立 Agent 互联、Agent Card、任务生命周期、流式和异步 | Agent 内部工具连接、数据库适配 | 作为 Gateway 到 Specialist 的主协议 |
+| MCP | Agent 内部工具、数据源、上下文能力 | 跨 Agent 任务协调和发现 | Main/内置 Specialist 使用，外部 Specialist 自行决定 |
 | OpenAPI 3.1 | 平台 REST API 契约、前后端协作、管理接口 | Agent 间语义协议 | 定义 Gateway API |
 | JSON Schema 2020-12 | 请求、响应、配置和事件校验 | 调度策略本身 | 与 OpenAPI 3.1 一起使用 |
 | OpenTelemetry | trace、metric、log、故障定位 | 业务协议或授权模型 | 做基础观测 |
@@ -192,15 +194,19 @@ MVP 先做结构化 JSON 日志、correlation ID 和基础 instrumentation。只
 ## 10. 推荐架构
 
 ```text
-user / frontend / demo script
+user / frontend
         |
         | REST, OpenAPI 3.1
         v
-Agent Gateway
+Personal Main Agent
         |
-        | A2A
+        | search / describe / invoke
         v
-white-listed external agents / internal demo agents
+Deterministic Gateway
+        |
+        | A2A, one depth=1 child
+        v
+accepted external / internal Specialists
         |
         | MCP, inside each agent when needed
         v
@@ -209,26 +215,34 @@ tools / data / retrieval / campus adapters
 
 平台职责：
 
-- 维护白名单和 Agent Card 摘要。
-- 接收用户任务并选择 Agent。
-- 维护 task、context、message、artifact、event。
+- 维护验收状态、冻结 Agent Card 快照和三级披露内容。
+- 只向 Main Agent 披露 `accepted + enabled` Specialist。
+- 校验 Main Agent 发起的唯一 ChildTask、ContextGrant、预算和深度。
+- 维护 root/child task、context、message、artifact、event。
 - 提供 SSE 和轮询。
 - 记录观测数据。
 - 隔离凭据。
 
-Agent 职责：
+Main Agent 职责：
+
+- 作为用户唯一入口，判断直接回答或调用一个 Specialist；
+- 基于平台摘要选择能力、编写专业 query 和最小 ContextGrant；
+- 综合已验证 SpecialistArtifact，生成最终 MainAnswerArtifact。
+
+Specialist 职责：
 
 - 暴露 A2A endpoint。
 - 声明能力和交互方式。
 - 执行任务并返回消息、状态和 artifact。
 - 如需工具或数据，自行通过 MCP 连接。
+- 不直接答复用户，不创建子任务，不调用其他 Agent。
 
 ## 11. MVP 决策
 
 1. 协议组合：A2A + MCP + OpenAPI 3.1 + JSON Schema 2020-12 + OpenTelemetry。
 2. 接入方式：只允许白名单第三方 Agent，不做开放市场。
-3. 路由方式：先用规则路由，不做复杂 planner。
-4. 任务关系：平台 task 与 A2A task 先一对一映射。
+3. 选择方式：Main Agent 根据平台整理的 CatalogSummary/CapabilityDetail 做语义选择；Gateway 只做确定性过滤和校验。
+4. 任务关系：每个 Main RootTask 最多映射一个 `depth=1` A2A ChildTask，禁止第二 child 和递归。
 5. 流式能力：SSE 是优先演示路径，轮询是兼容路径。
 6. MCP 边界：只在 Agent 内部使用，Gateway 不直接代理外部 MCP 工具。
 7. 观测边界：记录任务链路和性能，不记录密钥、原始敏感信息或完整隐私上下文。
@@ -236,12 +250,14 @@ Agent 职责：
 ## 12. 后续可扩展方向
 
 - Agent Card 版本管理和兼容性测试。
-- 多 Agent 协作和父子任务。
+- 一个回合多个 Specialist、并行/fan-out 和多层父子任务。
 - 基于 embedding 的语义路由。
 - 更严格的授权策略和校园统一身份认证。
 - 更完整的管理台和健康面板。
 - 面向真实校园系统的 MCP server 适配器。
 
-这些方向不阻塞 MVP。比赛第一版应优先完成标准协议闭环、真实白名单接入和两个内部 Demo 的稳定演示。
+这些方向不阻塞 MVP。比赛第一版应优先完成 Main Agent -> 一个 Specialist -> Main Agent 的标准协议闭环、真实白名单接入和两个内置 Specialist 的稳定演示。
+
+Main Agent 单跳职责和渐进式披露的冻结决策见 [ADR-0004](../decisions/0004-personal-main-agent-single-hop-orchestration.md)。
 
 更完整的竞品、编排框架和校园 RAG 对比见[竞品与参考实现技术调研](./competitive-landscape.md)。其中 LangGraph 只作为课程研究 Agent 的条件运行时：两天 spike 证明 checkpoint、人工确认和测试确实更简单后才采用；它不进入跨 Agent 协议层，也不与 Gateway 维护第二套共享任务状态。

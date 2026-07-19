@@ -5,14 +5,14 @@
 
 ## 1. 结论
 
-平台应把 GPT、DeepSeek、学校模型等视为可替换的模型提供方，由统一 `ModelAdapter` 处理协议差异；不应在课程 Agent 业务流程中散落 provider 判断。个人 Agent 采用 `AgentTemplate + AgentProfile + ModelProfile`，模型 API 只是 Profile 的运行配置，不是 A2A Agent 或 MCP Tool。
+平台应把 GPT、DeepSeek、学校模型等视为可替换的模型提供方，由统一 `ModelAdapter` 处理协议差异；不应在课程 Specialist 业务流程中散落 provider 判断。Personal Main Agent 采用 `AgentTemplate + AgentProfile + ModelProfile`，模型 API 只是 Profile 的运行配置，不是 A2A Agent 或 MCP Tool。
 
 比赛 MVP 推荐：
 
 - 先实现一个 OpenAI-compatible adapter，但为每个 provider 维护独立能力快照；
 - 只允许管理员维护的 provider 和 `base_url` 白名单，不接受任意用户 URL；
 - 平台托管模式只使用比赛额度或团队受控测试密钥；
-- 普通用户真实 BYOK 通过只出站的本地 Runner 演示，API key 不离开设备；
+- 普通用户真实 BYOK 保留只出站本地 Runner 契约；Runner 仅在 Main 到 Specialist 闭环稳定后作为条件增强，API key 不离开设备；
 - 建立平台自己的 Usage Ledger，不把 provider 账单页当作实时预算控制；
 - 不同模型共享公开数据、解析、索引和证据缓存，最终私人回答相互隔离；
 - 模型不可用时返回明确错误或请求用户确认，不静默切换 provider、密钥归属或执行位置。
@@ -39,7 +39,7 @@
 
 [A2A 与 MCP 的官方边界说明](https://a2a-protocol.org/latest/topics/a2a-and-mcp/) 将 A2A 定位为 Agent-to-Agent，将 MCP 定位为 Agent-to-tool/data。模型调用属于 Agent 运行时内部能力：
 
-- 外部独立 Agent 仍通过 A2A 被 Gateway 调度；
+- 外部独立 Specialist 仍通过 A2A 被 Gateway 调度；
 - Agent 内部通过 MCP 使用课程搜索、文件、检索等工具；
 - ModelAdapter 直接调用已批准 provider，不发布虚假的 Agent Card，也不把模型伪装成 MCP Tool。
 
@@ -91,12 +91,12 @@ Profile 引用模型配置，不复制密钥。外部 A2A payload 只收到业�
 1. 公开来源快照；
 2. 解析、OCR、chunk、embedding 与索引；
 3. 证据与检索结果；
-4. 经过质量门槛的公共 `AnswerArtifact`；
-5. 用户私人生成结果。
+4. 经过质量门槛的公共 QA/专业 `SpecialistArtifact`；
+5. 用户私有 `MainAnswerArtifact` 与生成结果。
 
 不同模型可以共享第 1 至 3 层。第 4 层必须展示生成模型、模板、提示和证据版本，用户可以零模型调用直接使用，也可以选择自己的模型重新生成。第 5 层的缓存键必须包含用户、Profile、provider、model、提示、私人数据和权限版本，且不能跨用户命中。
 
-Provider 自身的 prompt/context cache 是供应商内部优化，不能替代平台的证据版本、权限失效和 AnswerArtifact 治理。
+Provider 自身的 prompt/context cache 是供应商内部优化，不能替代平台的证据版本、权限失效、SpecialistArtifact 和 MainAnswerArtifact 治理。
 
 ## 5. BYOK 安全边界
 
@@ -111,7 +111,7 @@ Provider 自身的 prompt/context cache 是供应商内部优化，不能替代�
 - 每用户/provider/key 的预算和并发限制；
 - 覆盖数据库导出与前端响应的 DLP 测试。
 
-三人团队不应在比赛周期内收集普通用户的真实托管 key。MVP 用团队受控测试凭据验证 `secret_ref` 生命周期，用本地 Runner 证明真实用户可使用自己的 key。
+三人团队不应在比赛周期内收集普通用户的真实托管 key。硬 MVP 用团队受控测试凭据验证 `secret_ref` 生命周期；本地 Runner 只在路线图前置条件满足后，用于额外证明真实用户可使用自己的 key。
 
 ## 6. 本地 Runner 契约
 
@@ -124,15 +124,15 @@ Provider 自身的 prompt/context cache 是供应商内部优化，不能替代�
 5. Gateway 把结果当作不可信输入，再做 Schema、权限、大小和安全渲染校验；
 6. nonce、序号、过期时间和幂等键阻止跨用户认领、重放和重复提交。
 
-MVP 只支持一个演示设备、一个并发任务和一个 CLI Runner。不实现公网入站端口、任意隧道、多设备同步和后台常驻 Agent。
+若启用条件增强，只支持一个演示设备、一个并发任务和一个 CLI Runner。不实现公网入站端口、任意隧道、多设备同步和后台常驻 Agent。
 
 ## 7. 方案取舍
 
 | 方案 | 优点 | 风险 | 结论 |
 |---|---|---|---|
 | 全部平台托管 | 用户体验简单、随时在线 | 收集真实 key 的安全和运营成本过高 | 仅团队测试凭据 |
-| 全部本地运行 | 私密数据和 key 不离开设备 | 在线性、安装和演示复杂 | 作为真实 BYOK 主路径 |
-| 平台托管 + 本地 Runner | 公共任务易用，私人任务可控 | 需要两种执行路径和租约协议 | 采用 |
+| 全部本地运行 | 私密数据和 key 不离开设备 | 在线性、安装和演示复杂 | 仅作为未来/增强路径 |
+| 平台托管 + 本地 Runner | 公共任务易用，私人任务可控 | 需要两种执行路径和租约协议 | 架构采用，Runner 条件实现 |
 | 每人部署一个公网 Agent | 独立性强 | 注册、SSRF、运维和版本矩阵失控 | 不用于个人 Agent |
 | 自动模型 fallback | 表面可用性高 | 费用、数据外发和结果语义不透明 | MVP 禁止 |
 
@@ -150,3 +150,4 @@ MVP 只支持一个演示设备、一个并发任务和一个 CLI Runner。不�
 - [协议调度层设计](../designs/01-agent-gateway.md)
 - [平台威胁模型](../security/threat-model.md)
 - [ADR-0003：采用模板化个人 Agent 与混合模型运行时](../decisions/0003-hybrid-personal-agent-runtime.md)
+- [ADR-0004：采用 Personal Main Agent 与单跳 Specialist 编排](../decisions/0004-personal-main-agent-single-hop-orchestration.md)

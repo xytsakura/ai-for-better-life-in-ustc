@@ -1,19 +1,19 @@
 # 04 个人 Agent Harness 与混合模型运行时设计
 
-> 版本：0.3
+> 版本：0.4
 > 日期：2026-07-19
-> 状态：已获队长批准，三路独立审计和修复复审通过；本文是设计契约，不代表代码已经实现。
+> 状态：已获队长批准，已纳入 v0.4 三路独立审计并通过；本文是设计契约，不代表代码已经实现。
 
 ## 1. 定位
 
-本模块把校园 Agent 平台从“接入多个固定 Agent”扩展为“每个用户都能养一个个人 Agent”。平台维护统一的校园 Agent Harness、Agent 模板、工具、知识资源、缓存和调度器；用户只配置自己的模型、预算、私有知识空间和偏好。
+本模块定义 Personal Main Agent 和内置 Specialist 可复用的 Harness、Profile、模型、工具、知识、缓存和混合运行时。用户通过 AgentProfile 养成自己的 Main Agent；Main Agent 的单跳 Specialist 发现与调用由[05 编排设计](./05-personal-main-agent-orchestration.md)负责。
 
 个人 Agent 不是每个用户复制一套代码、开放一个公网 endpoint。它由两部分组成：
 
 - `AgentTemplate`：平台或团队维护的版本化能力模板，定义 skill、流程、工具、输入输出 Schema、安全策略和缓存规则；
 - `AgentProfile`：用户私有配置，引用模板、模型、知识空间、记忆、预算和执行模式。
 
-外部独立 Agent 仍通过 A2A 接入；两个内部课程 Demo 也按服务粒度发布 Agent Card 和 A2A endpoint，但与个人 Agent 复用同一 Harness Core。个人用户/Profile 不单独发布 Agent Card。MCP 仍负责 Agent 内部工具和数据连接，模型提供商不被伪装成 A2A Agent 或 MCP Tool。
+Personal Main Agent 不发布用户级 A2A endpoint；它通过 Gateway 调用已验收 Specialist。两个内置课程 Specialist 按服务粒度发布 Agent Card/A2A endpoint，并与 Main Agent 复用 Harness Core；第三方 Specialist 可以使用自己的内部运行时。MCP 仍负责单个 Agent 内部工具和数据连接，模型提供商不被伪装成 A2A Agent 或 MCP Tool。
 
 ## 2. 目标
 
@@ -25,6 +25,8 @@
 - 私有知识、个人记忆、API key、成本和缓存相互隔离；
 - 模型能力不满足、预算不足、Runner 离线和 key 失效时可解释失败，不静默换模型；
 - 任务、用量、缓存命中和模型选择可审计，但不记录密钥、完整提示词和私有正文。
+- Main Agent 使用用户 ModelProfile 做能力选择和最终综合；Specialist 只获得 ContextGrant 允许的最小上下文；
+- 内置 Specialist 共享 ModelAdapter/Policy/Cache/Usage 核心，但保留独特领域 pipeline、工具、知识库和公共 QA namespace。
 
 ## 3. 非目标
 
@@ -35,6 +37,8 @@
 - 不开放任意用户自定义 `base_url` 给平台服务器访问；
 - 不把个人 API key 写入 Agent Card、TaskRequest、Artifact、日志或仓库；
 - 不把私人回答或个人记忆自动提升为公共缓存。
+- 不允许 Main Agent 绕过 Gateway 访问 Specialist，也不允许 Specialist 继续调用 Agent；
+- 不把完整个人上下文预加载到 Main Agent prompt 或下发给 Specialist。
 
 ## 4. 核心概念
 
@@ -47,7 +51,7 @@
   "template_id": "course-research",
   "template_version": "1.0.0",
   "display_name": "课程调研助手",
-  "skill_ids": ["course_research"],
+  "skill_ids": ["course.research"],
   "required_model_capabilities": ["streaming", "structured_output"],
   "allowed_tool_ids": ["icourse.public.search", "course.report.render"],
   "input_schema_ref": "schema://course-research-request/1.0",
@@ -61,7 +65,7 @@
 
 ### 4.2 AgentProfile
 
-Profile 是用户拥有的个人 Agent 配置：
+Profile 是用户拥有的 Personal Main Agent 配置：
 
 ```json
 {
@@ -316,11 +320,12 @@ Template 升级规则：同一 major 版本可增加向后兼容的可选能力�
 
 ```mermaid
 flowchart TB
-    TASK["TaskRequest + AgentProfile"] --> RESOLVE["Profile Resolver"]
+    TASK["Main turn / Specialist child + AgentProfile"] --> RESOLVE["Profile Resolver"]
     RESOLVE --> POLICY["Policy / Budget Guard"]
     POLICY --> CACHE["Cache Resolver"]
     CACHE --> FLOW["Template Runtime"]
     FLOW --> TOOLS["MCP Tool Executor"]
+    FLOW --> SPECIALIST["Gateway specialist.search/describe/invoke · 仅 Main"]
     FLOW --> MODEL["Model Adapter"]
     MODEL --> MANAGED["Managed Model Call"]
     MODEL --> LOCAL["Local Runner Lease"]
@@ -335,6 +340,7 @@ flowchart TB
 - Cache Resolver：按公共证据、公共答案或私人生成策略读取/写入缓存；
 - Template Runtime：执行版本化 Agent 流程，不直接保存用户密钥；
 - MCP Tool Executor：只执行模板允许且用户获授权的工具；
+- Specialist Client：只在 Main Agent 执行票据中可用，经 Gateway 搜索、描述和调用一个 Specialist；不是 MCP Tool，底层仍为 A2A；
 - Model Adapter：把统一 ModelRequest 转换为 provider 请求，并规范化 usage；
 - Local Runner Client：通过短期租约把模型调用交给已配对设备；
 - Artifact Validator：校验 Schema、引用、数据范围、大小和不可信输出；
@@ -406,7 +412,7 @@ MVP 优先实现一个 OpenAI-compatible adapter，但为 DeepSeek、OpenAI 和�
 7. Gateway 把 Runner 结果视为不可信输入，再次做 Schema、权限、大小和渲染校验；
 8. lease 完成或过期后不可重放，本地中间数据按策略清理。
 
-MVP 只支持一个演示设备、一个并发任务、短期配对码和短 lease，不开放入站端口、通用隧道或多设备同步。
+若作为条件增强启用，本地 Runner 最多支持一个演示设备、一个并发任务、短期配对码和短 lease，不开放入站端口、通用隧道或多设备同步。
 
 ## 8. 数据 egress 与 fallback
 
@@ -434,7 +440,7 @@ MVP 只支持一个演示设备、一个并发任务、短期配对码和短 lea
 | L1 来源快照 | 公开课程字段、公开页面版本 | 是 | source、fetched_at、visibility |
 | L2 解析与索引 | chunk、OCR、embedding、全文索引 | 仅公共/获授权共享数据 | parser、embedding、document、policy |
 | L3 证据与检索 | 规范化查询到 evidence bundle | 仅公共/相同共享 scope | query、data、retriever、policy |
-| L4 公共标准答案 | 经质量门槛验证的 AnswerArtifact | 是 | evidence、template、prompt、generator、policy |
+| L4 公共专业问答 | 经质量门槛验证的公共 QA/SpecialistArtifact | 是 | specialist、skill、evidence、template、prompt、policy |
 | L5 私人生成 | 结合个人知识、记忆和模型的回答 | 否 | subject、profile、model、prompt、private data、policy |
 
 关键规则：
@@ -477,7 +483,7 @@ UsageRecord 记录 `task_id`、`subject_id`、`provider_id`、`model_id`、execu
 6. DLP 扫描日志、trace、错误、Artifact、数据库导出和前端响应；
 7. 加密主密钥不与密文存放在同一数据库或仓库。
 
-比赛 MVP 用团队受控测试 key 验证 `secret_ref`、撤销和 DLP，不收集普通参赛者或真实用户的托管 key。本地 Runner 的 key 只保存在用户本地安全配置中。
+比赛硬 MVP 用团队受控测试 key 验证 `secret_ref`、撤销和 DLP，不收集普通参赛者或真实用户的托管 key。条件启用本地 Runner 时，用户 key 仍只保存在本地安全配置中。
 
 ## 12. 个人记忆与知识空间
 
@@ -486,7 +492,9 @@ UsageRecord 记录 `task_id`、`subject_id`、`provider_id`、`model_id`、execu
 - Profile 删除不自动删除用户文件，但必须撤销 Profile 对知识空间、模型和工具的授权；
 - 用户可单独清除会话记忆、长期记忆、私人答案缓存和 ModelProfile；
 - 模板中的提示词不能读取未绑定空间；个人记忆中的提示注入仍按不可信证据处理；
-- 第三方 A2A Agent 默认不能获得用户 ModelProfile、BYOK 或私人记忆，只能收到任务所需的最小上下文。
+- 第三方 Specialist 默认不能获得用户 ModelProfile、BYOK、完整 Profile、完整会话或私人记忆，只能收到 ContextGrant 允许的最小上下文；
+- Main Agent 只能通过 Context Broker 按需读取个人数据，不能把完整个人档案预加载到 prompt；
+- Specialist 不能直接写长期记忆，只能返回候选，由 Main Agent 和记忆策略决定是否保存。
 
 ## 13. 错误模型
 
@@ -506,18 +514,19 @@ UsageRecord 记录 `task_id`、`subject_id`、`provider_id`、`model_id`、execu
 
 ### 功能闭环
 
-- 同一 `AgentTemplate` 创建两个 `AgentProfile`，分别使用平台托管测试模型和本地 Runner 模型，Harness 业务流程代码不变；
+- 一个 Personal Main Agent Profile 使用平台/团队测试模型完成直接回答和 Specialist 最终综合；
+- Main Agent 每回合最多调用一个 Specialist，Specialist 无法继续调用 Agent；
 - Profile A 与 Profile B 可以共享公共知识、解析、embedding 和证据缓存；
 - 同一公开问题第二次选择公共标准答案时不产生用户模型调用；
 - 用户选择“用我的模型重新生成”时复用公共证据，但生成结果和 usage 进入本人空间；
 - 私人笔记只影响本人 Profile，另一用户零命中；
-- 本地 Runner 离线时不静默切换模型；
+- 条件启用本地 Runner 时，Runner 离线不静默切换模型；
 - 模型能力不匹配、预算超限和 key 撤销均返回可解释错误。
 
 ### 安全闭环
 
 - 真实 key 在仓库、数据库正文、日志、trace、TaskEvent、Artifact 和前端响应中出现 0 次；
-- Runner 认领他人任务、重放 lease、重复提交结果和过期提交均被拒绝；
+- 条件启用 Runner 时，认领他人任务、重放 lease、重复提交结果和过期提交均被拒绝；
 - 平台拒绝任意自定义 `base_url`，只使用 allowlist provider；
 - `private` 和 `local_authenticated` 数据未经逐次确认不得发送到托管 provider；
 - 用户 A 的 L5 缓存、ModelProfile 和私人记忆对用户 B 零可见；
@@ -525,14 +534,14 @@ UsageRecord 记录 `task_id`、`subject_id`、`provider_id`、`model_id`、execu
 
 ### 演示脚本
 
-1. 用“课程调研”模板创建“省钱助手”和“高质量助手”；
-2. 两个 Profile 显示不同 provider/model 和相同公共知识授权；
-3. 第一次查询生成证据与公共标准答案，展示来源和 usage；
-4. 第二个 Profile 直接命中 L4，模型调用次数为 0；
-5. 选择“用我的模型重写”，复用 L3 证据并展示不同模型 usage；
-6. 切换到私人复习问题，本地 Runner 使用个人笔记生成回答；
-7. 断开 Runner，展示任务停留/失败且不切到云模型；
-8. 展示预算上限、key/lease 脱敏审计和两个用户缓存隔离测试。
+1. 创建一个 Personal Main Agent Profile，显示用户选择的 provider/model 和预算；
+2. 普通问题由 Main Agent直接回答，不创建 child；
+3. 课程问题触发 search/describe/invoke，创建唯一 Specialist child；
+4. Specialist 命中公共证据/QA，Gateway 校验后交回 Main；
+5. Main Agent用用户模型提炼并保留引用、限制、cache 和 usage；
+6. 私人复习问题只通过 ContextGrant 引用个人空间；
+7. 展示第二 child、递归、跨用户记忆和静默 fallback 均被拒绝；
+8. Runner 条件启用时再展示本地 key、短 lease 和离线不切云。
 
 ## 15. MVP 与后续边界
 
@@ -540,11 +549,17 @@ MVP 必须完成：
 
 - AgentTemplate、AgentProfile、ModelProfile 和 CapabilitySnapshot 最小 Schema；
 - 一个 OpenAI-compatible adapter，两个 allowlist provider 配置；
-- 平台赞助/团队测试 managed 模式和一个 CLI 本地 Runner；
+- 平台赞助/团队测试 managed 模式；
+- Main Agent 的 specialist.search/describe/invoke 结构化工具面和单跳执行票据；
 - Usage Ledger、token 预算、最大并发/重试/工具步数；
 - L1-L5 缓存边界，至少演示 L3/L4/L5；
 - 显式 egress 与 fallback 确认；
-- secret_ref、RunnerLease、撤销和安全测试。
+- secret_ref、撤销和安全测试。
+
+条件增强：
+
+- 一个设备、一个并发、短 lease 的 CLI 本地 Runner；
+- RunnerLease、配对、重放拒绝和本地 key 安全主演示。
 
 MVP 后：
 
@@ -558,9 +573,10 @@ MVP 后：
 
 ## 16. 与 Gateway 和 A2A/MCP 的边界
 
-- Gateway 负责用户身份、Profile 解析入口、Agent 路由、Task、事件、Runner lease 和策略审计；
-- Harness 负责模板运行、模型适配、工具执行、缓存、预算和输出校验；
-- A2A 仍只用于 Gateway 与独立 Agent 服务之间的标准任务互联；
+- Main Agent 负责用户交互、能力选择、query、ContextGrant 请求和最终综合；
+- Gateway 负责身份、Profile 解析入口、Catalog 披露、root/child Task、限深、A2A、事件、Runner lease 和策略审计；
+- Harness 负责 Main/内置 Specialist 模板运行、模型适配、工具执行、缓存、预算和输出校验；
+- A2A 仍只用于 Gateway 与 Specialist 服务之间的标准 child task 互联；
 - MCP 仍只用于 Agent 内部工具和数据连接；
 - ModelProfile 和 API key 不进入 A2A Agent Card，不传给第三方 Agent；
 - 本地 Runner 使用平台 OpenAPI/JSON Schema 定义的出站 worker 契约，不注册任意 localhost Agent endpoint；
@@ -573,5 +589,8 @@ MVP 后：
 - [多模型接入、BYOK 与本地 Runner 技术调研](../research/model-provider-byok.md)
 - [平台威胁模型](../security/threat-model.md)
 - [ADR-0003：采用模板化个人 Agent 与混合模型运行时](../decisions/0003-hybrid-personal-agent-runtime.md)
+- [ADR-0004：采用 Personal Main Agent 与单跳 Specialist 编排](../decisions/0004-personal-main-agent-single-hop-orchestration.md)
+- [Personal Main Agent 与 Specialist 单跳编排设计](./05-personal-main-agent-orchestration.md)
 - [个人 Agent Harness 正式设计规格](../superpowers/specs/2026-07-19-personal-agent-harness-design.md)
-- [v0.3 集成审计](../audits/2026-07-19-v0.3-personal-agent-audit.md)
+- [v0.3 集成审计（历史）](../audits/2026-07-19-v0.3-personal-agent-audit.md)
+- [v0.4 Main Agent 单跳编排审计（当前）](../audits/2026-07-19-v0.4-main-agent-audit.md)

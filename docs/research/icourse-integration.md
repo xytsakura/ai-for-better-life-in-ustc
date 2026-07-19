@@ -2,7 +2,7 @@
 
 ## 1. 调研结论
 
-评课社区适合作为课程评价 Deep Research Agent 的主要外部来源，但比赛 MVP 的确定链路应是“低频公开 HTML + 搜索 token”。用户本地登录连接器属于获得维护者授权且安全测试通过后的条件能力，不能把原站当作开放数据 API。
+评课社区适合作为课程评价 Deep Research Specialist 的主要外部来源，但比赛 MVP 的确定链路应是“低频公开 HTML + 搜索 token”。用户本地登录连接器属于获得维护者授权且安全测试通过后的条件能力，不能把原站当作开放数据 API。
 
 关键边界如下：
 
@@ -281,7 +281,7 @@ AttachmentSnapshot {
 
 ## 14. 对实现文档的约束
 
-课程评价 Deep Research Agent 的实现方案应遵守以下硬约束：
+课程评价 Deep Research Specialist 的实现方案应遵守以下硬约束：
 
 - 公开模式只用公开 HTML、公开搜索 token 和公开来源链接。
 - 登录增强模式只通过用户本地浏览器读取当前可见内容。
