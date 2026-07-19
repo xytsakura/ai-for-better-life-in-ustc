@@ -11,6 +11,8 @@
 3. 平台能够处理长任务、追问、失败、取消和来源引用；
 4. 第三方开发者可以根据文档在较短时间内完成接入。
 
+平台的创新点不是“把多个聊天机器人放在一个页面”，而是让独立 Agent 在不修改 Gateway 业务代码的情况下，通过标准协议、校园能力契约、权限范围和证据链完成真实接入与治理。比赛必须用固定脚本和代码 diff 证明这一点。
+
 ## 2. 设计原则
 
 - **标准优先**：锁定 A2A Protocol 1.0 `HTTP+JSON`、MCP 2025-06-18 授权语义、OpenAPI 3.1 和 JSON Schema 2020-12，不重新发明完整协议。
@@ -47,8 +49,8 @@ flowchart TB
         GITHUB["GitHub MCP Connector"]
         FILES["用户文件 MCP Connector"]
         DB["PostgreSQL + pgvector"]
-        CACHE["Redis"]
-        OBJECTS["对象存储"]
+        CACHE["事件/缓存（PostgreSQL，可选 Redis）"]
+        OBJECTS["受控文件区（可升级对象存储）"]
     end
 
     WEB --> API
@@ -120,27 +122,31 @@ sequenceDiagram
 |---|---|---|
 | 公开课程元数据 | 服务器公共 Connector | 可缓存结构化字段和版本 |
 | 公开点评 | 限速读取，保留来源 | 优先摘要与索引，不公开复制全量正文 |
-| 登录限定点评/附件链接 | 用户本地授权 Connector 或官方只读接口 | 不保存用户 Cookie，内容按授权范围处理 |
+| 登录限定点评/附件链接 | 获授权后的用户本地 Connector 或官方只读接口 | 未获授权时仅本地处理，不进入服务器或共享索引 |
 | 经许可的 GitHub 课程资源 | GitHub Connector | 保存仓库、提交版本和解析索引 |
-| 用户个人资料 | 用户上传 Connector | 私有空间、加密存储、可删除 |
+| 用户个人资料 | 用户上传 Connector | 私有空间、访问控制、可删除；部署支持时启用静态加密 |
 
-登录凭据属于数据连接器，不属于 A2A 任务载荷。Gateway 只接收权限范围和连接器返回的结构化数据，不接收原始 Cookie。
+登录凭据属于数据连接器，不属于 A2A 任务载荷。Gateway 不接收原始 Cookie。未获评课社区明确授权时，登录限定证据和附件默认只在用户本地处理，不进入 Gateway 事件、服务器缓存、对象存储或共享 RAG；公开导出必须重新走公开模式。
 
-三个子系统通过版本化 `TaskRequest`、`TaskEvent`、`ArtifactEnvelope` 和 `FileRef` 交换数据。用户文件先进入对象存储，A2A 任务只携带限定权限的文件引用；Gateway 编排 A2A 任务，业务 Agent 在内部编排 MCP 工具。
+三个子系统通过版本化 `TaskRequest`、`TaskEvent`、`ArtifactEnvelope` 和 `FileRef` 交换数据。用户文件先进入受控文件区，A2A 任务只携带限定权限的文件引用；`FileRef` 不构成授权，Gateway 必须按当前身份解析服务端记录。Gateway 编排 A2A 任务，业务 Agent 在内部编排 MCP 工具。
+
+详细威胁和控制见[平台威胁模型](../security/threat-model.md)。
 
 ## 7. 技术选型
 
-- Python 作为 Gateway、Agent 和 Connector 的主要实现语言；
-- FastAPI/Pydantic 负责平台 API 和数据校验；
-- 官方 A2A Python SDK 实现 Agent Card、任务和流式协议；
-- 官方 MCP Python SDK 实现数据源工具；
-- PostgreSQL 保存注册信息、课程元数据、任务记录和文档元数据；
-- pgvector 与 PostgreSQL 全文检索组成混合检索；
-- Redis 保存热点摘要、短期任务事件和限流状态；
-- OpenTelemetry 提供跨 Gateway、Agent、Connector 的 trace；
+- Python、FastAPI、Pydantic 作为 Gateway、Agent 和 Connector 的主要实现栈；
+- 官方 A2A Python SDK 实现 Agent Card、任务和流式协议，官方 MCP Python SDK 实现需要跨模块复用的数据工具；
+- PostgreSQL 保存注册、任务、事件、权限和文档元数据，pgvector 与 PostgreSQL 全文检索组成混合检索；
+- React + Vite 或团队已熟悉的等价方案提供演示入口；
+- 开发期使用受控本地文件区，部署确需跨容器共享时再使用 S3/MinIO；
+- MVP 先用结构化 JSON 日志和 correlation ID；OpenTelemetry instrumentation 可以预留，Collector 后置；
+- Redis 只在 PostgreSQL 事件表和单进程通知不能满足 SSE/缓存时加入；
+- LangGraph 只在课程研究两天 spike 证明能简化 checkpoint 和人工确认后加入，不作为 Gateway 硬依赖；
 - Docker Compose 提供统一的本地开发环境。
 
 具体依赖必须在实施阶段通过最小原型验证并锁定版本。
+
+选型证据和竞品比较见[竞品与参考实现技术调研](../research/competitive-landscape.md)，MVP 取舍见 [ADR-0002](../decisions/0002-competition-mvp-scope.md)。
 
 ## 8. 仓库边界
 
@@ -164,11 +170,13 @@ tests                    协议、集成、评测和端到端测试
 
 - 两个 Demo Agent 以独立进程发布 Agent Card，并通过 A2A 被 Gateway 调用；
 - 一个独立部署/独立进程的最小外部示例 Agent 根据接入文档完成白名单注册，无需修改 Gateway，不能用进程内 mock 代替；
+- 外部示例 Agent 固定实现 `campus.notice.lookup`，用 10 条公开样例任务证明正常、无结果、追问、取消和不可达；
 - 用户能看到任务进度、追问、完成、失败、超时和取消状态；
 - 课程评价报告包含来源、时间和样本说明；
 - 课程资料回答包含引用，并遵守公共/私有空间隔离；
 - 热门课程重复查询能命中缓存，新内容能触发增量更新；
 - 日志和 trace 不包含模型密钥、登录 Cookie 或私人文件正文；
+- Agent Card SSRF、FileRef 越权、恶意 Artifact、提示注入和恶意文件用例被拒绝；
 - 可用演示脚本稳定复现两条核心流程。
 
 ## 10. 明确不做

@@ -26,4 +26,9 @@
 - 评课社区使用 Flask 会话 Cookie 和 CSRF，不存在可共享的通用用户 API token。搜索 URL 的短期 token 不是登录凭据。
 - 评课社区登录凭据不得提取到聊天、写入文档或提交仓库；登录限定内容优先通过用户本地 Connector 访问。
 - 评课社区代码的 AGPLv3 不覆盖用户点评和课程附件的内容版权。未经授权不得批量复制或公开再分发。
-- 文档目录按 `architecture/`、`designs/`、`research/`、`meetings/`、`decisions/` 分类；代码目录只在实施计划批准且确有内容时创建。
+- 文档目录按 `architecture/`、`designs/`、`research/`、`security/`、`audits/`、`meetings/`、`decisions/` 分类；代码目录只在实施计划批准且确有内容时创建。
+- 发布前技术审计新增 `audits/` 与 `security/`：重要方案必须记录发现、修复状态、残余风险和威胁模型，不能只写理想架构。
+- 外部 Agent 固定用 `campus.notice.lookup` 做第一周真实接入验收；接入只允许配置/Schema 变化，Gateway 业务代码改动为 0。
+- 比赛 MVP 采用纵向闭环优先：PostgreSQL、受控文件区、结构化日志为基线；Redis、MinIO、完整 OpenTelemetry、LangGraph 和登录增强 Connector 条件采用。
+- 未获评课社区明确授权时，登录受限点评和附件不进入服务器事件、对象存储、哈希、向量、Artifact 或共享缓存；公开模式使用短 TTL。
+- 网页、点评、外部 Agent 输出和用户文件均按不可信输入处理，实施必须覆盖 SSRF、提示注入、恶意文件、FileRef 越权和任务重放。

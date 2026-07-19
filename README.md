@@ -4,7 +4,7 @@
 
 本项目参加中国科学技术大学“一〇七”杯算力与智能体开发大赛本科生组智能体赛道。团队希望建设校园智能体的上游基础设施：用统一协议发现、接入和调度不同团队开发的校园 Agent，并通过两个可运行 Demo 验证平台能力。
 
-> 当前状态：方案设计与技术调研。代码尚未开始实现，本文不会提供未经验证的安装或部署命令。
+> 当前状态：`v0.2` 发布前审计修订版，等待三名队员共同审阅。代码尚未开始实现，本文不会提供未经验证的安装或部署命令。
 
 ## 项目定位
 
@@ -18,6 +18,13 @@
 - 平台 REST 接口采用 OpenAPI 3.1 与 JSON Schema 2020-12；
 - 任务过程可追踪、可取消、可解释，并保留来源引用和错误状态；
 - 比赛版本通过课程评价 Deep Research 和课程资料复习助手完成端到端验证。
+
+现有平台已经普遍具备“多个 Agent、工作流、知识库和统一聊天入口”，因此本项目不把这些通用功能本身作为创新点。比赛需要重点证明：
+
+- 独立第三方 Agent 只提供标准 Agent Card、A2A endpoint 和业务 Schema，即可在 Gateway 业务代码零修改的情况下接入；
+- 平台能把校园场景的权限范围、来源证据、失败状态和审计信息随任务一起治理；
+- 同一协议调度层可以承载 Deep Research、权限隔离 RAG 和一个独立校园通知 Agent；
+- 接入过程、协议兼容性、检索质量和安全边界都有固定脚本与量化结果，不只依赖架构图说明。
 
 ## 核心模块
 
@@ -55,20 +62,21 @@ flowchart LR
 
 ## 技术路线
 
-当前批准的技术方向如下，最终依赖版本将在实施计划和可运行代码中锁定：
+当前批准的技术方向如下，最终依赖版本将在实施 spike 和可运行代码中锁定：
 
-| 层次 | 方案 |
-|---|---|
-| 前端 | React/Next.js 统一入口，具体选择在实现阶段确认 |
-| API Gateway | Python、FastAPI、Pydantic |
-| Agent 互操作 | A2A 与官方 Python SDK |
-| 工具和数据连接 | MCP 与官方 Python SDK |
-| 接口契约 | OpenAPI 3.1、JSON Schema 2020-12 |
-| 数据与向量检索 | PostgreSQL、pgvector |
-| 缓存与轻量任务协调 | Redis |
-| 文件存储 | 开发期本地对象存储，部署期使用兼容 S3 的存储 |
-| 可观测性 | OpenTelemetry、结构化日志 |
-| 本地编排 | Docker Compose |
+| 层次 | MVP 基线 | 条件采用 |
+|---|---|---|
+| 前端 | React + Vite 或团队熟悉的等价轻方案 | Next.js 不作为硬要求 |
+| API Gateway | Python、FastAPI、Pydantic | 无 |
+| Agent 互操作 | A2A 1.0 与官方 Python SDK | 多 Agent 父子任务后置 |
+| 工具和数据连接 | MCP 与官方 Python SDK，只标准化需要复用的边界 | 不把所有本地函数强制包装为 MCP |
+| 接口契约 | OpenAPI 3.1、JSON Schema 2020-12 | 无 |
+| 数据与向量检索 | PostgreSQL、pgvector、PostgreSQL 全文检索 | 重排模型后置 |
+| 事件与缓存 | PostgreSQL 事件表、进程内通知 | 出现明确瓶颈后加入 Redis |
+| 文件存储 | 受控本地文件区、服务端权限记录 | 跨容器共享时升级 S3/MinIO |
+| 可观测性 | 结构化 JSON 日志、correlation ID | 核心链路稳定后接 OpenTelemetry Collector |
+| Agent 内部编排 | 显式 Python pipeline | LangGraph 两天 spike 证明收益后用于课程研究 Agent |
+| 本地编排 | Docker Compose | 无 |
 
 ## 文档导航
 
@@ -78,6 +86,7 @@ flowchart LR
 - [总体架构](./docs/architecture/overview.md)
 - [项目路线图](./docs/roadmap.md)
 - [2026-07-19 方案会议记录](./docs/meetings/2026-07-19-project-direction.md)
+- [发布前技术审计](./docs/audits/2026-07-19-publication-audit.md)
 
 ### 三份独立设计
 
@@ -89,7 +98,10 @@ flowchart LR
 
 - [Agent 协议选型调研](./docs/research/agent-protocols.md)
 - [评课社区集成调研](./docs/research/icourse-integration.md)
+- [竞品与参考实现技术调研](./docs/research/competitive-landscape.md)
+- [平台威胁模型](./docs/security/threat-model.md)
 - [ADR-0001：采用标准优先的 Agent 集成架构](./docs/decisions/0001-standards-first-agent-integration.md)
+- [ADR-0002：采用纵向闭环优先的比赛 MVP](./docs/decisions/0002-competition-mvp-scope.md)
 
 ## 规划中的仓库结构
 
@@ -100,10 +112,12 @@ flowchart LR
 ├── 比赛要求.md
 ├── docs/
 │   ├── architecture/
+│   ├── audits/
 │   ├── decisions/
 │   ├── designs/
 │   ├── meetings/
 │   ├── research/
+│   ├── security/
 │   └── roadmap.md
 ├── apps/                       # 实施阶段创建：统一前端
 ├── services/                   # 实施阶段创建：Gateway
@@ -135,9 +149,11 @@ git push
 - 不得提交 API key、密码、Cookie、CSRF token、个人敏感信息或未脱敏数据；
 - 评课社区没有通用用户 API token，不共享队长或任何成员的登录 Cookie；
 - 公共数据使用服务器连接器，登录限定内容优先由用户本地浏览器连接器读取，凭据不离开用户设备；
+- 未获评课社区明确授权时，登录限定点评和附件不进入服务器事件、对象存储、内容指纹、向量索引、Artifact 或共享缓存；
 - 评课社区代码的 AGPLv3 许可不等于用户点评和课程附件获得开源许可；
 - 未明确授权的教材、真题、讲义和附件不复制到公共知识库，只保存必要元数据与来源链接；
 - 用户上传资料进入个人私有空间，并支持删除和索引失效。
+- Agent Card、第三方 Agent 输出、网页、点评和文件即使来自白名单也按不可信输入处理，必须通过 SSRF、Schema、权限、提示注入和文件沙箱检查。
 
 ## 官方信息
 

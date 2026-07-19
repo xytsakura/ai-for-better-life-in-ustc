@@ -13,6 +13,8 @@
 
 版本基线：MVP 锁定 A2A Protocol 1.0 的 `HTTP+JSON` binding，请求统一携带 `A2A-Version: 1.0`，不接受空版本静默回退到 0.3。线级状态只使用 `TASK_STATE_UNSPECIFIED`、`TASK_STATE_SUBMITTED`、`TASK_STATE_WORKING`、`TASK_STATE_COMPLETED`、`TASK_STATE_FAILED`、`TASK_STATE_CANCELED`、`TASK_STATE_INPUT_REQUIRED`、`TASK_STATE_REJECTED`、`TASK_STATE_AUTH_REQUIRED`。Agent Card 按 1.0 的 `supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes`、`skills` 和安全字段校验。MCP HTTP 授权语义锁定到 2025-06-18 规范，并在实施原型后锁定官方 SDK 版本。
 
+2026-07-19 复核时，[A2A Python SDK v1.1.1](https://github.com/a2aproject/a2a-python/releases/tag/v1.1.1) 发布于 2026-07-16，[MCP Python SDK v1.28.1](https://github.com/modelcontextprotocol/python-sdk/releases/tag/v1.28.1) 发布于 2026-06-26。两者是实施 spike 的候选版本，不代表已通过本项目兼容测试；测试通过后必须写入锁文件并记录实际 binding、事件和取消行为。
+
 ## 2. 项目约束
 
 团队由三名本科生组成，比赛目标需要可演示、可说明、能体现技术路线，同时开发时间有限。因此协议选择要满足：
@@ -55,7 +57,7 @@ A2A 文档把 A2A 和 MCP 明确区分为互补关系：A2A 面向 Agent 到 Age
 
 ### 3.4 MVP 取舍
 
-MVP 只实现单 Agent 路由和平台 task 到 A2A task 的一对一映射。多 Agent 协作、父子任务、复杂 planner 暂不实现。
+MVP 只实现单 Agent 路由和平台 task 到 A2A task 的一对一映射。多 Agent 协作、父子任务、复杂 planner 暂不实现。A2A 只放在跨进程/跨团队边界，Agent 内部普通函数调用不为追求“协议化”而强制改成 A2A。
 
 ## 4. MCP
 
@@ -135,7 +137,7 @@ OpenTelemetry 官方文档将其定位为可观测性框架，覆盖 trace、met
 
 ### 6.4 MVP 取舍
 
-MVP 只做基础 instrumentation 和本地可查看的 trace/log。指标先覆盖任务数量、成功率、失败率、超时率、首事件延迟和总耗时。
+MVP 先做结构化 JSON 日志、correlation ID 和基础 instrumentation。只有核心链路稳定后才部署 OpenTelemetry Collector；指标先覆盖任务数量、成功率、失败率、超时率、首事件延迟和总耗时。
 
 ## 7. 自定义协议
 
@@ -154,7 +156,7 @@ MVP 只做基础 instrumentation 和本地可查看的 trace/log。指标先覆�
 
 ### 7.3 结论
 
-不采用自定义完整 Agent 协议。可以只在平台内部保留少量私有字段，例如 `route_reason`、`demo_scene`、`user_id_hash`，但外部 Agent 互联应走 A2A。
+不采用自定义完整 Agent 协议。可以只在平台内部保留少量私有字段，例如 `route_reason`、`demo_scene`、随机不透明的 `subject_id`，但外部 Agent 互联应走 A2A。
 
 ## 8. MCP-only 方案
 
@@ -241,3 +243,5 @@ Agent 职责：
 - 面向真实校园系统的 MCP server 适配器。
 
 这些方向不阻塞 MVP。比赛第一版应优先完成标准协议闭环、真实白名单接入和两个内部 Demo 的稳定演示。
+
+更完整的竞品、编排框架和校园 RAG 对比见[竞品与参考实现技术调研](./competitive-landscape.md)。其中 LangGraph 只作为课程研究 Agent 的条件运行时：两天 spike 证明 checkpoint、人工确认和测试确实更简单后才采用；它不进入跨 Agent 协议层，也不与 Gateway 维护第二套共享任务状态。

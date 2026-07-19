@@ -15,8 +15,8 @@ MVP 允许白名单第三方 Agent 按协议真实接入，同时保留两个内
 - Agent 互联：官方 A2A Python SDK。
 - 工具与数据上下文：官方 MCP Python SDK。
 - 数据库：PostgreSQL + pgvector。
-- 缓存与异步协调：Redis。
-- 观测：OpenTelemetry。
+- 事件与缓存：MVP 先用 PostgreSQL 事件表和进程内通知，出现明确瓶颈后再加入 Redis。
+- 观测：MVP 使用结构化 JSON 日志和 correlation ID，保留 OpenTelemetry instrumentation 接口。
 - 平台 REST 接口：OpenAPI 3.1 + JSON Schema 2020-12。
 
 ### 1.1 协议基线
@@ -26,6 +26,7 @@ MVP 允许白名单第三方 Agent 按协议真实接入，同时保留两个内
 - Agent Card 的 `supportedInterfaces[].protocolVersion` 必须为 `1.0`，`protocolBinding` 必须为 `HTTP+JSON`；若原型验证后官方 SDK 只能支持其他 binding，必须统一修改 ADR 和全部文档，不能混用。
 - 平台数据库和 UI 可以使用内部状态名，但协议边界只收发 A2A 1.0 标准 `TaskState`，映射由 A2A Adapter 集中维护。
 - MCP HTTP 授权语义锁定到 2025-06-18 规范。实施原型选定支持该规范的官方 SDK 后，必须将版本写入依赖锁文件和 ADR。
+- 2026-07-19 调研时，A2A Python SDK 最新 release 为 `v1.1.1`，MCP Python SDK 最新 release 为 `v1.28.1`。它们只是 spike 候选，不代表已经完成兼容验证；实施后以锁文件和测试结果为准。
 
 ## 2. 目标
 
@@ -83,7 +84,7 @@ internal demo agent
 - Task Manager：维护统一任务模型，跟踪 A2A task 与平台 task 的映射。
 - Event Stream：把平台事件和 A2A 流式事件统一为 SSE 事件，同时落库供轮询读取。
 - Credential Broker：按 Agent 维度读取凭据引用，运行时注入请求，不把密钥暴露给前端或日志。
-- Observability：通过 OpenTelemetry 记录 trace、span、metric、log，并关联 `task_id`、`agent_id`、`context_id`。
+- Observability：基线用结构化日志关联 `task_id`、`agent_id`、`context_id`；核心链路稳定后用 OpenTelemetry 扩展 trace、metric 和 log。
 
 ## 5. Agent Card 与白名单注册
 
@@ -91,7 +92,7 @@ internal demo agent
 
 A2A Agent 在 `/.well-known/agent-card.json` 发布标准 Agent Card，其中包含 Agent 名称、说明、版本、接口、能力、安全声明、输入输出模式和 skills。平台不修改该标准结构，而是在 Registry 中保存经过校验的 Agent Card 快照和平台治理字段。
 
-MVP 校验器至少检查 `name`、`description`、`version`、`supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes` 和 `skills`。每个 `supportedInterfaces` 项必须包含 HTTPS `url`、`protocolBinding: "HTTP+JSON"` 和 `protocolVersion: "1.0"`；每个 skill 至少包含 `id`、`name`、`description` 和 `tags`。需要认证时，`securitySchemes` 与 `securityRequirements` 的引用必须一致且不得包含密钥明文。
+MVP 校验器至少检查 `name`、`description`、`version`、`supportedInterfaces`、`capabilities`、`defaultInputModes`、`defaultOutputModes` 和 `skills`。每个 `supportedInterfaces` 项必须包含 `url`、`protocolBinding: "HTTP+JSON"` 和 `protocolVersion: "1.0"`；生产/公网端点必须使用 HTTPS，本地开发只允许显式配置的 `http://localhost` 或容器内测试网络。每个 skill 至少包含 `id`、`name`、`description` 和 `tags`。需要认证时，`securitySchemes` 与 `securityRequirements` 的引用必须一致且不得包含密钥明文。
 
 标准 A2A 1.0 Agent Card 最小示例：
 
@@ -139,10 +140,10 @@ MVP 校验器至少检查 `name`、`description`、`version`、`supportedInterfa
 ### 5.2 白名单注册流程
 
 1. 第三方团队提交 Agent Card URL、A2A endpoint、能力说明和测试账号需求。
-2. 管理员用注册校验脚本拉取 Agent Card，验证 JSON 结构、端点可达性、认证方式和能力字段。
+2. 管理员用注册校验脚本拉取 Agent Card，验证 JSON 结构、端点可达性、认证方式和能力字段；拉取前后都要阻止 loopback、私网、链路本地、保留地址、跨域重定向和 DNS rebinding。
 3. 平台创建 `agent_id`，写入白名单配置或数据库。
 4. 凭据只写入本地密钥管理环境或部署平台 Secret，不进入 Git 仓库。
-5. 平台执行健康检查和最小任务握手。
+5. 平台从已审核的 Agent Card 快照选择 endpoint，执行健康检查和最小任务握手，不信任提交表单中与 Card 不一致的 `a2a_endpoint`。
 6. 通过后将 `status` 置为 `enabled`，Router 才允许真实路由。
 
 MVP 可以先用一个受版本控制的 `agents.allowlist.example.json` 说明字段，但真实凭据和真实内网地址放在部署环境中。
@@ -181,7 +182,7 @@ MVP 可以先用一个受版本控制的 `agents.allowlist.example.json` 说明�
 能力发现来自三类信息：
 
 - 静态白名单：管理员认可的 Agent Card 摘要。
-- 主动探测：定期拉取 `card_url` 并检查版本、能力和健康状态。
+- 主动探测：定期安全拉取 `card_url` 并检查版本、能力和健康状态；Card、endpoint 或权限声明变化后先进入待复审状态，不自动覆盖已批准快照。
 - 运行反馈：任务成功率、超时率、取消率、平均首 token 时间、平均完成时间。
 
 MVP 不做复杂语义市场匹配，优先使用可解释的规则路由。
@@ -273,7 +274,7 @@ submitted -> routed -> working -> completed
 - Artifact：Agent 生成的稳定结果，例如 JSON 结果、Markdown 答案、文件引用、结构化计划。
 - Event：状态变化、流式片段、错误、追问请求和取消确认。
 
-平台存储 artifact 摘要和安全引用；大文件后续再接对象存储。
+平台存储 Artifact 摘要和安全引用；大文件先进入受控本地文件区，部署确需跨容器共享时再接对象存储。
 
 ## 8. SSE 与轮询
 
@@ -290,17 +291,24 @@ Authorization: Bearer <platform-user-token>
 事件示例：
 
 ```text
+id: 1
 event: task.status
-data: {"task_id":"task_01JZEXAMPLE","status":"working","agent_id":"course-research-demo"}
+data: {"task_id":"task_01JZEXAMPLE","seq":1,"event_type":"task.status","occurred_at":"2026-07-19T09:20:01Z","payload":{"status":"working","agent_id":"course-research-demo"}}
 
+id: 2
 event: task.delta
-data: {"task_id":"task_01JZEXAMPLE","delta":"正在聚合不同学期的课程评价"}
+data: {"task_id":"task_01JZEXAMPLE","seq":2,"event_type":"task.delta","occurred_at":"2026-07-19T09:20:03Z","payload":{"delta":"正在聚合不同学期的课程评价"}}
 
-event: task.completed
-data: {"task_id":"task_01JZEXAMPLE","artifact_id":"art_01JZEXAMPLE"}
+id: 3
+event: task.artifact
+data: {"task_id":"task_01JZEXAMPLE","seq":3,"event_type":"task.artifact","occurred_at":"2026-07-19T09:20:08Z","payload":{"artifact":{"artifact_id":"art_01JZEXAMPLE","artifact_type":"course_report","schema_version":"1.0","data":{},"files":[],"citations":[]}}}
+
+id: 4
+event: task.status
+data: {"task_id":"task_01JZEXAMPLE","seq":4,"event_type":"task.status","occurred_at":"2026-07-19T09:20:08Z","payload":{"status":"completed","artifact_ids":["art_01JZEXAMPLE"]}}
 ```
 
-SSE 连接断开时，前端可以带 `Last-Event-ID` 重连。平台需要把事件追加写入 Redis Stream 或数据库事件表，至少保留到任务完成后一段时间。
+SSE 的 `data` 始终是完整 `TaskEvent`，轮询接口读取同一事件源。连接断开时，前端可以带 `Last-Event-ID` 重连；平台按 `seq` 去重和补发，不得因为重连重复生成最终 Artifact。MVP 先把事件追加写入 PostgreSQL 事件表；只有单库方案无法满足时再增加 Redis Stream。
 
 ### 8.2 轮询
 
@@ -321,11 +329,17 @@ Authorization: Bearer <platform-user-token>
   "context_id": "ctx_01JZEXAMPLE0000000000000",
   "created_at": "2026-07-19T09:20:00Z",
   "updated_at": "2026-07-19T09:20:08Z",
-  "artifact": {
-    "artifact_id": "art_01JZEXAMPLE",
-    "content_type": "text/markdown",
-    "content": "可以通过图书馆官网通知栏目或公众号查询暑假开放安排。"
-  }
+  "artifacts": [
+    {
+      "artifact_id": "art_01JZEXAMPLE",
+      "artifact_type": "course_report",
+      "schema_version": "1.0",
+      "data": {"summary": "基于当前来源生成的课程调研摘要。"},
+      "files": [],
+      "citations": []
+    }
+  ],
+  "last_event_seq": 4
 }
 ```
 
@@ -338,6 +352,7 @@ MCP 用于 Agent 内部连接工具、数据库、文件、向量检索、浏览
 - 外部第三方 Agent 的 MCP server 不直接暴露给平台用户。
 - 平台不透传用户 token 给 MCP server；由 Agent 根据自己的授权模型访问工具。
 - MCP 工具返回结果必须经过 Agent 汇总和脱敏后再作为 A2A artifact 返回。
+- 点评、网页、文件和工具返回都属于不可信证据，不能覆盖系统指令、扩大权限或自行触发额外工具调用。
 
 这样划分可以避免把工具协议误用为跨 Agent 编排协议，也减少凭据扩散。
 
@@ -363,17 +378,19 @@ agents
 
 contexts
   id
-  user_id_hash
+  subject_id
   title
   summary
   policy_json
+  data_scope
+  retention_until
   created_at
   updated_at
 
 tasks
   id
   context_id
-  user_id_hash
+  subject_id
   selected_agent_id
   external_task_id
   task_type
@@ -381,6 +398,8 @@ tasks
   input_json
   route_reason
   timeout_at
+  data_scope
+  retention_until
   created_at
   updated_at
 
@@ -390,6 +409,8 @@ task_events
   seq
   event_type
   payload_json
+  data_scope
+  retention_until
   created_at
 
 artifacts
@@ -398,10 +419,13 @@ artifacts
   content_type
   content_json
   content_text
+  data_scope
+  retention_until
   created_at
 ```
 
-`user_id_hash` 使用稳定哈希或演示账号标识，不在 MVP 中保存真实学号、手机号、邮箱等敏感信息。
+`subject_id` 使用平台生成的随机、不透明标识或演示账号 UUID，不由学号、邮箱、手机号等直接哈希得到，避免可枚举标识被反查。真实身份映射若未来需要，由独立身份层保存，不进入任务/事件正文。
+`local_authenticated` 和 `private` 的 context/task/event/Artifact 默认不持久化正文。`contexts.summary` 与 `tasks.input_json` 只保存脱敏 envelope、scope、计数和安全引用，不保存完整 `message`、`query` 或本地证据摘要；过期清理同时覆盖上下文、任务、事件、Artifact、对象和缓存。
 
 ### 10.2 共享 Envelope 与文件引用
 
@@ -426,7 +450,7 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
     "artifact_id": {"type": "string"},
     "artifact_type": {
       "type": "string",
-      "enum": ["course_report", "ingestion_receipt", "retrieval_result", "study_answer", "deletion_receipt", "source_list"]
+      "enum": ["course_report", "ingestion_receipt", "retrieval_result", "study_answer", "deletion_receipt", "source_list", "campus_notice"]
     },
     "schema_version": {"const": "1.0"},
     "data": {"type": "object"},
@@ -436,6 +460,30 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
   "additionalProperties": false
 }
 ```
+
+`TaskEvent` 的最小 JSON Schema：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.edu/schemas/task-event-v1.json",
+  "type": "object",
+  "required": ["task_id", "seq", "event_type", "occurred_at", "payload"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "seq": {"type": "integer", "minimum": 1},
+    "event_type": {
+      "type": "string",
+      "enum": ["task.status", "task.delta", "task.artifact", "task.question", "task.error"]
+    },
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}
+```
+
+`task.status.payload.status` 只使用平台状态表中的值；`task.artifact.payload.artifact` 必须是完整 `ArtifactEnvelope`；`task.question` 必须给出问题和允许的输入模态；`task.error` 必须使用统一错误码，不能携带堆栈、请求头或凭据。
 
 `FileRef` 的最小 JSON Schema：
 
@@ -456,21 +504,64 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
 }
 ```
 
-原始文件先通过 Gateway 文件暂存接口进入对象存储，再把 `FileRef` 放入 A2A 结构化 Data Part。MVP 不通过 A2A 传输原始二进制，也不允许 Agent 接收任意外部 URL 后自行下载。Gateway 只生成短期、限定对象的内部读取授权，授权值不进入 Artifact、日志或数据库正文。
+原始文件先通过 Gateway 文件暂存接口进入受控文件区，再把 `FileRef` 放入 A2A 结构化 Data Part。MVP 不通过 A2A 传输原始二进制，也不允许 Agent 接收任意外部 URL 后自行下载。Gateway 只生成短期、限定对象、限定 Agent 的内部读取授权，授权值不进入 Artifact、日志或数据库正文；部署确需跨容器共享时再把受控文件区替换为 S3/MinIO。
+
+`FileRef` 是不透明引用，不是授权证明。客户端提交的 `owner_scope`、`media_type` 和 `size_bytes` 只用于一致性检查，Gateway 必须根据当前用户身份在服务端文件记录中重新解析所有权、真实 MIME、大小、状态和有效期。伪造 scope、复用他人的 `file_id`、过期或已删除引用必须被拒绝。
 
 ### 10.3 三模块操作契约
 
 | `task_type` | Request `data` 最小字段 | Artifact 类型与最小字段 |
 |---|---|---|
 | `course_research` | `query`、`access_mode`、可选 `course_filters` | `course_report`：`candidates`、`summary`、`dimensions`、`evidence`、`data_scope`、`generated_at` |
-| `study.ingest` | `course_id`、`knowledge_space`、`file_refs`、`source_policy` | `ingestion_receipt`：`job_id`、`status`、`accepted_files` |
+| `study.ingest` | `course_id`、`knowledge_space`、`source_policy`；文件放在 `TaskRequest.inputs` | `ingestion_receipt`：`job_id`、`status`、`accepted_files` |
 | `study.ingestion_status` | `job_id` | `ingestion_receipt`：`job_id`、`status`、`progress`、`errors` |
 | `study.search` | `course_id`、`query`、`top_k` | `retrieval_result`：`chunks`、`citations`、`data_scope` |
 | `study.answer` | `course_id`、`question` | `study_answer`：`answer`、`citations`、`confidence` |
 | `study.delete` | `document_id` | `deletion_receipt`：`document_id`、`status`、`invalidated_at` |
 | `study.list_sources` | `course_id`、可选 `knowledge_space` | `source_list`：`sources`、`data_scope`、`generated_at` |
+| `campus.notice.lookup` | `query`、可选 `category`、可选 `date_range` | `campus_notice`：`items`、`sources`、`generated_at` |
 
 具体业务 Schema 由各 Agent 文档定义，Gateway 只校验版本化 envelope 和已注册 skill 的输入/输出 Schema 引用。
+
+`campus.notice.lookup` 是外部示例 Agent 的固定验收能力，只读取团队自制或明确公开的通知样例。它必须作为独立进程发布标准 Agent Card，至少用 10 条固定任务验证正常查询、无结果、追问、取消和不可达；接入时只增加 Agent Card/白名单配置和 Schema，不修改 Gateway 路由业务代码。
+
+外部 Agent Card 的 `skills` 至少包含：
+
+```json
+{
+  "id": "campus.notice.lookup",
+  "name": "Campus Notice Lookup",
+  "description": "Find public campus notices from an approved sample source",
+  "tags": ["campus", "notice", "public-data"]
+}
+```
+
+固定请求 `data` 示例：
+
+```json
+{
+  "query": "查找下周图书馆开放时间通知",
+  "category": "library",
+  "date_range": ["2026-07-20", "2026-07-27"]
+}
+```
+
+`campus_notice` Artifact 的 `data` 至少包含 `items[]`、`sources[]` 和 `generated_at`；每个 item 包含标题、日期、摘要和来源引用，不返回任意文件下载 URL。
+
+实施时将以下用例固化到 `tests/fixtures/external-agent/campus-notice-cases.json`；文档阶段先冻结语义：
+
+| # | 场景 | 输入摘要 | 预期状态/结果 |
+|---:|---|---|---|
+| 1 | 精确查询 | 图书馆开放时间 + 明确日期 | `completed`，至少 1 条带来源 item |
+| 2 | 类别过滤 | `category=library` | `completed`，结果类别全部匹配 |
+| 3 | 日期过滤 | 明确 `date_range` | `completed`，结果日期不越界 |
+| 4 | 信息不足 | “查下周通知”但当前日期上下文缺失 | `input_required`，补充后 `completed` |
+| 5 | 无结果 | 合法但不存在的通知 | `completed`，`items=[]`，不是幻觉结果 |
+| 6 | 不支持类别 | 超出 Agent Card 声明范围 | `rejected`，给出可解释原因 |
+| 7 | 取消 | working 期间请求取消 | `cancelled`，不产生最终业务 Artifact |
+| 8 | 非法载荷 | 缺少 `query` | Gateway 校验失败，不创建外部 task |
+| 9 | Agent 不可达 | 停止外部进程后提交 | 平台 `failed/agent_unreachable`，健康状态更新 |
+| 10 | SSE 中断 | 中途断开后轮询同一 task | `completed`，最终 Artifact 只生成一次 |
 
 ### 10.4 TaskRequest JSON Schema 草案
 
@@ -519,6 +610,17 @@ Gateway、两个 Demo Agent 和外部示例 Agent 共享四个版本化契约：
 }
 ```
 
+### 10.5 平台契约到 A2A 的映射
+
+- 前端向 Gateway REST API 提交 `TaskRequest`；它不是直接发给外部端点的自定义 A2A 请求。
+- A2A Adapter 创建标准 A2A Message：`message` 进入文本 Part，`schema_version`、`task_type`、`data` 和经过服务端验证的 `inputs` 进入结构化 Data Part。
+- `task_type` 必须匹配已批准 Agent Card 的 skill ID 或平台注册映射，但不添加 A2A 规范之外的顶层字段。
+- 外部 Agent 返回标准 A2A Task、Message 和 Artifact；业务结果放在 Artifact 的结构化 Data Part 中，并校验为 `ArtifactEnvelope`。
+- A2A wire `TaskState`、状态更新和 Artifact 更新由 Adapter 转换为平台 `TaskEvent`。`TaskEvent` 是 Gateway 对前端的统一事件契约，不冒充 A2A wire event。
+- 平台保存内部 `task_id` 与外部 A2A task/context ID 映射，取消、追问、轮询和 SSE 重连都通过该映射继续同一任务。
+
+因此，外部 Agent 仍然只需要实现标准 A2A endpoint；平台业务 Schema 作为 A2A Data Part 的内容协商，不形成第二套传输协议。
+
 ## 11. REST API 草案
 
 OpenAPI 3.1 文档由 FastAPI 自动生成后人工补充描述。核心接口：
@@ -543,6 +645,7 @@ OpenAPI 3.1 文档由 FastAPI 自动生成后人工补充描述。核心接口�
 POST /v1/tasks
 Content-Type: application/json
 Authorization: Bearer <platform-user-token>
+Idempotency-Key: <client-generated-unique-key>
 ```
 
 ```json
@@ -562,6 +665,8 @@ Authorization: Bearer <platform-user-token>
 }
 ```
 
+所有改变状态的 POST 接口都必须支持幂等：`/v1/tasks`、`/v1/files`、`/cancel` 和 `/messages` 接受 `Idempotency-Key`。同一用户、同一 key 和同一请求正文返回原结果；key 相同但正文不同返回冲突。取消请求还携带 `cancel_request_id`，重复取消返回当前终态；追问回答携带 `message_id`，同一消息只能映射到外部 task 一次。Gateway 在调用 A2A Agent 前持久化幂等记录，避免网络重试生成重复任务、消息或 Artifact。
+
 响应：
 
 ```json
@@ -578,6 +683,7 @@ Authorization: Bearer <platform-user-token>
 
 ```json
 {
+  "cancel_request_id": "cancel_01JZEXAMPLE",
   "reason": "user_cancelled_from_demo_ui"
 }
 ```
@@ -586,6 +692,7 @@ Authorization: Bearer <platform-user-token>
 
 ```json
 {
+  "message_id": "msg_01JZEXAMPLE",
   "message": "我想查东区到西区方向，今天下午的班次。",
   "content_type": "text/plain"
 }
@@ -602,12 +709,14 @@ Authorization: Bearer <platform-user-token>
 
 ### 12.2 MVP 策略
 
-- 平台 API 使用短期 Bearer token 或演示环境固定登录态；生产化前再接统一身份认证。
+- 平台 API 使用短期签名会话或 Bearer token；演示环境使用两个可重置的模拟账号，不在前端代码中硬编码共享管理员 token。
 - 外部 Agent 凭据按 `agent_id` 单独保存，使用环境变量、Secret Manager 或本机安全配置。
 - 日志、trace、事件表不得记录 Authorization header、API key、cookie 或原始密钥。
 - Gateway 不把平台用户 token 直接转发给第三方 Agent。
 - 每个外部 Agent 只能收到当前任务需要的最小上下文。
 - 管理接口与普通任务接口分离，MVP 可以通过内网访问限制加管理员 token 实现。
+- 外部 Agent 和 MCP HTTP token 必须绑定目标资源/受众，禁止 token passthrough；不同 Agent 不共享同一凭据。
+- 授权判断使用任务创建时的 `policy_version` 快照；权限撤销后，新事件和 Artifact 在持久化前再次校验，缓存同步失效。
 
 ### 12.3 凭据引用示例
 
@@ -635,6 +744,7 @@ Authorization: Bearer <platform-user-token>
 | `agent_error` | Agent 返回错误事件 | 记录错误摘要，任务置为 `failed` |
 | `timeout` | 超过平台限制 | 请求取消外部任务，任务置为 `timeout` |
 | `policy_denied` | 请求需要未授权数据 | 拒绝并记录审计事件 |
+| `unsafe_agent_output` | Artifact 类型、大小、Schema、URL 或渲染内容不安全 | 隔离输出并失败，不交给前端或下游 Agent |
 
 错误响应：
 
@@ -662,9 +772,9 @@ Authorization: Bearer <platform-user-token>
 1. 平台将任务置为 `cancel_requested`。
 2. Gateway 调用外部 Agent 的取消能力。
 3. 收到确认后置为 `cancelled`。
-4. SSE 发送 `task.cancelled` 事件。
+4. SSE 发送 `task.status` 事件，`payload.status` 为 `cancelled`。
 
-如果外部 Agent 不支持取消，平台记录 `cancel_not_supported`，并停止向前端推送后续增量。
+如果外部 Agent 不支持取消，平台记录 `cancel_not_supported`，并停止向前端推送后续增量。此后到达的事件只进入受限审计记录，不得恢复已取消任务、覆盖最终 Artifact 或触发下游副作用。
 
 ### 13.4 追问
 
@@ -705,7 +815,7 @@ OpenTelemetry 贯穿平台 API、路由、A2A 调用、MCP 工具调用和数据
 - `route.reason`
 - `error.code`
 
-不记录原始用户隐私数据和密钥。
+不记录原始用户隐私数据、模型提示词、点评/文件正文、受限下载 URL 和密钥。`local_authenticated`、`private` 任务只记录 ID、状态、计数、耗时和错误码；日志与事件按数据范围设置短保留期并执行抽样 DLP 扫描。
 
 ### 14.2 Metrics
 
@@ -755,31 +865,28 @@ examples/
 
 最小能力：
 
-- 生成 Agent Card 模板。
+- 生成标准 A2A 1.0 Agent Card 模板，不重新定义 Card 字段。
 - 校验 Agent Card 必填字段。
 - 封装平台示例任务请求。
 - 提供 FastAPI + A2A SDK 的最小 Agent 示例。
 - 提供 SSE 和非流式两种处理示例。
 
-SDK 伪代码：
+SDK 伪代码只接受标准 Agent Card 文件；`gateway_sdk` 是校验和启动薄封装，不提供 `agent_id`、`display_name`、`capabilities=[...]` 等替代 A2A Card 的自定义模型：
 
 ```python
-from gateway_sdk import AgentCard, run_minimal_agent
+from gateway_sdk import load_standard_agent_card, run_minimal_agent
 
-card = AgentCard(
-    agent_id="campus-service-example",
-    display_name="Campus Service Example Agent",
-    capabilities=["campus_service"],
-    supports_streaming=True,
-)
+card = load_standard_agent_card("agent-card.json")
 
 
 async def handle_task(message, context):
     return "这是一个演示回答，不包含真实密钥或敏感数据。"
 
 
-run_minimal_agent(card=card, handler=handle_task)
+run_minimal_agent(agent_card=card, handler=handle_task)
 ```
+
+`agent-card.json` 必须与 5.1 节的 A2A 1.0 结构一致。实施时示例代码直接使用锁定版本官方 SDK 的类型和服务器组件，并由兼容测试验证，避免文档伪代码成为第二套协议。
 
 ## 17. 测试与验收
 
@@ -791,6 +898,10 @@ run_minimal_agent(card=card, handler=handle_task)
 - 任务状态机合法流转。
 - 错误分类和用户可见错误格式。
 - 凭据字段脱敏。
+- Agent Card URL 的 SSRF、重定向、DNS rebinding 和 Card 变更复审。
+- FileRef 伪造、跨用户复用、过期和删除后的拒绝。
+- `Idempotency-Key` 重放和冲突。
+- 不可信 Artifact、脚本 Markdown、超大/乱序事件和提示注入隔离。
 
 ### 17.2 集成测试
 
@@ -814,6 +925,8 @@ run_minimal_agent(card=card, handler=handle_task)
 - 三个独立 Agent 各执行 20 条固定脚本任务，端到端完成率不低于 90%。
 - A2A 版本协商、状态映射、权限拒绝和凭据脱敏自动化测试通过率为 100%。
 - SSE 断开重连测试 10 次均能通过同一 `task_id` 恢复，且不重复生成最终 Artifact。
+- 外部 `campus.notice.lookup` Agent 用 10 条固定任务完成接入，Gateway 业务代码改动为 0。
+- SSRF、FileRef 越权、恶意 Artifact、提示注入和任务重放安全用例 100% 通过。
 
 ## 18. MVP 与后续边界
 
@@ -826,8 +939,13 @@ run_minimal_agent(card=card, handler=handle_task)
 - SSE 与轮询。
 - 内部 Demo Agent 使用 MCP 连接工具或数据。
 - PostgreSQL 持久化任务与事件。
-- Redis 支撑 SSE 事件分发和短期状态缓存。
-- OpenTelemetry 基础 trace、metric、log。
+- 结构化 JSON 日志和 correlation ID 串联调用链。
+
+条件采用：
+
+- Redis：仅在 PostgreSQL 事件表和单进程通知无法满足 SSE/缓存时加入；
+- OpenTelemetry Collector：仅在基础调用链稳定后加入，instrumentation 接口可以预留；
+- S3/MinIO：仅在部署需要跨容器文件共享时替换受控本地文件区。
 
 ### 18.2 后续
 
@@ -837,6 +955,7 @@ run_minimal_agent(card=card, handler=handle_task)
 - 面向真实校园系统的身份认证集成。
 - Agent Card 版本管理和兼容性测试。
 - 更完整的前端管理台。
+- 完整 OpenTelemetry 后端、Redis 横向扩展和对象存储部署。
 
 不进入 MVP 的事项：
 
