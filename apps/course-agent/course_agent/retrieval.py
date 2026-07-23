@@ -30,13 +30,22 @@ class SearchResult:
         }
 
 
-def accessible_space_ids(conn: sqlite3.Connection, user_id: str) -> set[str]:
+def accessible_document_ids(
+    conn: sqlite3.Connection,
+    user_id: str,
+    document_ids: list[str],
+) -> set[str]:
+    if not document_ids:
+        return set()
+    placeholders = ",".join("?" for _ in document_ids)
     rows = conn.execute(
-        """SELECT s.id FROM spaces s
-           JOIN memberships m ON m.space_id = s.id
-           WHERE m.user_id = ? AND m.status = 'active'""",
-        (user_id,),
-    )
+        f"""SELECT d.id FROM documents d
+            JOIN memberships m ON m.space_id = d.space_id
+              AND m.user_id = ? AND m.status = 'active'
+            JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+            WHERE d.status = 'active' AND d.id IN ({placeholders})""",
+        [user_id, *document_ids],
+    ).fetchall()
     return {str(row["id"]) for row in rows}
 
 
@@ -44,21 +53,18 @@ def search(
     conn: sqlite3.Connection,
     user_id: str,
     question: str,
-    requested_space_ids: list[str] | None = None,
+    document_ids: list[str],
     top_k: int = 5,
 ) -> list[SearchResult]:
     query = fts_query(question)
     if not query:
         return []
-    allowed = accessible_space_ids(conn, user_id)
-    if requested_space_ids is not None:
-        if not set(requested_space_ids).issubset(allowed):
-            return []
-        allowed = set(requested_space_ids)
-    if not allowed:
+    if not document_ids:
         return []
-    placeholders = ",".join("?" for _ in allowed)
-    params: list[object] = [query, user_id, *sorted(allowed), max(1, min(top_k * 4, 32))]
+    allowed_documents = accessible_document_ids(conn, user_id, document_ids)
+    if not set(document_ids).issubset(allowed_documents):
+        return []
+    placeholders = ",".join("?" for _ in document_ids)
     rows = conn.execute(
         f"""SELECT c.id AS chunk_id, d.id AS document_id, d.title AS document_title,
                    c.page_number, c.content, d.space_id, bm25(chunk_fts) AS rank
@@ -68,10 +74,10 @@ def search(
             JOIN documents d ON d.id = r.document_id AND d.status = 'active'
             JOIN memberships m ON m.space_id = d.space_id
               AND m.user_id = ? AND m.status = 'active'
-            WHERE chunk_fts MATCH ? AND d.space_id IN ({placeholders})
+            WHERE chunk_fts MATCH ? AND d.id IN ({placeholders})
             ORDER BY rank ASC
             LIMIT ?""",
-        [user_id, query, *sorted(allowed), max(1, min(top_k * 4, 32))],
+        [user_id, query, *document_ids, max(1, min(top_k * 4, 32))],
     ).fetchall()
     results: list[SearchResult] = []
     seen: set[tuple[str, int]] = set()
@@ -95,4 +101,3 @@ def search(
         if len(results) >= top_k:
             break
     return results
-

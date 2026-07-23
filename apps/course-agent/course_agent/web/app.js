@@ -1,5 +1,21 @@
-const state = { user: null, users: [], spaces: [], space: null, documents: [], documentTotal: 0 };
+const state = {
+  user: null,
+  users: [],
+  spaces: [],
+  space: null,
+  documents: [],
+  documentTotal: 0,
+  selectedDocumentIds: new Set(),
+  isQuerying: false,
+  queryRequestId: 0,
+};
 const $ = (selector) => document.querySelector(selector);
+
+const SOURCE_GROUPS = [
+  { id: 'daily', title: '日常学习', keywords: ['教材', '讲义', '笔记', '提纲', '教辅'] },
+  { id: 'exam', title: '备考刷题', keywords: ['真题', '试卷', '答案', '解析'] },
+  { id: 'other', title: '其他资料', keywords: [] },
+];
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"]/g, character => ({
@@ -132,6 +148,66 @@ function notice(message, error = false) {
   notice.timer = window.setTimeout(() => element.classList.add('hidden'), 5000);
 }
 
+function currentQueryMode() {
+  return document.querySelector('input[name="query-mode"]:checked')?.value || 'direct';
+}
+
+function documentText(doc) {
+  return `${doc.material_type || ''} ${doc.title || ''}`.toLowerCase();
+}
+
+function documentMatches(doc, keywords) {
+  const text = documentText(doc);
+  return keywords.some(keyword => text.includes(keyword.toLowerCase()));
+}
+
+function groupForDocument(doc) {
+  return SOURCE_GROUPS.find(group => group.keywords.length && documentMatches(doc, group.keywords)) || SOURCE_GROUPS[SOURCE_GROUPS.length - 1];
+}
+
+function documentPageLabel(doc) {
+  const pages = Number(doc.page_count || 0);
+  return pages > 0 ? `${pages} 页` : '页数待解析';
+}
+
+function clearDocumentSelection() {
+  state.selectedDocumentIds.clear();
+}
+
+function pruneDocumentSelection() {
+  const available = new Set(state.documents.map(doc => doc.id));
+  state.selectedDocumentIds = new Set([...state.selectedDocumentIds].filter(id => available.has(id)));
+}
+
+function selectedDocumentCountLabel() {
+  return `已选 ${state.selectedDocumentIds.size} / ${state.documents.length} 份`;
+}
+
+function clearAnswer() {
+  state.queryRequestId += 1;
+  state.isQuerying = false;
+  $('#answer-card').classList.add('hidden');
+  $('#answer-mode').textContent = '';
+  $('#answer-text').replaceChildren();
+  $('#citation-list').replaceChildren();
+}
+
+function updateQueryModeUI() {
+  const mode = currentQueryMode();
+  const retrievalMode = mode === 'retrieval';
+  $('#source-selector').classList.toggle('hidden', !retrievalMode);
+  const submit = $('#query-submit');
+  submit.disabled = state.isQuerying;
+  if (state.isQuerying) {
+    submit.textContent = retrievalMode ? '检索中…' : '回答中…';
+    return;
+  }
+  submit.textContent = retrievalMode ? '使用资料回答' : '直接回答';
+  $('#query-status').textContent = retrievalMode
+    ? (state.selectedDocumentIds.size ? `将检索 ${state.selectedDocumentIds.size} 份已选资料` : '请选择至少一份资料再检索')
+    : '直接回答不会检索课程资料';
+}
+
 function renderUsers() {
   $('#user-list').innerHTML = state.users.map(user => `
     <button class="identity-button ${state.user?.id === user.id ? 'active' : ''}" data-user="${user.id}">
@@ -169,6 +245,57 @@ function renderDocuments() {
   document.querySelectorAll('[data-reparse]').forEach(button => button.addEventListener('click', () => reparse(button.dataset.reparse)));
 }
 
+function renderSourceSelector() {
+  $('#source-count').textContent = selectedDocumentCountLabel();
+  const grouped = SOURCE_GROUPS.map(group => ({
+    ...group,
+    documents: state.documents.filter(doc => groupForDocument(doc).id === group.id),
+  })).filter(group => group.documents.length);
+
+  $('#source-list').innerHTML = grouped.length ? grouped.map(group => `
+    <section class="source-group">
+      <div class="source-group-title">${escapeHtml(group.title)}</div>
+      <div class="source-group-list">
+        ${group.documents.map(doc => `
+          <label class="source-checkbox">
+            <input type="checkbox" value="${escapeHtml(doc.id)}" ${state.selectedDocumentIds.has(doc.id) ? 'checked' : ''}>
+            <span class="source-copy">
+              <span class="source-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</span>
+              <span class="source-meta">${escapeHtml(doc.material_type)} · ${documentPageLabel(doc)}</span>
+            </span>
+          </label>
+        `).join('')}
+      </div>
+    </section>
+  `).join('') : '<div class="empty-list">当前空间还没有可选资料</div>';
+
+  document.querySelectorAll('#source-list input[type="checkbox"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) state.selectedDocumentIds.add(input.value);
+      else state.selectedDocumentIds.delete(input.value);
+      clearAnswer();
+      $('#source-count').textContent = selectedDocumentCountLabel();
+      updateQueryModeUI();
+    });
+  });
+}
+
+function selectDocumentsByAction(action) {
+  clearAnswer();
+  if (action === 'clear') {
+    clearDocumentSelection();
+  } else if (action === 'all') {
+    state.selectedDocumentIds = new Set(state.documents.map(doc => doc.id));
+  } else {
+    const group = SOURCE_GROUPS.find(item => item.id === action);
+    state.selectedDocumentIds = new Set(
+      state.documents.filter(doc => group && documentMatches(doc, group.keywords)).map(doc => doc.id)
+    );
+  }
+  renderSourceSelector();
+  updateQueryModeUI();
+}
+
 async function loadHealth() {
   try {
     const health = await api('/api/health');
@@ -189,9 +316,11 @@ async function loadBase() {
 }
 
 async function login(userId) {
+  clearAnswer();
   try {
     const result = await api('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }) });
     state.user = result.user;
+    clearDocumentSelection();
     await loadSpaces();
     renderUsers();
     updateView();
@@ -199,20 +328,26 @@ async function login(userId) {
 }
 
 async function logout() {
+  clearAnswer();
   await api('/api/session', { method: 'DELETE' });
   state.user = null; state.spaces = []; state.space = null; state.documents = []; state.documentTotal = 0;
-  renderUsers(); updateView();
+  clearDocumentSelection();
+  renderUsers(); updateView(); updateQueryModeUI();
 }
 
 async function loadSpaces() {
   const result = await api('/api/spaces');
   state.spaces = result.items;
-  state.space = state.spaces.find(item => item.id === state.space?.id) || state.spaces.find(item => item.id === 'math-b1-shared') || state.spaces[0];
+  const previousSpaceId = state.space?.id;
+  state.space = state.spaces.find(item => item.id === previousSpaceId) || state.spaces.find(item => item.id === 'math-b1-shared') || state.spaces[0];
+  if (state.space?.id !== previousSpaceId) clearDocumentSelection();
   renderSpaces();
   if (state.space) await loadDocuments();
 }
 
 async function selectSpace(spaceId) {
+  clearAnswer();
+  if (state.space?.id !== spaceId) clearDocumentSelection();
   state.space = state.spaces.find(item => item.id === spaceId);
   renderSpaces();
   await loadDocuments();
@@ -220,12 +355,16 @@ async function selectSpace(spaceId) {
 
 async function loadDocuments() {
   if (!state.space) return;
+  clearAnswer();
   const result = await api(`/api/spaces/${encodeURIComponent(state.space.id)}/documents?page_size=100`);
   state.documents = result.items;
   state.documentTotal = result.total;
   $('#space-title').textContent = state.space.name;
   $('#space-role').textContent = `当前角色：${state.space.role}`;
+  pruneDocumentSelection();
   renderDocuments();
+  renderSourceSelector();
+  updateQueryModeUI();
 }
 
 async function removeDocument(documentId) {
@@ -244,25 +383,63 @@ async function upload(file) {
   try { await api(`/api/spaces/${encodeURIComponent(state.space.id)}/documents`, { method: 'POST', body: form }); notice('资料已导入'); await loadSpaces(); } catch (error) { notice(error.message, true); }
 }
 
-function renderAnswer(result) {
+function renderAnswer(result, mode) {
   $('#answer-card').classList.remove('hidden');
-  $('#answer-mode').textContent = result.degraded ? '检索降级' : '模型回答';
+  $('#answer-mode').textContent = result.degraded
+    ? (mode === 'direct' ? '模型不可用' : '检索降级')
+    : (mode === 'direct' ? '直接回答' : '资料回答');
   $('#answer-mode').className = `status-pill ${result.degraded ? 'warn' : 'ok'}`;
   const answerElement = $('#answer-text');
   answerElement.innerHTML = renderMarkdown(result.answer);
   renderMath(answerElement);
-  $('#citation-list').innerHTML = result.citations.length ? result.citations.map(source => `<div class="citation-item"><strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong><div class="citation-excerpt">${escapeHtml(source.excerpt)}</div></div>`).join('') : '<div class="empty-list">本次回答没有可验证引用</div>';
+  const citationSection = $('#citation-section');
+  const citations = result.citations || [];
+  citationSection.classList.toggle('hidden', mode === 'direct');
+  $('#citation-list').innerHTML = citations.length ? citations.map(source => `<div class="citation-item"><strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong><div class="citation-excerpt">${escapeHtml(source.excerpt)}</div></div>`).join('') : '<div class="empty-list">本次回答没有可验证引用</div>';
 }
 
 async function query(event) {
   event.preventDefault();
+  if (state.isQuerying) return;
   const question = $('#question').value.trim();
-  if (!question) return;
-  $('#query-status').textContent = '检索与生成中…';
+  if (!question) {
+    $('#query-status').textContent = '请先输入问题';
+    return;
+  }
+  const mode = currentQueryMode();
+  const selectedDocumentIds = [...state.selectedDocumentIds];
+  if (mode === 'retrieval' && selectedDocumentIds.length === 0) {
+    $('#query-status').textContent = '资料模式需要至少选择一份资料';
+    notice('请选择至少一份课程资料后再提交', true);
+    return;
+  }
+  const requestId = ++state.queryRequestId;
+  const userId = state.user?.id;
+  const spaceId = state.space?.id;
+  state.isQuerying = true;
+  updateQueryModeUI();
+  let finalStatus = null;
+  $('#query-status').textContent = mode === 'retrieval' ? '资料检索与生成中…' : '直接回答生成中…';
   try {
-    const result = await api('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, space_ids: [state.space.id], top_k: 5 }) });
-    renderAnswer(result); $('#query-status').textContent = result.degraded ? '已返回检索降级结果' : '回答完成';
-  } catch (error) { $('#query-status').textContent = '请求失败'; notice(error.message, true); }
+    const payload = mode === 'direct'
+      ? { question, mode: 'direct' }
+      : { question, mode: 'retrieval', document_ids: selectedDocumentIds, top_k: 5 };
+    const result = await api('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (requestId !== state.queryRequestId || userId !== state.user?.id || spaceId !== state.space?.id || mode !== currentQueryMode()) return;
+    renderAnswer(result, mode);
+    finalStatus = result.degraded
+      ? (mode === 'direct' ? '模型暂时不可用' : '已返回检索降级结果')
+      : (mode === 'retrieval' ? `已使用 ${selectedDocumentIds.length} 份资料回答` : '直接回答完成');
+  } catch (error) {
+    if (requestId !== state.queryRequestId) return;
+    finalStatus = '请求失败';
+    notice(error.message, true);
+  } finally {
+    if (requestId !== state.queryRequestId) return;
+    state.isQuerying = false;
+    updateQueryModeUI();
+    if (finalStatus) $('#query-status').textContent = finalStatus;
+  }
 }
 
 function updateView() {
@@ -272,8 +449,17 @@ function updateView() {
 }
 
 $('#query-form').addEventListener('submit', query);
+document.querySelectorAll('input[name="query-mode"]').forEach(input => input.addEventListener('change', () => {
+  clearAnswer();
+  updateQueryModeUI();
+}));
+document.querySelectorAll('[data-source-action]').forEach(button => {
+  button.addEventListener('click', () => selectDocumentsByAction(button.dataset.sourceAction));
+});
 $('#upload-input').addEventListener('change', event => { const file = event.target.files[0]; if (file) upload(file); event.target.value = ''; });
 $('#refresh-button').addEventListener('click', () => loadSpaces().catch(error => notice(error.message, true)));
 $('#logout-button').addEventListener('click', logout);
+renderSourceSelector();
+updateQueryModeUI();
 loadHealth();
 loadBase().catch(error => notice(error.message, true));

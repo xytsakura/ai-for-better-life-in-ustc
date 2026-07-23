@@ -260,7 +260,7 @@ Responses 兼容请求使用：
 | POST | `/api/spaces/{id}/documents` | 上传单份 PDF |
 | DELETE | `/api/documents/{id}` | 删除文档和关联索引 |
 | POST | `/api/documents/{id}/reparse` | 重新解析 |
-| POST | `/api/query` | 检索并生成带引用回答 |
+| POST | `/api/query` | 模型直接回答，或在用户所选资料中检索并生成带引用回答 |
 | GET | `/api/documents/{id}/pages/{page}` | 获取有权限的页级文本 |
 
 第一版返回普通 JSON。平台级 SSE 和 `platform-chat-v1` 在插件平台阶段实现，课程 Agent 内部不提前复制一套未验证的流式协议。
@@ -287,7 +287,8 @@ Responses 兼容请求使用：
 - `POST /api/spaces/{id}/documents`：`multipart/form-data`，必填 `file`、`title`、`material_type`、`license_status`，可选 `semester`、`source_url`；第一版单文件上限 50 MiB。
 - `DELETE /api/documents/{id}`：成功返回 `204`，重复删除返回 `404`。
 - `POST /api/documents/{id}/reparse`：成功返回最新 revision 和解析状态。
-- `POST /api/query`：JSON `{ "question": "...", "space_ids": ["..."], "top_k": 5 }`；`top_k` 范围 1--8，所选空间必须全部可访问。
+- `POST /api/query` 直接问答：JSON `{ "question": "...", "mode": "direct" }`；`mode` 缺省时也按 `direct` 处理，不访问课程索引。
+- `POST /api/query` 资料问答：JSON `{ "question": "...", "mode": "retrieval", "document_ids": ["..."], "top_k": 5 }`；`top_k` 范围 1--8，`document_ids` 必须非空且每份文档都必须为当前用户可访问的有效版本。
 - `GET /api/documents/{id}/pages/{page}`：页码从 1 开始，返回文档标题、页码、页状态和可展示文本；越界或已删除返回 `404`。
 
 `POST /api/query` 成功响应：
@@ -295,6 +296,7 @@ Responses 兼容请求使用：
 ```json
 {
   "answer": "根据复习提纲……[S1]",
+  "mode": "retrieval",
   "degraded": false,
   "model": "gpt-5.6-sol",
   "retrieval_count": 5,
@@ -311,7 +313,7 @@ Responses 兼容请求使用：
 }
 ```
 
-`space_ids` 为空时默认检索当前用户全部可访问空间。响应不得返回其他用户的空间 ID、文档存在性或原文。
+资料检索范围只能来自请求中的 `document_ids`，空选择不得默认扩大到知识空间。服务端在检索前重新鉴权；响应不得返回其他用户的空间 ID、文档存在性或原文。直接回答固定返回 `mode: "direct"`、`retrieval_count: 0` 和空 `citations`。
 
 ## 9. Web 界面
 
@@ -320,7 +322,7 @@ Responses 兼容请求使用：
 1. 演示身份选择：用户 A、用户 B，明确标记为本地演示身份；
 2. 知识空间：展示个人空间、数学分析 B1 邀请制学习小组和成员；
 3. 资料管理：上传、解析状态、页数、来源、许可、删除和重新解析；
-4. 复习问答：问题输入、检索/生成状态、答案、文件名、页码和引用片段。
+4. 复习问答：默认直接问答；切换资料模式后展示分类来源列表、学习/备考快捷选择和逐份复选框；资料回答展示文件名、页码和引用片段。
 
 页面不建设营销首页、复杂仪表盘或 Agent 广场。重点是让评委在一条流程中看清数据来源、权限边界和回答依据。
 

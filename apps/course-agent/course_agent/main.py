@@ -5,13 +5,13 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.sessions import SessionMiddleware
 
 from .config import Settings
@@ -26,7 +26,7 @@ from .ingestion import (
     reparse_document,
 )
 from .llm import LLMAdapter
-from .retrieval import SearchResult, accessible_space_ids, search
+from .retrieval import accessible_document_ids, search
 
 
 class SessionRequest(BaseModel):
@@ -34,13 +34,32 @@ class SessionRequest(BaseModel):
 
 
 class QueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(min_length=1, max_length=2000)
-    space_ids: list[str] = Field(default_factory=list)
+    mode: Literal["direct", "retrieval"] = "direct"
+    document_ids: list[str] = Field(default_factory=list, max_length=100)
     top_k: int = Field(default=5, ge=1, le=8)
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict:
     return {"error": {"code": code, "message": message, "retryable": retryable}}
+
+
+def _clean_document_ids(document_ids: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for document_id in document_ids:
+        normalized = document_id.strip()
+        if not normalized:
+            raise HTTPException(
+                status_code=422,
+                detail=_error("invalid_document_selection", "document_ids 不能包含空字符串"),
+            )
+        if normalized not in seen:
+            seen.add(normalized)
+            cleaned.append(normalized)
+    return cleaned
 
 
 def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None = None) -> FastAPI:
@@ -279,18 +298,39 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/query")
     def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
+        if payload.mode == "direct":
+            llm_result = app.state.llm.generate_direct(payload.question)
+            return {
+                "answer": llm_result.answer,
+                "mode": "direct",
+                "degraded": llm_result.degraded,
+                "model": llm_result.model,
+                "retrieval_count": 0,
+                "citations": [],
+                "model_error": {"code": llm_result.error_code} if llm_result.error_code else None,
+            }
+
+        document_ids = _clean_document_ids(payload.document_ids)
+        if not document_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=_error("missing_document_ids", "retrieval 模式必须选择至少一个文档"),
+            )
         with get_db() as conn:
-            allowed = accessible_space_ids(conn, user_id)
-            requested = payload.space_ids or sorted(allowed)
-            if not set(requested).issubset(allowed):
-                raise HTTPException(status_code=404, detail=_error("space_not_found", "知识空间不存在或当前用户不可访问"))
-            results = search(conn, user_id, payload.question, requested, payload.top_k)
+            allowed_documents = accessible_document_ids(conn, user_id, document_ids)
+            if set(document_ids) != allowed_documents:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error("document_not_found", "资料不存在、已删除或当前用户不可访问"),
+                )
+            results = search(conn, user_id, payload.question, document_ids, payload.top_k)
         llm_result = app.state.llm.generate(payload.question, results)
         source_map = {item.citation_id: item.as_dict() for item in results}
         citation_ids = llm_result.citation_ids or ([] if not llm_result.degraded else list(source_map))
         citations = [source_map[item] for item in citation_ids if item in source_map]
         return {
             "answer": llm_result.answer,
+            "mode": "retrieval",
             "degraded": llm_result.degraded,
             "model": llm_result.model,
             "retrieval_count": len(results),
@@ -306,4 +346,3 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
 
 app = create_app()
-

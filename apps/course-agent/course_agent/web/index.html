@@ -76,21 +76,45 @@
                 <p class="eyebrow">Review Desk</p>
                 <h3>复习问答</h3>
               </div>
-              <span class="mode-tag">带来源回答</span>
+              <div class="segment-control" role="radiogroup" aria-label="问答模式">
+                <label class="segment-option">
+                  <input type="radio" name="query-mode" value="direct" checked>
+                  <span>直接问答</span>
+                </label>
+                <label class="segment-option">
+                  <input type="radio" name="query-mode" value="retrieval">
+                  <span>使用课程资料</span>
+                </label>
+              </div>
             </div>
             <form id="query-form" class="query-form">
               <label for="question">问题</label>
               <textarea id="question" rows="5" maxlength="2000" placeholder="例如：一致连续和一致收敛有什么区别？"></textarea>
+              <section id="source-selector" class="source-selector hidden" aria-label="资料来源选择">
+                <div class="source-selector-header">
+                  <span>资料来源</span>
+                  <span id="source-count" class="muted">已选 0 份</span>
+                </div>
+                <div class="source-actions" aria-label="快捷选择">
+                  <button class="chip-button" type="button" data-source-action="daily">日常学习</button>
+                  <button class="chip-button" type="button" data-source-action="exam">备考刷题</button>
+                  <button class="chip-button" type="button" data-source-action="all">全部资料</button>
+                  <button class="chip-button chip-button-quiet" type="button" data-source-action="clear">清空选择</button>
+                </div>
+                <div id="source-list" class="source-list"></div>
+              </section>
               <div class="query-footer">
-                <span id="query-status" class="muted">答案会附带文件和页码</span>
-                <button class="button button-primary" type="submit">开始检索</button>
+                <span id="query-status" class="muted">直接回答不会检索课程资料</span>
+                <button id="query-submit" class="button button-primary" type="submit">直接回答</button>
               </div>
             </form>
             <article id="answer-card" class="answer-card hidden">
               <div class="answer-heading"><span>回答</span><span id="answer-mode" class="status-pill"></span></div>
               <div id="answer-text" class="answer-text"></div>
-              <div class="citation-heading">引用来源</div>
-              <div id="citation-list" class="citation-list"></div>
+              <div id="citation-section" class="citation-section">
+                <div class="citation-heading">引用来源</div>
+                <div id="citation-list" class="citation-list"></div>
+              </div>
             </article>
           </section>
         </div>

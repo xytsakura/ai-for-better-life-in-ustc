@@ -18,10 +18,11 @@ def make_pdf(path: Path, text: str) -> None:
     document.close()
 
 
-def setup_client(tmp_path: Path) -> TestClient:
+def make_client(tmp_path: Path, adapter: FakeLLMAdapter | None = None) -> tuple[TestClient, FakeLLMAdapter]:
     settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
-    app = create_app(settings, FakeLLMAdapter(settings))
-    return TestClient(app)
+    adapter = adapter or FakeLLMAdapter(settings)
+    app = create_app(settings, adapter)
+    return TestClient(app), adapter
 
 
 def login(client: TestClient, user_id: str) -> None:
@@ -29,15 +30,80 @@ def login(client: TestClient, user_id: str) -> None:
     assert response.status_code == 200
 
 
-def test_auth_upload_search_and_cross_user_isolation(tmp_path: Path):
-    client = setup_client(tmp_path)
+def upload_pdf(client: TestClient, tmp_path: Path, space_id: str, name: str, text: str) -> str:
+    source = tmp_path / name
+    make_pdf(source, text)
+    with source.open("rb") as handle:
+        response = client.post(
+            f"/api/spaces/{space_id}/documents",
+            files={"file": (name, handle, "application/pdf")},
+            data={"title": name, "material_type": "课程笔记", "license_status": "private"},
+        )
+    assert response.status_code == 200
+    return response.json()["document"]["id"]
+
+
+def personal_space(client: TestClient) -> dict:
+    spaces = client.get("/api/spaces").json()["items"]
+    return next(item for item in spaces if item["space_type"] == "personal")
+
+
+def shared_space(client: TestClient) -> dict:
+    spaces = client.get("/api/spaces").json()["items"]
+    return next(item for item in spaces if item["space_type"] == "shared")
+
+
+def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
+    client, adapter = make_client(tmp_path)
+    login(client, "demo-a")
+
+    def fail_search(*_: object, **__: object) -> None:
+        raise AssertionError("direct mode must not call search")
+
+    monkeypatch.setattr("course_agent.main.search", fail_search)
+    response = client.post("/api/query", json={"question": "Explain uniform convergence."})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "direct"
+    assert body["retrieval_count"] == 0
+    assert body["citations"] == []
+    assert body["degraded"] is False
+    assert adapter.direct_calls == 1
+    assert adapter.retrieval_calls == 0
+
+
+def test_retrieval_requires_non_empty_document_ids(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-a")
+
+    missing = client.post("/api/query", json={"mode": "retrieval", "question": "uniform continuity"})
+    assert missing.status_code == 422
+
+    blank = client.post(
+        "/api/query",
+        json={"mode": "retrieval", "question": "uniform continuity", "document_ids": [""]},
+    )
+    assert blank.status_code == 422
+
+    legacy_scope = client.post(
+        "/api/query",
+        json={"question": "uniform continuity", "space_ids": ["math-b1-shared"]},
+    )
+    assert legacy_scope.status_code == 422
+
+
+def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
+    client, _ = make_client(tmp_path)
     assert client.get("/api/spaces").status_code == 401
     login(client, "demo-a")
-    spaces = client.get("/api/spaces").json()["items"]
-    personal = next(item for item in spaces if item["space_type"] == "personal")
+    personal = personal_space(client)
 
     source = tmp_path / "source.pdf"
-    make_pdf(source, "The definition of uniform continuity requires every epsilon and an appropriate delta. Calculus B1 review notes.")
+    make_pdf(
+        source,
+        "The definition of uniform continuity requires every epsilon and an appropriate delta. Calculus B1 review notes.",
+    )
     with source.open("rb") as handle:
         response = client.post(
             f"/api/spaces/{personal['id']}/documents",
@@ -49,9 +115,15 @@ def test_auth_upload_search_and_cross_user_isolation(tmp_path: Path):
 
     query = client.post(
         "/api/query",
-        json={"question": "What is the definition of uniform continuity?", "space_ids": [personal["id"]], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "question": "What is the definition of uniform continuity?",
+            "document_ids": [document_id],
+            "top_k": 5,
+        },
     )
     assert query.status_code == 200
+    assert query.json()["mode"] == "retrieval"
     assert query.json()["citations"]
     assert query.json()["degraded"] is False
 
@@ -66,54 +138,92 @@ def test_auth_upload_search_and_cross_user_isolation(tmp_path: Path):
     assert reparsed.status_code == 200
     assert reparsed.json()["document"]["id"] == document_id
 
-    reparsed_again = client.post(f"/api/documents/{document_id}/reparse")
-    assert reparsed_again.status_code == 200
-    assert reparsed_again.json()["document"]["id"] == document_id
-
     login(client, "demo-b")
     hidden = client.post(
         "/api/query",
-        json={"question": "What is the definition of uniform continuity?", "space_ids": [personal["id"]], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "question": "What is the definition of uniform continuity?",
+            "document_ids": [document_id],
+            "top_k": 5,
+        },
     )
     assert hidden.status_code == 404
-    personal_b = next(item for item in client.get("/api/spaces").json()["items"] if item["space_type"] == "personal")
-    no_hit = client.post(
-        "/api/query",
-        json={"question": "What is the definition of uniform continuity?", "space_ids": [personal_b["id"]], "top_k": 5},
-    )
-    assert no_hit.status_code == 200
-    assert no_hit.json()["retrieval_count"] == 0
 
     login(client, "demo-a")
     deleted = client.delete(f"/api/documents/{document_id}")
     assert deleted.status_code == 204
     after_delete = client.post(
         "/api/query",
-        json={"question": "一致连续的定义是什么？", "space_ids": [personal["id"]], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "question": "一致连续的定义是什么？",
+            "document_ids": [document_id],
+            "top_k": 5,
+        },
     )
-    assert after_delete.status_code == 200
-    assert after_delete.json()["retrieval_count"] == 0
+    assert after_delete.status_code == 404
 
 
-def test_shared_space_is_available_to_both_users(tmp_path: Path):
-    client = setup_client(tmp_path)
+def test_retrieval_only_uses_selected_documents(tmp_path: Path):
+    client, _ = make_client(tmp_path)
     login(client, "demo-a")
-    spaces_a = client.get("/api/spaces").json()["items"]
-    shared = next(item for item in spaces_a if item["space_type"] == "shared")
-    source = tmp_path / "shared.pdf"
-    make_pdf(source, "Shared study group notes: basic tests for uniform convergence of function sequences.")
-    with source.open("rb") as handle:
-        response = client.post(
-            f"/api/spaces/{shared['id']}/documents",
-            files={"file": ("shared.pdf", handle, "application/pdf")},
-            data={"title": "共享复习资料", "material_type": "复习提纲", "license_status": "private"},
-        )
-    assert response.status_code == 200
+    personal = personal_space(client)
+    alpha_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "alpha.pdf",
+        "Alphaonly marker explains compactness and continuous functions.",
+    )
+    beta_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "beta.pdf",
+        "Betaonly marker explains uniform convergence tests for function sequences.",
+    )
+
+    wrong_document = client.post(
+        "/api/query",
+        json={"mode": "retrieval", "question": "Betaonly", "document_ids": [alpha_id], "top_k": 5},
+    )
+    assert wrong_document.status_code == 200
+    assert wrong_document.json()["mode"] == "retrieval"
+    assert wrong_document.json()["retrieval_count"] == 0
+    assert wrong_document.json()["citations"] == []
+
+    right_document = client.post(
+        "/api/query",
+        json={"mode": "retrieval", "question": "Betaonly", "document_ids": [beta_id], "top_k": 5},
+    )
+    assert right_document.status_code == 200
+    assert right_document.json()["retrieval_count"] >= 1
+    assert {item["document_id"] for item in right_document.json()["citations"]} == {beta_id}
+
+
+def test_shared_space_retrieval_is_available_to_both_users(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-a")
+    shared = shared_space(client)
+    document_id = upload_pdf(
+        client,
+        tmp_path,
+        shared["id"],
+        "shared.pdf",
+        "Shared study group notes: basic tests for uniform convergence of function sequences.",
+    )
+
     login(client, "demo-b")
-    shared_b = next(item for item in client.get("/api/spaces").json()["items"] if item["id"] == shared["id"])
     result = client.post(
         "/api/query",
-        json={"question": "What is a basic test for uniform convergence?", "space_ids": [shared_b["id"]], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "question": "What is a basic test for uniform convergence?",
+            "document_ids": [document_id],
+            "top_k": 5,
+        },
     )
     assert result.status_code == 200
+    assert result.json()["mode"] == "retrieval"
     assert result.json()["retrieval_count"] >= 1

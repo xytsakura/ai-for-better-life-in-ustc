@@ -22,6 +22,29 @@ class LLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def generate_direct(self, question: str) -> LLMResult:
+        instructions = (
+            "你是中国科学技术大学数学分析 B1 助教。可以直接回答一般数学分析学习问题，"
+            "但不要假装引用课程资料。若需要数学公式，行内公式必须使用 \\(...\\)，"
+            "单独成行的重要公式必须使用 \\[...\\]，不要使用美元符号包裹公式。"
+            "如果问题缺少必要条件，请先指出限制，再给出清晰解释。"
+        )
+        payload = {
+            "model": self.settings.llm_model,
+            "instructions": instructions,
+            "input": f"用户问题：\n{question}",
+            "max_output_tokens": 1200,
+        }
+        text, error_code = self._response_text(payload)
+        if error_code:
+            return self._direct_degraded(error_code)
+        return LLMResult(
+            answer=text or "",
+            citation_ids=[],
+            degraded=False,
+            model=self.settings.llm_model,
+        )
+
     def generate(self, question: str, sources: list[SearchResult]) -> LLMResult:
         if not sources:
             return LLMResult(
@@ -30,8 +53,6 @@ class LLMAdapter:
                 degraded=False,
                 model=self.settings.llm_model,
             )
-        if not self.settings.llm_configured:
-            return self._degraded(sources, "llm_not_configured")
         source_text = "\n\n".join(
             f'<source id="{source.citation_id}" document="{source.document_title}" page="{source.page}">\n'
             f"{source.content[:1800]}\n</source>"
@@ -40,7 +61,8 @@ class LLMAdapter:
         instructions = (
             "你是中国科学技术大学数学分析 B1 复习助手。只能根据用户问题和给定资料回答，"
             "不要补写资料中没有的结论。用简洁中文 Markdown 回答，并在事实后使用 [S1] 形式引用。"
-            "如果资料不足，明确说明当前资料中没有找到依据。"
+            "如果资料不足，明确说明当前资料中没有找到依据。若需要数学公式，行内公式必须使用 "
+            "\\(...\\)，单独成行的重要公式必须使用 \\[...\\]，不要使用美元符号包裹公式。"
         )
         payload = {
             "model": self.settings.llm_model,
@@ -48,6 +70,32 @@ class LLMAdapter:
             "input": f"用户问题：\n{question}\n\n可用资料：\n{source_text}",
             "max_output_tokens": 1200,
         }
+        text, error_code = self._response_text(payload)
+        if error_code:
+            return self._degraded(sources, error_code)
+        valid = {source.citation_id for source in sources}
+        citation_ids: list[str] = []
+
+        def keep(match: re.Match[str]) -> str:
+            citation = f"S{match.group(1)}"
+            if citation in valid:
+                citation_ids.append(citation)
+                return f"[{citation}]"
+            return ""
+
+        answer = re.sub(r"\[S(\d+)\]", keep, text or "")
+        if not citation_ids:
+            return self._degraded(sources, "llm_missing_citations")
+        return LLMResult(
+            answer=answer,
+            citation_ids=list(dict.fromkeys(citation_ids)),
+            degraded=False,
+            model=self.settings.llm_model,
+        )
+
+    def _response_text(self, payload: dict) -> tuple[str | None, str | None]:
+        if not self.settings.llm_configured:
+            return None, "llm_not_configured"
         url = self.settings.llm_base_url.rstrip("/") + "/responses"
         last_code = "llm_request_failed"
         for attempt in range(2):
@@ -69,32 +117,13 @@ class LLMAdapter:
                 data = response.json()
                 text = self._extract_text(data).strip()
                 if not text:
-                    last_code = "llm_empty_response"
-                    break
-                valid = {source.citation_id for source in sources}
-                citation_ids: list[str] = []
-
-                def keep(match: re.Match[str]) -> str:
-                    citation = f"S{match.group(1)}"
-                    if citation in valid:
-                        citation_ids.append(citation)
-                        return f"[{citation}]"
-                    return ""
-
-                answer = re.sub(r"\[S(\d+)\]", keep, text)
-                if not citation_ids:
-                    return self._degraded(sources, "llm_missing_citations")
-                return LLMResult(
-                    answer=answer,
-                    citation_ids=list(dict.fromkeys(citation_ids)),
-                    degraded=False,
-                    model=self.settings.llm_model,
-                )
+                    return None, "llm_empty_response"
+                return text, None
             except (httpx.HTTPError, ValueError):
                 last_code = "llm_network_or_parse_error"
                 if attempt == 0:
                     continue
-        return self._degraded(sources, last_code)
+        return None, last_code
 
     @staticmethod
     def _extract_text(data: dict) -> str:
@@ -122,13 +151,34 @@ class LLMAdapter:
             error_code=error_code,
         )
 
+    def _direct_degraded(self, error_code: str) -> LLMResult:
+        return LLMResult(
+            answer="模型暂时不可用，请检查模型配置后重试。",
+            citation_ids=[],
+            degraded=True,
+            model=self.settings.llm_model,
+            error_code=error_code,
+        )
+
 
 class FakeLLMAdapter(LLMAdapter):
     def __init__(self, settings: Settings, answer: str | None = None):
         super().__init__(settings)
         self.answer = answer
+        self.direct_calls = 0
+        self.retrieval_calls = 0
+
+    def generate_direct(self, question: str) -> LLMResult:
+        self.direct_calls += 1
+        return LLMResult(
+            answer=self.answer or f"这是 direct 模式的数学分析回答：{question}",
+            citation_ids=[],
+            degraded=False,
+            model="fake-test-model",
+        )
 
     def generate(self, question: str, sources: list[SearchResult]) -> LLMResult:
+        self.retrieval_calls += 1
         if not sources:
             return super().generate(question, sources)
         answer = self.answer or f"根据检索到的资料，可以从相关页面继续复习。[{sources[0].citation_id}]"
