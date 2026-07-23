@@ -142,6 +142,20 @@ User
 
 ## 6. 权限与检索
 
+### 6.1 演示身份协议
+
+第一版使用仅在 `COURSE_AGENT_DEMO_MODE=true` 时启用的本地演示会话：
+
+1. `GET /api/users` 只返回可选演示用户的 `id` 和展示名；
+2. `POST /api/session` 接收一个已预置的 `user_id`；
+3. 后端验证用户存在后，通过 Starlette `SessionMiddleware` 签发 `HttpOnly`、`SameSite=Lax` 的签名 session cookie；
+4. 所有业务 API 只从服务端 session 读取 `current_user_id`，不接受请求体或查询参数覆盖身份；
+5. `DELETE /api/session` 清除当前会话，用户切换身份后必须获得新 cookie。
+
+session 签名密钥来自 `COURSE_AGENT_SESSION_SECRET`。未登录返回 `401`。对文档资源的越权访问统一返回 `404`，避免通过 ID 枚举私人资料；对已登录用户在可见空间内执行不允许的写操作返回 `403`。正式身份系统后续可替换这一适配层，但业务服务仍只接收后端解析后的身份对象。
+
+### 6.2 权限顺序
+
 权限顺序固定为：
 
 ```text
@@ -150,12 +164,37 @@ User
 
 任何私人文本都不能先进入模型上下文再做删除。个人空间只有 owner 可访问；共享空间只有 `active` 成员可访问。
 
+### 6.3 检索字段与分词
+
 检索字段与展示字段分离：
 
 - `search_text` 保存中文分词、英文标识符和数学关键词归一化结果；
 - `content` 保存原始抽取文本，用于引用和模型上下文；
 - FTS5 返回前 8 个片段，随后按文档和页码去重；
 - 模型只接收当前用户有权访问的最终片段。
+
+中文分词实现冻结为 `jieba==0.42.1` 的 `cut_for_search`，并叠加连续汉字的二元组和 ASCII/希腊字母数学标识符。规范化规则固定为 Unicode NFKC、ASCII 小写、空白折叠和控制字符删除；原始 `content` 不做这些改写。导入和查询必须调用同一个 `tokenize_for_search()` 函数。
+
+FTS 表固定为：
+
+```sql
+CREATE VIRTUAL TABLE chunk_fts USING fts5(
+    chunk_id UNINDEXED,
+    search_text,
+    tokenize='unicode61 remove_diacritics 0'
+);
+```
+
+`search_text` 是以空格连接的检索 token，FTS 命中后通过 `chunk_id` 回连权限过滤后的 `Chunk`。查询 token 为空时不执行 FTS，并返回参数错误。
+
+每页解析状态为 `text_ok`、`needs_ocr`、`needs_review` 或 `failed`：
+
+- 规范化后少于 30 个非空白字符：`needs_ocr`；
+- 替换字符或控制字符比例超过 10%：`needs_review`；
+- 解析器抛出异常：`failed`；
+- 其余页面：`text_ok`，允许进入索引。
+
+每份文档记录四类页数。没有任何 `text_ok` 页的文档不进入检索，状态显示为 `needs_ocr`。首轮 26 份资料的可检索页覆盖率门槛为 90%；低于门槛时 Demo 验收失败，不能用 Recall@5 掩盖解析缺口。
 
 第一版不启用跨用户回答缓存。缓存接口可以预留，但必须等权限测试通过后才能针对纯共享空间启用。
 
@@ -183,12 +222,39 @@ COURSE_AGENT_LLM_TIMEOUT_SECONDS
 
 模型超时、限流或不可用时，接口仍返回已检索片段和 `degraded=true`，不让知识库核心能力整体失效。
 
+### 7.1 模型适配器契约
+
+适配器接口固定为 `generate(question, sources) -> LLMResult`，假模型与真实模型实现同一接口。每次最多提供 8 个片段、总计不超过 12,000 个字符；单片段超过 1,800 个字符时截断并保留页码。
+
+Responses 兼容请求使用：
+
+- `POST {base_url}/responses`；
+- Bearer API Key；
+- `model`、`instructions`、`input` 和 `max_output_tokens`；
+- 默认连接与完整请求超时 45 秒；
+- 只对网络错误、`429`、`502`、`503`、`504` 最多重试 1 次，其他 `4xx` 不重试。
+
+模型上下文中的每个来源采用以下结构：
+
+```text
+<source id="S1" document="第1-3章复习提纲.pdf" page="8">
+原始片段内容
+</source>
+```
+
+系统指令要求模型用 Markdown 回答，只能引用 `[S1]` 形式的来源编号；没有证据时明确说明找不到依据。后端从 Responses 返回的 `output_text`，或兼容返回中的 `output[].content[].text` 提取文本，再用正则 `\[S([1-8])\]` 提取引用。任何不在本次来源集合内的编号都会被移除并记为 `invalid_citation`。
+
+检索成功但模型失败时 `/api/query` 仍返回 `200`、`degraded=true`、空或简短降级答案、检索来源和不包含敏感上游正文的 `model_error.code`。只有数据库或检索服务不可用时返回 `503`。真实 smoke test 必须验证当前目标环境的 `base_url + /responses`、`gpt-5.6-sol` 和返回解析逻辑；CI 只使用假模型。
+
 ## 8. API
 
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | GET | `/api/health` | 健康检查和能力状态 |
 | GET | `/api/users` | 获取本地演示身份 |
+| POST | `/api/session` | 创建本地演示会话 |
+| GET | `/api/session` | 获取当前会话身份 |
+| DELETE | `/api/session` | 清除当前演示会话 |
 | GET | `/api/spaces` | 获取当前用户可访问空间 |
 | GET | `/api/spaces/{id}/documents` | 获取空间资料 |
 | POST | `/api/spaces/{id}/documents` | 上传单份 PDF |
@@ -198,6 +264,54 @@ COURSE_AGENT_LLM_TIMEOUT_SECONDS
 | GET | `/api/documents/{id}/pages/{page}` | 获取有权限的页级文本 |
 
 第一版返回普通 JSON。平台级 SSE 和 `platform-chat-v1` 在插件平台阶段实现，课程 Agent 内部不提前复制一套未验证的流式协议。
+
+### 8.1 通用错误
+
+```json
+{
+  "error": {
+    "code": "document_not_found",
+    "message": "资料不存在或当前用户不可访问",
+    "retryable": false
+  }
+}
+```
+
+状态码规则：未登录 `401`；可见资源上的禁止操作 `403`；不存在、已删除或不可见文档 `404`；字段/MIME/空查询错误 `422`；重复上传返回 `409` 并附已有文档 ID；检索基础设施不可用 `503`。
+
+### 8.2 最小请求与响应契约
+
+- `POST /api/session`：JSON `{ "user_id": "demo-a" }`；成功返回 `{ "user": { ... } }`。
+- `GET /api/spaces`：返回当前用户可见空间数组和成员角色。
+- `GET /api/spaces/{id}/documents?page=1&page_size=20`：`page` 从 1 开始，`page_size` 范围 1--100；返回 `items`、`page`、`page_size`、`total`。
+- `POST /api/spaces/{id}/documents`：`multipart/form-data`，必填 `file`、`title`、`material_type`、`license_status`，可选 `semester`、`source_url`；第一版单文件上限 50 MiB。
+- `DELETE /api/documents/{id}`：成功返回 `204`，重复删除返回 `404`。
+- `POST /api/documents/{id}/reparse`：成功返回最新 revision 和解析状态。
+- `POST /api/query`：JSON `{ "question": "...", "space_ids": ["..."], "top_k": 5 }`；`top_k` 范围 1--8，所选空间必须全部可访问。
+- `GET /api/documents/{id}/pages/{page}`：页码从 1 开始，返回文档标题、页码、页状态和可展示文本；越界或已删除返回 `404`。
+
+`POST /api/query` 成功响应：
+
+```json
+{
+  "answer": "根据复习提纲……[S1]",
+  "degraded": false,
+  "model": "gpt-5.6-sol",
+  "retrieval_count": 5,
+  "citations": [
+    {
+      "id": "S1",
+      "document_id": "doc-id",
+      "document_title": "第1-3章复习提纲.pdf",
+      "page": 8,
+      "excerpt": "……"
+    }
+  ],
+  "model_error": null
+}
+```
+
+`space_ids` 为空时默认检索当前用户全部可访问空间。响应不得返回其他用户的空间 ID、文档存在性或原文。
 
 ## 9. Web 界面
 
@@ -221,6 +335,10 @@ COURSE_AGENT_LLM_TIMEOUT_SECONDS
 - 删除在事务中处理文档状态、分块和 FTS 索引；
 - 日志不记录 API Key、完整私人文档正文或完整模型上下文；
 - 资料未获得公开再分发许可，默认只用于私有仓库和内部演示；公开 Demo 必须使用获得授权的子集或不公开原文件。
+
+删除采用隐私优先的软删除元数据、硬删除内容策略：`Document.status` 置为 `deleted`，保留最小审计元数据和哈希；删除所有 Chunk、FTS 行和上传目录中的文件。仓库自带的只读原始 PDF 不从 Git 工作区删除，只解除索引关系。历史回答保留文档标题和页码，但引用详情接口返回 `410 Gone` 且不再展示原文。
+
+重新解析创建新的 `DocumentRevision`；成功切换时，在同一事务中将旧 revision 标记为 `superseded`、删除旧 Chunk/FTS 行并启用新索引。新解析失败时保留旧 revision 可用，不发生半切换。
 
 ## 11. 测试与评测
 
@@ -262,6 +380,17 @@ CI 测试使用可控的假模型适配器，不消耗真实 API；另设手动 
 1. 本地 Python 虚拟环境，用于开发和调试；
 2. 单容器 Docker，用于部署到现有开发机，持久化 SQLite、上传文件和索引目录。
 
+标准命令约定为：
+
+```text
+python -m course_agent.cli init-db
+python -m course_agent.cli import-manifest data/manifests/math-analysis-b1.yaml
+uvicorn course_agent.main:app --host 127.0.0.1 --port 8000
+pytest
+```
+
+Docker 镜像使用 `/app/var` 保存 SQLite、上传和索引数据，运行时挂载持久化卷；默认监听容器内 `8000`。`GET /api/health` 只有在数据库可读写、FTS5 可查询时返回 `200`，并分别报告 `database`、`search` 和 `llm_configured` 状态。LLM 未配置不影响基本健康状态，但真实 Demo smoke test 必须单独验证模型调用。
+
 最终 Demo 的最低交付证据：
 
 - 从空数据库完成初始化和 manifest 导入；
@@ -281,4 +410,3 @@ CI 测试使用可控的假模型适配器，不消耗真实 API；另设手动 
 3. 增加第三方订阅知识空间的合规样例；
 4. 冻结 `platform-chat-v1`，把课程 Agent 注册为第一方参考实现；
 5. 建立 Registry、Gateway、Agent Portal 和极简第三方 Agent。
-
