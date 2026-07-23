@@ -6,9 +6,9 @@
 
 ## 检索口径
 
-我通过 GitHub 网页的仓库/代码搜索，并用仓库页面、README 和目录树交叉核验。使用的关键词包括：`USTC course`、`USTC courses`、`USTC course materials`、`USTC course notes`、`USTC resources`、`USTC 课程`、`中国科学技术大学 课程资料`、`中科大 课程资料`、`USTC math course` 等。
+我通过 GitHub 网页的仓库/代码搜索，并用仓库页面、仓库描述、README 和目录树交叉核验。使用的关键词包括：`USTC course`、`USTC courses`、`USTC course materials`、`USTC course notes`、`USTC resources`、`USTC 课程`、`中国科学技术大学 课程资料`、`中科大 课程资料`、`USTC math course` 等。
 
-纳入标准是：仓库公开可访问，且 README 或目录明确指向中国科学技术大学（USTC）的课程讲义、笔记、试卷、作业/实验、复习资料或课程主页。已排除选课/抓课工具、爬虫、课程评价平台、空仓库、明显 fork/镜像和只有单个项目成品的仓库。检索结果会随 GitHub 更新，下面是本次检索中尽可能完整的高信号清单，不构成对仓库内容版权或安全性的保证。
+纳入标准是：仓库公开可访问，且仓库描述、README 或目录明确指向中国科学技术大学（USTC）的课程讲义、笔记、试卷、作业/实验、复习资料或课程主页。已排除选课/抓课工具、爬虫、课程评价平台、空仓库、明显 fork/镜像和只有单个项目成品的仓库。本次清单按规范化的 `owner/repository` 去重，共收录 161 个唯一链接。检索结果会随 GitHub 更新，下面是本次检索中尽可能完整的高信号清单，不构成对仓库内容版权或安全性的保证。
 
 `未声明` 表示 GitHub 未识别到标准许可证，不能据此推定允许复制或再分发；使用资料前请阅读目标仓库的 README、LICENSE 和各文件说明。`已归档` 仓库仍可访问，但通常不再维护。
 
@@ -185,6 +185,13 @@
 | hehaha68/USTC_2021Fall_Operations-Research | <https://github.com/hehaha68/USTC_2021Fall_Operations-Research> | 2021 秋运筹学作业、答案和实验 | 未归档；未声明 |
 | hehaha68/USTC_2021Spring_Computational-Methods | <https://github.com/hehaha68/USTC_2021Spring_Computational-Methods> | 2021 春计算方法 B 作业、复习资料和试卷 | 未归档；未声明 |
 | hehaha68/USTC_2020Fall_Introduction-to-Computing-System | <https://github.com/hehaha68/USTC_2020Fall_Introduction-to-Computing-System> | 2020 秋计算机系统概论（H）作业、实验和习题答案 | 未归档；未声明 |
+| hehaha68/USTC_2021Fall_Introduction-to-Machine-Learning | <https://github.com/hehaha68/USTC_2021Fall_Introduction-to-Machine-Learning> | 2021 秋机器学习概论课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2021Fall_Computer-Networks | <https://github.com/hehaha68/USTC_2021Fall_Computer-Networks> | 2021 秋计算机网络课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2021Fall_Foundations-of-Algorithms | <https://github.com/hehaha68/USTC_2021Fall_Foundations-of-Algorithms> | 2021 秋算法基础课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2020Fall_Data-Structure | <https://github.com/hehaha68/USTC_2020Fall_Data-Structure> | 2020 秋数据结构课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2022Spring_Time-Series-Analysis-B | <https://github.com/hehaha68/USTC_2022Spring_Time-Series-Analysis-B> | 2022 春时间序列分析 B 课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2021Spring_Analysis-and-Practice-of-the-Data | <https://github.com/hehaha68/USTC_2021Spring_Analysis-and-Practice-of-the-Data> | 2021 春数据分析及实践课程资源 | 未归档；未声明 |
+| hehaha68/USTC_2022Spring_An-introduction-to-Metaverse | <https://github.com/hehaha68/USTC_2022Spring_An-introduction-to-Metaverse> | 2022 春元宇宙导论课程资源 | 未归档；未声明 |
 
 ## 典型排除项
 
