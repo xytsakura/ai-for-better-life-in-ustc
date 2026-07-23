@@ -7,6 +7,81 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\\\((.+?)\\\)/g, '<span class="math-inline">$1</span>');
+}
+
+function renderMarkdown(value) {
+  const lines = String(value ?? '').split(/\r?\n/);
+  const output = [];
+  let listType = null;
+  let mathLines = null;
+
+  const closeList = () => {
+    if (listType) output.push(`</${listType}>`);
+    listType = null;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (mathLines) {
+      if (trimmed === '\\]') {
+        output.push(`<div class="math-block">${escapeHtml(mathLines.join(' '))}</div>`);
+        mathLines = null;
+      } else {
+        mathLines.push(trimmed);
+      }
+      continue;
+    }
+
+    if (trimmed === '\\[') {
+      closeList();
+      mathLines = [];
+      continue;
+    }
+
+    if (!trimmed) {
+      closeList();
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{2,4})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = Math.min(4, heading[1].length);
+      output.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      const nextType = unordered ? 'ul' : 'ol';
+      if (listType !== nextType) {
+        closeList();
+        output.push(`<${nextType}>`);
+        listType = nextType;
+      }
+      output.push(`<li>${renderInlineMarkdown((unordered || ordered)[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    if (trimmed.startsWith('> ')) {
+      output.push(`<blockquote>${renderInlineMarkdown(trimmed.slice(2))}</blockquote>`);
+    } else {
+      output.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
+    }
+  }
+
+  closeList();
+  if (mathLines) output.push(`<div class="math-block">${escapeHtml(mathLines.join(' '))}</div>`);
+  return output.join('');
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options });
   const text = await response.text();
@@ -141,7 +216,7 @@ function renderAnswer(result) {
   $('#answer-card').classList.remove('hidden');
   $('#answer-mode').textContent = result.degraded ? '检索降级' : '模型回答';
   $('#answer-mode').className = `status-pill ${result.degraded ? 'warn' : 'ok'}`;
-  $('#answer-text').textContent = result.answer;
+  $('#answer-text').innerHTML = renderMarkdown(result.answer);
   $('#citation-list').innerHTML = result.citations.length ? result.citations.map(source => `<div class="citation-item"><strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong><div class="citation-excerpt">${escapeHtml(source.excerpt)}</div></div>`).join('') : '<div class="empty-list">本次回答没有可验证引用</div>';
 }
 
