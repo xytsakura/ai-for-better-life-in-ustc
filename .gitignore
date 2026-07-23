@@ -18,6 +18,7 @@ artifacts/private/
 venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -43,3 +44,4 @@ Desktop.ini
 *.sqlite3
 *.db
 *.log
+var/

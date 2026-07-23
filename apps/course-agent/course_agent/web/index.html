@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>课程复习 Agent · AI for better life In ustc</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-mark">107</div>
+    <div>
+      <p class="eyebrow">AI for better life In ustc</p>
+      <h1>课程复习 Agent</h1>
+    </div>
+    <div class="topbar-meta">
+      <span id="health-badge" class="status-pill">连接检查中</span>
+      <span id="model-label" class="muted">模型未配置</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar" aria-label="身份与知识空间">
+      <section class="sidebar-section">
+        <div class="section-heading"><span>演示身份</span><span id="current-user" class="muted">未选择</span></div>
+        <div id="user-list" class="identity-list"></div>
+      </section>
+      <section class="sidebar-section spaces-section">
+        <div class="section-heading"><span>知识空间</span><span id="space-count" class="muted">0</span></div>
+        <div id="space-list" class="space-list"></div>
+      </section>
+      <footer class="sidebar-footer">数学分析 B1 · v0.1</footer>
+    </aside>
+
+    <section class="content-area">
+      <div id="login-empty" class="empty-state">
+        <span class="empty-kicker">课程资料工作台</span>
+        <h2>选择一个演示身份开始</h2>
+        <p>登录后可以看到对应的个人空间与数学分析 B1 学习小组。</p>
+      </div>
+
+      <div id="app-view" class="hidden">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">当前知识空间</p>
+            <h2 id="space-title">数学分析 B1 学习小组</h2>
+          </div>
+          <div class="heading-actions">
+            <button id="refresh-button" class="button button-secondary" type="button">刷新资料</button>
+            <button id="logout-button" class="button button-quiet" type="button">切换身份</button>
+          </div>
+        </div>
+
+        <div id="notice" class="notice hidden" role="status"></div>
+
+        <div class="grid-layout">
+          <section class="panel library-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Library</p>
+                <h3>资料库</h3>
+              </div>
+              <label class="button button-primary upload-button">
+                上传 PDF
+                <input id="upload-input" type="file" accept="application/pdf,.pdf" hidden>
+              </label>
+            </div>
+            <div class="library-meta"><span id="document-count">0 份资料</span><span id="space-role" class="muted"></span></div>
+            <div id="document-list" class="document-list"></div>
+          </section>
+
+          <section class="panel ask-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Review Desk</p>
+                <h3>复习问答</h3>
+              </div>
+              <span class="mode-tag">带来源回答</span>
+            </div>
+            <form id="query-form" class="query-form">
+              <label for="question">问题</label>
+              <textarea id="question" rows="5" maxlength="2000" placeholder="例如：一致连续和一致收敛有什么区别？"></textarea>
+              <div class="query-footer">
+                <span id="query-status" class="muted">答案会附带文件和页码</span>
+                <button class="button button-primary" type="submit">开始检索</button>
+              </div>
+            </form>
+            <article id="answer-card" class="answer-card hidden">
+              <div class="answer-heading"><span>回答</span><span id="answer-mode" class="status-pill"></span></div>
+              <div id="answer-text" class="answer-text"></div>
+              <div class="citation-heading">引用来源</div>
+              <div id="citation-list" class="citation-list"></div>
+            </article>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+version: 1
+space_id: math-b1-shared
+defaults:
+  course: 数学分析 B1
+  source_type: 我的科大课程资料公开页面
+  source_url: https://share.feixu.site/
+  license_status: private-learning-no-redistribution-license
+documents:
+  - path: 学习资料/数学分析B1/数学分析(B)历年真题.pdf
+    material_type: 历年真题
+  - path: 学习资料/数学分析B1/数学分析(B)提纲及习题课讲义/第1-3章复习提纲.pdf
+    material_type: 复习提纲
+  - path: 学习资料/数学分析B1/数学分析(B)提纲及习题课讲义/第4-7章复习提纲.pdf
+    material_type: 复习提纲
+  - path: 学习资料/数学分析B1/数学分析(B)提纲及习题课讲义/数学分析(B1)习题课讲义.pdf
+    material_type: 习题课讲义
+  - path: 学习资料/数学分析B1/数学分析(B1)笔记.pdf
+    material_type: 课程笔记
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2017秋数学分析(B1)期末考试解析与评分细则.pdf
+    semester: 2017 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2017秋数学分析(B1)期中参考答案.pdf
+    semester: 2017 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2018秋数学分析(B1)期末参考答案.pdf
+    semester: 2018 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2018秋数学分析(B1)期中考试解析与评分细则.pdf
+    semester: 2018 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2019秋数学分析(B1)期末考试解析与评分细则.pdf
+    semester: 2019 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2019秋数学分析(B1)期中考试解析与评分细则.pdf
+    semester: 2019 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2020秋数学分析(B1)期末参考答案.pdf
+    semester: 2020 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2020秋数学分析(B1)期中考试解析与评分细则.pdf
+    semester: 2020 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2021秋数学分析(B1)期末参考答案.pdf
+    semester: 2021 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2021秋数学分析(B1)期中参考答案.pdf
+    semester: 2021 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2022秋数学分析(B1)期末考试解析与评分细则.pdf
+    semester: 2022 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2022秋数学分析(B1)期中考试解析与评分细则.pdf
+    semester: 2022 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2023秋数学分析B1期末参考答案.pdf
+    semester: 2023 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2023秋数学分析B1期中参考答案.pdf
+    semester: 2023 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2024数学分析B1期末考试参考答案.pdf
+    semester: 2024 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2024数学分析B1期中考试参考答案.pdf
+    semester: 2024 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2025数学分析B1期末考试参考答案.pdf
+    semester: 2025 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/2025数学分析B1期中考试参考答案.pdf
+    semester: 2025 秋
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/数分B真题集2025版.pdf
+    material_type: 历年真题合集
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/数学分析(B1)历年真题sxl答案.pdf
+    material_type: 历年真题答案
+  - path: 学习资料/数学分析B1/数学分析(B1)真题答案/数学分析(B1)历年真题压轴题及答案.pdf
+    material_type: 压轴题与答案
