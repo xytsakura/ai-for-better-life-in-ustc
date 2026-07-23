@@ -154,6 +154,8 @@
 | ACN-2025/ACN-2025.github.io | <https://github.com/ACN-2025/ACN-2025.github.io> | Advanced Computer Networking 课程主页、slides 和 papers | 未归档；Apache-2.0 |
 | ustc-dia/ustc-dia.github.io | <https://github.com/ustc-dia/ustc-dia.github.io> | 数字图像分析课程主页、slides 和 homework | 未归档；未声明 |
 | ustc-dia/tutorials | <https://github.com/ustc-dia/tutorials> | 数字图像分析课程 Python/Matlab 算法教程 | 未归档；未声明 |
+| KarlRaphel/ustc-dia-2022-autumn | <https://github.com/KarlRaphel/ustc-dia-2022-autumn> | 数字图像分析 2022 秋复习资料 | 未归档；未声明 |
+| yyc1123-code/data-analysis-review | <https://github.com/yyc1123-code/data-analysis-review> | USTC DS3001 结构化复习、公式表、计算题和模拟卷 | 未归档；未声明 |
 | cpct2025/cpct2025.github.io | <https://github.com/cpct2025/cpct2025.github.io> | USTC CPCT 2025 课程主页 | 已归档；Apache-2.0 |
 | ustc-compiler/2018fall | <https://github.com/ustc-compiler/2018fall> | 2018 秋编译课程作业、实验说明和工具 | 未归档；未声明 |
 | ustc-compiler/2019fall | <https://github.com/ustc-compiler/2019fall> | 2019 秋 Compiler(H) 课程主页 | 未归档；未声明 |
@@ -161,6 +163,7 @@
 | ustc-compiler/2026spring | <https://github.com/ustc-compiler/2026spring> | 2026 春 Compiler(H) 课程主页 | 未归档；未声明 |
 | yankaixie13/Operating-System-2018 | <https://github.com/yankaixie13/Operating-System-2018> | 操作系统 Homework、Labs、Lecture Slides、教材和视频索引 | 未归档；未声明 |
 | KZ25T/2022ics | <https://github.com/KZ25T/2022ics> | 2022 秋计算系统概论 A 作业、实验和整理文档 | 未归档；NOASSERTION |
+| ZhangZfy/USTC_2023Spring_OS_Lab | <https://github.com/ZhangZfy/USTC_2023Spring_OS_Lab> | 操作系统课程实验和复习资料 | 未归档；未声明 |
 | junesnow86/USTC-CompilerH-2021FA | <https://github.com/junesnow86/USTC-CompilerH-2021FA> | 2021 秋 CompilerH 实验 | 未归档；未声明 |
 | Indigo6/Compiler-Principle-Notes | <https://github.com/Indigo6/Compiler-Principle-Notes> | 2018 秋编译原理章节笔记和 slides | 未归档；未声明 |
 | USTC-CS-Course-Resource/USTC-Compilers-Principles | <https://github.com/USTC-CS-Course-Resource/USTC-Compilers-Principles> | 编译原理实验和书面作业 | 未归档；MIT |
