@@ -94,6 +94,9 @@ textarea:focus { border-color: #7fb4a3; box-shadow: 0 0 0 3px rgba(70, 139, 113,
 .answer-text blockquote { margin: 12px 0; padding: 8px 11px; border-left: 3px solid #9bc2b3; background: var(--surface-soft); color: var(--green-dark); }
 .math-inline { display: inline-block; padding: 0 3px; color: var(--green-dark); font-family: Georgia, 'Times New Roman', serif; }
 .math-block { overflow-x: auto; margin: 10px 0; padding: 10px 12px; border: 1px solid #d8e5df; background: #f7faf8; color: #193e32; font-family: Georgia, 'Times New Roman', serif; line-height: 1.55; text-align: center; }
+.math-inline .katex { font-size: 1.03em; }
+.math-block .katex-display { margin: 0; }
+.math-render-error { color: var(--red); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .citation-heading { margin-bottom: 8px; color: var(--muted); font-size: .72rem; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
 .citation-list { display: grid; gap: 7px; }
 .citation-item { padding: 9px 10px; border-left: 3px solid #9bc2b3; background: var(--surface-soft); font-size: .75rem; line-height: 1.55; }
@@ -104,6 +107,10 @@ textarea:focus { border-color: #7fb4a3; box-shadow: 0 0 0 3px rgba(70, 139, 113,
 .empty-state { display: grid; place-content: center; min-height: 55vh; max-width: 560px; margin: 0 auto; text-align: center; }
 .empty-state h2 { margin-bottom: 10px; color: var(--ink); font-size: 1.7rem; }
 .empty-state p { line-height: 1.7; }
+
+@media (max-width: 1080px) {
+  .grid-layout { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 920px) {
   .workspace { grid-template-columns: 1fr; }

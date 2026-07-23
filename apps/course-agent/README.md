@@ -40,6 +40,8 @@ COURSE_AGENT_LLM_MODEL=gpt-5.6-sol
 
 当前演示数据库导入 25 份唯一 PDF，共 510 页、493 个检索分块；其中 484 页可检索，14 页标记为需 OCR，12 页标记为需人工检查。解析状态会在资料列表中明确展示，不会把扫描页伪装成可检索文本。
 
+模型回答中的 Markdown 标题、列表、行内公式和块级公式由应用本地渲染。数学排版使用仓库内置的 KaTeX 0.18.1，不依赖外部 CDN；第三方许可证保存在 `course_agent/web/vendor/katex/LICENSE`。
+
 ## 测试
 
 ```powershell

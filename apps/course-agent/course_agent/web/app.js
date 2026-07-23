@@ -13,11 +13,34 @@ function renderInlineMarkdown(value) {
     .replace(/\\\((.+?)\\\)/g, '<span class="math-inline">$1</span>');
 }
 
+function renderMath(container) {
+  const renderer = window.katex;
+  container.querySelectorAll('.math-inline, .math-block').forEach(element => {
+    const source = element.textContent;
+    if (!renderer) {
+      element.classList.add('math-render-error');
+      return;
+    }
+    try {
+      renderer.render(source, element, {
+        displayMode: element.classList.contains('math-block'),
+        throwOnError: false,
+        strict: 'ignore',
+        trust: false,
+      });
+    } catch {
+      element.textContent = source;
+      element.classList.add('math-render-error');
+    }
+  });
+}
+
 function renderMarkdown(value) {
   const lines = String(value ?? '').split(/\r?\n/);
   const output = [];
   let listType = null;
   let mathLines = null;
+  let mathDelimiter = null;
 
   const closeList = () => {
     if (listType) output.push(`</${listType}>`);
@@ -27,19 +50,28 @@ function renderMarkdown(value) {
   for (const line of lines) {
     const trimmed = line.trim();
 
+    const singleLineMath = trimmed.match(/^\\\[(.+)\\\]$/) || trimmed.match(/^\$\$(.+)\$\$$/);
+    if (!mathLines && singleLineMath) {
+      closeList();
+      output.push(`<div class="math-block">${escapeHtml(singleLineMath[1].trim())}</div>`);
+      continue;
+    }
+
     if (mathLines) {
-      if (trimmed === '\\]') {
+      if (trimmed === mathDelimiter) {
         output.push(`<div class="math-block">${escapeHtml(mathLines.join(' '))}</div>`);
         mathLines = null;
+        mathDelimiter = null;
       } else {
         mathLines.push(trimmed);
       }
       continue;
     }
 
-    if (trimmed === '\\[') {
+    if (trimmed === '\\[' || trimmed === '$$') {
       closeList();
       mathLines = [];
+      mathDelimiter = trimmed === '$$' ? '$$' : '\\]';
       continue;
     }
 
@@ -216,7 +248,9 @@ function renderAnswer(result) {
   $('#answer-card').classList.remove('hidden');
   $('#answer-mode').textContent = result.degraded ? '检索降级' : '模型回答';
   $('#answer-mode').className = `status-pill ${result.degraded ? 'warn' : 'ok'}`;
-  $('#answer-text').innerHTML = renderMarkdown(result.answer);
+  const answerElement = $('#answer-text');
+  answerElement.innerHTML = renderMarkdown(result.answer);
+  renderMath(answerElement);
   $('#citation-list').innerHTML = result.citations.length ? result.citations.map(source => `<div class="citation-item"><strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong><div class="citation-excerpt">${escapeHtml(source.excerpt)}</div></div>`).join('') : '<div class="empty-list">本次回答没有可验证引用</div>';
 }
 
