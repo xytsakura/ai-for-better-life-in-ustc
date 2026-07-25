@@ -6,6 +6,8 @@
 
 > 当前状态：数学分析 B1 课程 Agent Demo v0.1 已可本地运行。已冻结的实现规格见[数学分析 B1 Demo 设计](./docs/superpowers/specs/2026-07-23-math-analysis-course-agent-design.md)；完整插件平台仍按后续阶段推进。
 
+> 新电脑部署：代码、前端、KaTeX、测试、Manifest 与课程 PDF 均已纳入仓库。队友或代码 Agent 请直接按照[课程复习 Agent 部署与审计指南](./docs/COURSE_AGENT_DEPLOYMENT.md)从零复现。
+
 ## 一句话定位
 
 一个有真实课程知识库能力的 Agent，加上一套能复用其接入方式的校园 Agent 插件平台。
@@ -107,6 +109,7 @@ MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事�
 ## 文档导航
 
 - [项目产品文档](./项目产品文档.md)：当前产品定义、架构边界、MVP、评测、分工和风险，是现阶段实施依据。
+- [课程复习 Agent 部署与审计指南](./docs/COURSE_AGENT_DEPLOYMENT.md)：面向新电脑、队友和代码 Agent 的逐步安装、配置、资料导入、验收、Docker 与排障说明。
 - [比赛要求](./比赛要求.md)：官方比赛信息的本地整理，最终以组委会最新通知为准。
 - [agent.md](./agent.md)：本工作目录的协作约定、已确认决策和安全经验。
 

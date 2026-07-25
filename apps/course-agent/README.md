@@ -2,16 +2,20 @@
 
 这是 `AI for better life In ustc` 的首个可运行课程 Agent Demo。它提供个人空间、邀请制共享空间、PDF 导入、页级解析、模型直接问答、可选择资料的检索问答和删除失效验证。
 
+第一次在新电脑部署或交给代码 Agent 审计时，请使用仓库级的[完整部署与审计指南](../../docs/COURSE_AGENT_DEPLOYMENT.md)。本 README 只保留日常开发所需的最短命令。
+
 ## 本地启动
 
 建议使用 Python 3.10 或更新版本。Windows 可以使用 Codex 工作区附带的 Python 3.12。
 
 ```powershell
 cd apps/course-agent
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[test]"
 Copy-Item .env.example .env
 ```
+
+如果电脑没有 Windows Python Launcher，但 `python --version` 已确认是 3.10 或更新版本，可以把 `py -3.12` 换成 `python`。
 
 在 `.env` 中填写服务端模型配置。API Key 只保存在本地 `.env`，不要提交到 Git：
 
@@ -56,12 +60,23 @@ COURSE_AGENT_LLM_MODEL=gpt-5.6-sol
 
 已验证：自动化测试覆盖直接问答不触发检索、资料必选、文档粒度检索、越权拦截、双用户个人空间隔离、共享空间访问、重复导入和删除失效；具体通过数量以当前 `pytest` 输出为准。
 
+服务启动后，可以另开终端运行不调用模型的部署 smoke test：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\smoke_test.py --base-url http://127.0.0.1:8000 --require-llm
+```
+
+暂时不配置模型时去掉 `--require-llm`。脚本会核对首页、前端与 KaTeX 静态资源、SQLite、FTS5、演示身份、知识空间和 25 份唯一课程资料。
+
 ## Docker
 
 从仓库根目录构建，避免丢失 `学习资料` 和 manifest：
 
 ```powershell
 docker build -f apps/course-agent/Dockerfile -t ustc-course-agent .
+docker volume create course-agent-data
+docker run --rm -v course-agent-data:/app/var ustc-course-agent course-agent init-db
+docker run --rm -v course-agent-data:/app/var ustc-course-agent course-agent import-manifest /app/repository/data/manifests/math-analysis-b1.yaml
 docker run --rm -p 8000:8000 `
   -e COURSE_AGENT_LLM_API_KEY=本机密钥 `
   -e COURSE_AGENT_LLM_BASE_URL=兼容 Responses API 的地址 `
@@ -69,6 +84,8 @@ docker run --rm -p 8000:8000 `
   -v course-agent-data:/app/var `
   ustc-course-agent
 ```
+
+前两条一次性容器命令负责初始化持久卷并导入资料；只运行最后一条服务命令会得到空资料库。完整说明和验收步骤见[部署与审计指南](../../docs/COURSE_AGENT_DEPLOYMENT.md)。
 
 ## 数据边界
 
