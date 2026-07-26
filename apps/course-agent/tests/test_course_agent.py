@@ -61,11 +61,15 @@ def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
         raise AssertionError("direct mode must not call search")
 
     monkeypatch.setattr("course_agent.main.search", fail_search)
-    response = client.post("/api/query", json={"question": "Explain uniform convergence."})
+    response = client.post(
+        "/api/query",
+        json={"question": "Explain uniform convergence."},
+    )
 
     assert response.status_code == 200
     body = response.json()
     assert body["mode"] == "direct"
+    assert body["scope"] == "general"
     assert body["retrieval_count"] == 0
     assert body["citations"] == []
     assert body["degraded"] is False
@@ -76,13 +80,23 @@ def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
 def test_retrieval_requires_non_empty_document_ids(tmp_path: Path):
     client, _ = make_client(tmp_path)
     login(client, "demo-a")
+    personal = personal_space(client)
 
-    missing = client.post("/api/query", json={"mode": "retrieval", "question": "uniform continuity"})
+    missing = client.post(
+        "/api/query",
+        json={"mode": "retrieval", "scope": "knowledge_base", "space_id": personal["id"], "question": "uniform continuity"},
+    )
     assert missing.status_code == 422
 
     blank = client.post(
         "/api/query",
-        json={"mode": "retrieval", "question": "uniform continuity", "document_ids": [""]},
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
+            "question": "uniform continuity",
+            "document_ids": [""],
+        },
     )
     assert blank.status_code == 422
 
@@ -91,6 +105,27 @@ def test_retrieval_requires_non_empty_document_ids(tmp_path: Path):
         json={"question": "uniform continuity", "space_ids": ["math-b1-shared"]},
     )
     assert legacy_scope.status_code == 422
+
+    wrong_scope = client.post(
+        "/api/query",
+        json={
+            "mode": "direct",
+            "scope": "knowledge_base",
+            "question": "should fail",
+        },
+    )
+    assert wrong_scope.status_code == 422
+
+    missing_space = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "question": "should fail",
+            "document_ids": ["x"],
+        },
+    )
+    assert missing_space.status_code == 422
 
 
 def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
@@ -117,6 +152,8 @@ def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
         "/api/query",
         json={
             "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
             "question": "What is the definition of uniform continuity?",
             "document_ids": [document_id],
             "top_k": 5,
@@ -143,6 +180,8 @@ def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
         "/api/query",
         json={
             "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
             "question": "What is the definition of uniform continuity?",
             "document_ids": [document_id],
             "top_k": 5,
@@ -157,6 +196,8 @@ def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
         "/api/query",
         json={
             "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
             "question": "一致连续的定义是什么？",
             "document_ids": [document_id],
             "top_k": 5,
@@ -186,7 +227,14 @@ def test_retrieval_only_uses_selected_documents(tmp_path: Path):
 
     wrong_document = client.post(
         "/api/query",
-        json={"mode": "retrieval", "question": "Betaonly", "document_ids": [alpha_id], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
+            "question": "Betaonly",
+            "document_ids": [alpha_id],
+            "top_k": 5,
+        },
     )
     assert wrong_document.status_code == 200
     assert wrong_document.json()["mode"] == "retrieval"
@@ -195,7 +243,14 @@ def test_retrieval_only_uses_selected_documents(tmp_path: Path):
 
     right_document = client.post(
         "/api/query",
-        json={"mode": "retrieval", "question": "Betaonly", "document_ids": [beta_id], "top_k": 5},
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
+            "question": "Betaonly",
+            "document_ids": [beta_id],
+            "top_k": 5,
+        },
     )
     assert right_document.status_code == 200
     assert right_document.json()["retrieval_count"] >= 1
@@ -219,6 +274,8 @@ def test_shared_space_retrieval_is_available_to_both_users(tmp_path: Path):
         "/api/query",
         json={
             "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": shared["id"],
             "question": "What is a basic test for uniform convergence?",
             "document_ids": [document_id],
             "top_k": 5,

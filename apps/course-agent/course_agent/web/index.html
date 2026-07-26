@@ -8,119 +8,291 @@
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand-mark">107</div>
-    <div>
-      <p class="eyebrow">AI for better life In ustc</p>
-      <h1>课程复习 Agent</h1>
-    </div>
-    <div class="topbar-meta">
-      <span id="health-badge" class="status-pill">连接检查中</span>
-      <span id="model-label" class="muted">模型未配置</span>
-    </div>
-  </header>
-
-  <main class="workspace">
-    <aside class="sidebar" aria-label="身份与知识空间">
-      <section class="sidebar-section">
-        <div class="section-heading"><span>演示身份</span><span id="current-user" class="muted">未选择</span></div>
-        <div id="user-list" class="identity-list"></div>
-      </section>
-      <section class="sidebar-section spaces-section">
-        <div class="section-heading"><span>知识空间</span><span id="space-count" class="muted">0</span></div>
-        <div id="space-list" class="space-list"></div>
-      </section>
-      <footer class="sidebar-footer">数学分析 B1 · v0.1</footer>
-    </aside>
-
-    <section class="content-area">
-      <div id="login-empty" class="empty-state">
-        <span class="empty-kicker">课程资料工作台</span>
-        <h2>选择一个演示身份开始</h2>
-        <p>登录后可以看到对应的个人空间与数学分析 B1 学习小组。</p>
+  <aside class="app-sidebar">
+    <div class="sidebar-top">
+      <div class="brand">
+        <div class="brand-mark">107</div>
+        <div class="brand-text">
+          <div class="brand-title">课程复习 Agent</div>
+          <div class="brand-sub">AI for better life In ustc</div>
+        </div>
       </div>
 
-      <div id="app-view" class="hidden">
-        <div class="page-heading">
-          <div>
-            <p class="eyebrow">当前知识空间</p>
-            <h2 id="space-title">数学分析 B1 学习小组</h2>
-          </div>
-          <div class="heading-actions">
-            <button id="refresh-button" class="button button-secondary" type="button">刷新资料</button>
-            <button id="logout-button" class="button button-quiet" type="button">切换身份</button>
+      <nav class="sidebar-nav" aria-label="主导航">
+        <a href="#/home" class="nav-item active" data-view="home">
+          <span class="nav-icon" aria-hidden="true">◆</span>
+          <span class="nav-label">问问 Agent</span>
+        </a>
+        <a href="#/library" class="nav-item" data-view="library">
+          <span class="nav-icon" aria-hidden="true">▤</span>
+          <span class="nav-label">知识库</span>
+        </a>
+        <a href="#/settings" class="nav-item" data-view="settings">
+          <span class="nav-icon" aria-hidden="true">⚙</span>
+          <span class="nav-label">个人设置</span>
+        </a>
+      </nav>
+
+      <div class="history-section" id="history-section">
+        <div class="history-header">
+          <span>会话历史</span>
+          <button class="history-clear" id="clear-history" type="button">清空</button>
+        </div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="user-card" id="user-card">
+        <div class="user-avatar" id="user-avatar">?</div>
+        <div class="user-info">
+          <div class="user-name" id="user-name">未选择身份</div>
+          <div class="user-status" id="user-status">点击选择演示身份</div>
+        </div>
+      </div>
+      <button class="logout-button" id="logout-button" type="button">切换身份</button>
+    </div>
+  </aside>
+
+  <main class="app-main">
+    <!-- 首页 / 问问 Agent -->
+    <section id="view-home" class="view view-home">
+      <div class="home-toolbar" id="home-toolbar">
+        <button type="button" class="home-new-chat" id="home-new-chat" title="开启新对话">
+          <span aria-hidden="true">＋</span>
+          <span>开启新对话</span>
+        </button>
+      </div>
+
+      <div class="home-conversation" id="home-conversation">
+        <div class="home-greeting" id="home-greeting">
+          <div class="home-logo">
+            <div class="home-logo-mark">107</div>
+            <div class="home-logo-badge">USTC Course Agent</div>
           </div>
         </div>
+      </div>
 
-        <div id="notice" class="notice hidden" role="status"></div>
-
-        <div class="grid-layout">
-          <section class="panel library-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Library</p>
-                <h3>资料库</h3>
+      <form id="home-query-form" class="home-input-wrap">
+        <div class="home-input-box">
+          <textarea
+            id="home-question"
+            rows="1"
+            maxlength="2000"
+            placeholder="有问题尽管问课程 Agent…"
+          ></textarea>
+          <div id="home-source-selector" class="home-source-selector hidden" aria-label="知识检索资料选择">
+            <div class="source-selector-header">
+              <span>知识检索资料</span>
+              <span id="home-source-count" class="muted">已选 0 份</span>
+            </div>
+            <div class="source-actions">
+              <button class="chip-button" type="button" data-home-source-action="daily">日常学习</button>
+              <button class="chip-button" type="button" data-home-source-action="exam">备考刷题</button>
+              <button class="chip-button" type="button" data-home-source-action="all">全部资料</button>
+              <button class="chip-button chip-button-quiet" type="button" data-home-source-action="clear">清空</button>
+            </div>
+            <div id="home-source-list" class="source-list"></div>
+          </div>
+          <div class="home-input-bar">
+            <div class="home-input-hints">
+              <div class="home-mode-switch" role="group" aria-label="问答模式">
+                <button type="button" class="home-mode-button active" data-home-mode="direct">直接问答</button>
+                <button type="button" class="home-mode-button" data-home-mode="retrieval">知识检索</button>
               </div>
-              <label class="button button-primary upload-button">
+              <span class="mode-pill" id="home-mode-label">直接问答</span>
+            </div>
+            <div class="home-input-actions">
+              <span class="home-current-model" id="home-current-model">当前模型：加载中…</span>
+              <button type="submit" class="send-button" id="home-send-button" aria-label="发送">
+                <span>→</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- 知识库 -->
+    <section id="view-library" class="view view-library hidden">
+      <div class="library-layout">
+        <!-- 左：空间列表 -->
+        <aside class="library-spaces">
+          <div class="library-spaces-header">
+            <h2>知识库</h2>
+            <button class="icon-button" id="refresh-spaces" title="刷新" type="button">↻</button>
+          </div>
+          <div class="space-tree">
+            <div class="space-tree-group">
+              <div class="space-tree-label">个人知识库</div>
+              <div id="personal-space-list" class="space-tree-list"></div>
+            </div>
+            <div class="space-tree-group">
+              <div class="space-tree-label">共享知识库</div>
+              <div id="shared-space-list" class="space-tree-list"></div>
+            </div>
+            <div class="space-tree-group">
+              <div class="space-tree-label">订阅知识库</div>
+              <div id="subscribed-space-list" class="space-tree-list"></div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 中：空间内容 -->
+        <section class="library-content">
+          <div class="library-content-header">
+            <div>
+              <div class="content-subtitle" id="library-space-type">个人知识库</div>
+              <h2 id="library-space-title">未选择空间</h2>
+            </div>
+            <div class="content-actions">
+              <label class="button button-primary upload-button" id="library-upload-btn">
                 上传 PDF
-                <input id="upload-input" type="file" accept="application/pdf,.pdf" hidden>
+                <input id="library-upload-input" type="file" accept="application/pdf,.pdf" hidden>
               </label>
             </div>
-            <div class="library-meta"><span id="document-count">0 份资料</span><span id="space-role" class="muted"></span></div>
-            <div id="document-list" class="document-list"></div>
-          </section>
+          </div>
+          <div class="library-meta-bar">
+            <span id="library-document-count">0 份资料</span>
+            <span id="library-space-role" class="muted"></span>
+          </div>
+          <div id="library-document-list" class="document-list">
+            <div class="empty-state-library">
+              <div class="empty-icon">▤</div>
+              <p>选择一个知识库空间查看资料</p>
+            </div>
+          </div>
+        </section>
 
-          <section class="panel ask-panel">
-            <div class="panel-header">
-              <div>
-                <p class="eyebrow">Review Desk</p>
-                <h3>复习问答</h3>
+        <!-- 右：问答 -->
+        <section class="library-chat">
+          <div class="library-chat-header">
+            <h3>基于知识库问答</h3>
+            <span class="mode-pill">知识库 Agent</span>
+          </div>
+
+          <div class="library-chat-scroll">
+            <div id="library-empty-hint" class="chat-empty-hint">
+              <div class="chat-empty-icon">◆</div>
+              <p>选择资料后，可基于知识库提问</p>
+            </div>
+
+            <div id="library-answer-area" class="answer-area hidden">
+              <div class="answer-header">
+                <span class="answer-title">回答</span>
+                <span class="mode-pill" id="library-answer-mode">直接问答</span>
               </div>
-              <div class="segment-control" role="radiogroup" aria-label="问答模式">
-                <label class="segment-option">
-                  <input type="radio" name="query-mode" value="direct" checked>
-                  <span>直接问答</span>
-                </label>
-                <label class="segment-option">
-                  <input type="radio" name="query-mode" value="retrieval">
-                  <span>使用课程资料</span>
-                </label>
+              <div id="library-answer-text" class="answer-text"></div>
+              <div id="library-citation-section" class="citation-section hidden">
+                <div class="citation-heading">引用来源</div>
+                <div id="library-citation-list" class="citation-list"></div>
               </div>
             </div>
-            <form id="query-form" class="query-form">
-              <label for="question">问题</label>
-              <textarea id="question" rows="5" maxlength="2000" placeholder="例如：一致连续和一致收敛有什么区别？"></textarea>
-              <section id="source-selector" class="source-selector hidden" aria-label="资料来源选择">
-                <div class="source-selector-header">
-                  <span>资料来源</span>
-                  <span id="source-count" class="muted">已选 0 份</span>
-                </div>
-                <div class="source-actions" aria-label="快捷选择">
-                  <button class="chip-button" type="button" data-source-action="daily">日常学习</button>
-                  <button class="chip-button" type="button" data-source-action="exam">备考刷题</button>
-                  <button class="chip-button" type="button" data-source-action="all">全部资料</button>
-                  <button class="chip-button chip-button-quiet" type="button" data-source-action="clear">清空选择</button>
-                </div>
-                <div id="source-list" class="source-list"></div>
-              </section>
-              <div class="query-footer">
-                <span id="query-status" class="muted">直接回答不会检索课程资料</span>
-                <button id="query-submit" class="button button-primary" type="submit">直接回答</button>
+
+            <section id="source-selector" class="source-selector hidden" aria-label="资料来源选择">
+              <div class="source-selector-header">
+                <span>资料来源</span>
+                <span id="source-count" class="muted">已选 0 份</span>
               </div>
-            </form>
-            <article id="answer-card" class="answer-card hidden">
-              <div class="answer-heading"><span>回答</span><span id="answer-mode" class="status-pill"></span></div>
-              <div id="answer-text" class="answer-text"></div>
-              <div id="citation-section" class="citation-section">
-                <div class="citation-heading">引用来源</div>
-                <div id="citation-list" class="citation-list"></div>
+              <div class="source-actions">
+                <button class="chip-button" type="button" data-source-action="daily">日常学习</button>
+                <button class="chip-button" type="button" data-source-action="exam">备考刷题</button>
+                <button class="chip-button" type="button" data-source-action="all">全部资料</button>
+                <button class="chip-button chip-button-quiet" type="button" data-source-action="clear">清空</button>
               </div>
-            </article>
-          </section>
+              <div id="source-list" class="source-list"></div>
+            </section>
+          </div>
+
+          <form id="library-query-form" class="library-query-form">
+            <textarea
+              id="library-question"
+              rows="1"
+              maxlength="2000"
+              placeholder="例如：一致连续和一致收敛有什么区别？"
+            ></textarea>
+            <div class="library-query-bar">
+              <span id="library-query-status" class="muted">将基于当前知识库资料回答</span>
+              <button id="library-query-submit" class="button button-primary" type="submit">回答</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view view-settings hidden">
+      <div class="settings-layout">
+        <aside class="settings-sidebar">
+          <h2>个人设置</h2>
+          <nav class="settings-nav">
+            <a class="settings-nav-item active" data-settings-tab="llm">模型服务</a>
+            <a class="settings-nav-item" data-settings-tab="about">关于</a>
+          </nav>
+        </aside>
+
+        <div class="settings-content">
+          <div id="settings-tab-llm" class="settings-tab">
+            <div class="settings-card">
+              <h3>LLM 服务配置</h3>
+              <p class="settings-desc">配置 OpenAI 兼容接口后，即可使用直接问答与资料检索增强功能。</p>
+              <form id="settings-form" class="settings-form">
+                <label class="field">
+                  <span>Base URL</span>
+                  <input type="url" id="setting-base-url" placeholder="https://api.openai.com/v1">
+                </label>
+                <label class="field">
+                  <span>API Key</span>
+                  <input type="password" id="setting-api-key" placeholder="sk-...">
+                  <span class="field-hint">留空表示保持现有密钥不变</span>
+                </label>
+                <label class="field">
+                  <span>模型名称</span>
+                  <input type="text" id="setting-model" placeholder="gpt-5.6-sol">
+                </label>
+                <label class="field">
+                  <span>超时时间（秒）</span>
+                  <input type="number" id="setting-timeout" min="5" max="300" step="1">
+                </label>
+                <div class="settings-actions">
+                  <button type="button" class="button button-secondary" id="settings-test">测试连接</button>
+                  <button type="submit" class="button button-primary">保存配置</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div id="settings-tab-about" class="settings-tab hidden">
+            <div class="settings-card">
+              <h3>关于课程复习 Agent</h3>
+              <p class="settings-desc">中国科学技术大学「一〇七」杯算力与智能体开发大赛参赛项目。</p>
+              <div class="about-info">
+                <div class="about-row"><span>版本</span><span id="about-version">-</span></div>
+                <div class="about-row"><span>健康状态</span><span id="about-health">检查中</span></div>
+                <div class="about-row"><span>模型配置</span><span id="about-model-status">-</span></div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
   </main>
+
+  <!-- 身份选择弹窗 -->
+  <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="login-title">选择演示身份</h2>
+        <p>登录后查看对应的个人空间与学习小组</p>
+      </div>
+      <div id="login-user-list" class="login-user-list"></div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden" role="status"></div>
+
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </body>

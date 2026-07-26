@@ -126,6 +126,33 @@ MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事�
 
 归档版本只用于回溯设计演进，不再作为当前实现依据。需要恢复时可从归档标签创建新分支，不应直接把旧文档复制回 `main`。
 
+### 语义化版本
+
+本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/) 规范，版本号格式为 `v<主版本>.<次版本>.<修订号>`。
+
+| 版本 | 标签 | 说明 |
+|------|------|------|
+| v0.1.0 | `3a2ee52` | 数学分析 B1 课程 Agent Demo 初始交付（PDF 导入、FTS5 检索、三类知识空间、引用回答） |
+| v0.1.1 | `d62e3fd` | 添加课程 Agent Demo 使用说明文档 |
+| v0.2.0 | `2b58c1c` | 课程回答支持安全 Markdown 渲染 |
+| v0.3.0 | `9e9cc74` | 课程公式使用本地 KaTeX 离线渲染 |
+| v0.4.0 | `f2341e7` | 支持可选课程资料来源切换 |
+| v0.4.1 | `56d118b` | 添加可复现的课程 Agent 部署与审计指南 |
+| v0.5.0 | `HEAD~1` | 引入可插拔架构协议（SearchBackend、DocumentParser、ChunkingStrategy、IndexWriter、Tokenizer），为向量检索、知识图谱、OCR 等后续升级预留扩展点 |
+| v0.6.0 | 当前 | 参考腾讯 ima 重写前端：新增问问 Agent 首页、知识库三栏视图、个人设置（LLM 前端配置） |
+
+**版本号同步位置**：
+- `apps/course-agent/course_agent/__init__.py` → `__version__`
+- `apps/course-agent/pyproject.toml` → `project.version`
+- `apps/course-agent/course_agent/main.py` → FastAPI `version`
+- Git 标签 → `git tag v<version>`
+
+**发版规则**：
+- 文档/样式修复 → PATCH（修订号 +1）
+- 新增功能、向后兼容 → MINOR（次版本号 +1）
+- 破坏性变更 → MAJOR（主版本号 +1，当前 0.x 阶段 MINOR 可承载）
+- 每次发版需同步更新上述 3 个代码位置，并创建对应 Git 标签
+
 ## 实施顺序
 
 1. 冻结三类知识空间、`AgentManifest`、`platform-chat-v1` 和错误码。

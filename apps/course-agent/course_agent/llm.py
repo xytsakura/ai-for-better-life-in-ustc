@@ -16,28 +16,57 @@ class LLMResult:
     degraded: bool
     model: str
     error_code: str | None = None
+    error_message: str | None = None
 
 
 class LLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def generate_direct(self, question: str) -> LLMResult:
-        instructions = (
-            "你是中国科学技术大学数学分析 B1 助教。可以直接回答一般数学分析学习问题，"
-            "但不要假装引用课程资料。若需要数学公式，行内公式必须使用 \\(...\\)，"
-            "单独成行的重要公式必须使用 \\[...\\]，不要使用美元符号包裹公式。"
-            "如果问题缺少必要条件，请先指出限制，再给出清晰解释。"
+    @staticmethod
+    def _sanitize_history(history: list[dict] | None) -> list[dict]:
+        if not history:
+            return []
+        sanitized: list[dict] = []
+        for message in history:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            content = message.get("content")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+            text = content.strip()
+            if len(text) > 4000:
+                text = text[:4000] + "…"
+            sanitized.append({"role": role, "content": text})
+        return sanitized
+
+    def generate_direct(
+        self,
+        question: str,
+        history: list[dict] | None = None,
+        system: str | None = None,
+    ) -> LLMResult:
+        instructions = system or (
+            "你是一个通用大模型助手，可以回答任何学科的一般问题。"
+            "在没有给定参考资料的情况下，根据你自己的知识回答，"
+            "不要假装引用任何课程资料。如果问题需要明确依据，请直接说明当前没有可引用的资料。"
+            "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
+            "不要使用美元符号包裹公式。"
         )
+        messages: list[dict] = [{"role": "system", "content": instructions}]
+        messages.extend(self._sanitize_history(history))
+        messages.append({"role": "user", "content": f"用户问题：\n{question}"})
         payload = {
             "model": self.settings.llm_model,
-            "instructions": instructions,
-            "input": f"用户问题：\n{question}",
-            "max_output_tokens": 1200,
+            "messages": messages,
+            "max_tokens": 1200,
         }
-        text, error_code = self._response_text(payload)
+        text, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._direct_degraded(error_code)
+            return self._direct_degraded(error_code, error_message)
         return LLMResult(
             answer=text or "",
             citation_ids=[],
@@ -45,10 +74,16 @@ class LLMAdapter:
             model=self.settings.llm_model,
         )
 
-    def generate(self, question: str, sources: list[SearchResult]) -> LLMResult:
+    def generate(
+        self,
+        question: str,
+        sources: list[SearchResult],
+        history: list[dict] | None = None,
+        system: str | None = None,
+    ) -> LLMResult:
         if not sources:
             return LLMResult(
-                answer="当前可访问的数学分析资料中没有找到足够依据。",
+                answer="当前可访问的知识库资料中没有找到足够依据，请补充或上传更多资料。",
                 citation_ids=[],
                 degraded=False,
                 model=self.settings.llm_model,
@@ -58,21 +93,29 @@ class LLMAdapter:
             f"{source.content[:1800]}\n</source>"
             for source in sources[:8]
         )
-        instructions = (
-            "你是中国科学技术大学数学分析 B1 复习助手。只能根据用户问题和给定资料回答，"
+        instructions = system or (
+            "你是当前知识库的专属 Agent。只能根据用户问题和下方给出的资料回答，"
             "不要补写资料中没有的结论。用简洁中文 Markdown 回答，并在事实后使用 [S1] 形式引用。"
-            "如果资料不足，明确说明当前资料中没有找到依据。若需要数学公式，行内公式必须使用 "
-            "\\(...\\)，单独成行的重要公式必须使用 \\[...\\]，不要使用美元符号包裹公式。"
+            "如果资料不足，明确说明当前知识库中没有找到依据。"
+            "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
+            "不要使用美元符号包裹公式。"
+        )
+        messages: list[dict] = [{"role": "system", "content": instructions}]
+        messages.extend(self._sanitize_history(history))
+        messages.append(
+            {
+                "role": "user",
+                "content": f"用户问题：\n{question}\n\n可用资料：\n{source_text}",
+            }
         )
         payload = {
             "model": self.settings.llm_model,
-            "instructions": instructions,
-            "input": f"用户问题：\n{question}\n\n可用资料：\n{source_text}",
-            "max_output_tokens": 1200,
+            "messages": messages,
+            "max_tokens": 1200,
         }
-        text, error_code = self._response_text(payload)
+        text, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._degraded(sources, error_code)
+            return self._degraded(sources, error_code, error_message)
         valid = {source.citation_id for source in sources}
         citation_ids: list[str] = []
 
@@ -93,11 +136,12 @@ class LLMAdapter:
             model=self.settings.llm_model,
         )
 
-    def _response_text(self, payload: dict) -> tuple[str | None, str | None]:
+    def _response_text(self, payload: dict) -> tuple[str | None, str | None, str | None]:
         if not self.settings.llm_configured:
-            return None, "llm_not_configured"
-        url = self.settings.llm_base_url.rstrip("/") + "/responses"
+            return None, "llm_not_configured", None
+        url = self.settings.llm_base_url.rstrip("/") + "/chat/completions"
         last_code = "llm_request_failed"
+        last_message = None
         for attempt in range(2):
             try:
                 with httpx.Client(timeout=self.settings.llm_timeout_seconds) as client:
@@ -113,20 +157,50 @@ class LLMAdapter:
                     continue
                 if response.status_code >= 400:
                     last_code = f"llm_http_{response.status_code}"
+                    last_message = self._error_message(response)
                     break
                 data = response.json()
                 text = self._extract_text(data).strip()
                 if not text:
-                    return None, "llm_empty_response"
-                return text, None
+                    return None, "llm_empty_response", None
+                return text, None, None
             except (httpx.HTTPError, ValueError):
                 last_code = "llm_network_or_parse_error"
                 if attempt == 0:
                     continue
-        return None, last_code
+        return None, last_code, last_message
+
+    @staticmethod
+    def _error_message(response: object) -> str | None:
+        if not isinstance(response, httpx.Response):
+            return None
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                return error["message"]
+            if isinstance(error, str):
+                return error
+        text = response.text.strip()
+        return text[:500] if text else None
 
     @staticmethod
     def _extract_text(data: dict) -> str:
+        for choice in data.get("choices", []) or []:
+            message = choice.get("message") or {}
+            if isinstance(message.get("content"), str):
+                text = message["content"].strip()
+                if text:
+                    return text
+            # Reasoning models (e.g. DeepSeek-V4-pro) may put the final answer in
+            # reasoning_content when the visible content is empty.
+            if isinstance(message.get("reasoning_content"), str):
+                text = message["reasoning_content"].strip()
+                if text:
+                    return text
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         parts: list[str] = []
@@ -136,9 +210,9 @@ class LLMAdapter:
                     parts.append(content["text"])
         if isinstance(data.get("text"), str):
             parts.append(data["text"])
-        return "\n".join(parts)
+        return "\n".join(parts).strip()
 
-    def _degraded(self, sources: list[SearchResult], error_code: str) -> LLMResult:
+    def _degraded(self, sources: list[SearchResult], error_code: str, error_message: str | None = None) -> LLMResult:
         citations = [source.citation_id for source in sources]
         lines = ["模型暂时不可用，以下是检索到的相关资料："]
         for source in sources:
@@ -149,15 +223,17 @@ class LLMAdapter:
             degraded=True,
             model=self.settings.llm_model,
             error_code=error_code,
+            error_message=error_message,
         )
 
-    def _direct_degraded(self, error_code: str) -> LLMResult:
+    def _direct_degraded(self, error_code: str, error_message: str | None = None) -> LLMResult:
         return LLMResult(
             answer="模型暂时不可用，请检查模型配置后重试。",
             citation_ids=[],
             degraded=True,
             model=self.settings.llm_model,
             error_code=error_code,
+            error_message=error_message,
         )
 
 
@@ -168,20 +244,36 @@ class FakeLLMAdapter(LLMAdapter):
         self.direct_calls = 0
         self.retrieval_calls = 0
 
-    def generate_direct(self, question: str) -> LLMResult:
+    def generate_direct(
+        self,
+        question: str,
+        history: list[dict] | None = None,
+        system: str | None = None,
+    ) -> LLMResult:
         self.direct_calls += 1
         return LLMResult(
-            answer=self.answer or f"这是 direct 模式的数学分析回答：{question}",
+            answer=self.answer or f"[通用模型] {question}",
             citation_ids=[],
             degraded=False,
             model="fake-test-model",
         )
 
-    def generate(self, question: str, sources: list[SearchResult]) -> LLMResult:
+    def generate(
+        self,
+        question: str,
+        sources: list[SearchResult],
+        history: list[dict] | None = None,
+        system: str | None = None,
+    ) -> LLMResult:
         self.retrieval_calls += 1
         if not sources:
-            return super().generate(question, sources)
-        answer = self.answer or f"根据检索到的资料，可以从相关页面继续复习。[{sources[0].citation_id}]"
+            return LLMResult(
+                answer="当前可访问的知识库资料中没有找到足够依据。",
+                citation_ids=[],
+                degraded=False,
+                model="fake-test-model",
+            )
+        answer = self.answer or f"[{system or '知识库 Agent'}] {question} [{sources[0].citation_id}]"
         return LLMResult(
             answer=answer,
             citation_ids=[sources[0].citation_id],

@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -19,18 +19,29 @@ from .db import database, healthcheck, init_database
 from .ingestion import (
     DocumentMetadata,
     DuplicateDocument,
+    FTS5IndexWriter,
     IngestionError,
+    PyMuPDFParser,
+    SentenceChunking,
     delete_document,
     document_details,
     ingest_pdf,
     reparse_document,
 )
 from .llm import LLMAdapter
-from .retrieval import accessible_document_ids, search
+from .retrieval import FTS5SearchBackend, SearchResult, accessible_document_ids, search
+from .tokenizer import JiebaTokenizer
 
 
 class SessionRequest(BaseModel):
     user_id: str
+
+
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant", "system"]
+    content: str = Field(min_length=1, max_length=20000)
 
 
 class QueryRequest(BaseModel):
@@ -40,10 +51,58 @@ class QueryRequest(BaseModel):
     mode: Literal["direct", "retrieval"] = "direct"
     document_ids: list[str] = Field(default_factory=list, max_length=100)
     top_k: int = Field(default=5, ge=1, le=8)
+    messages: list[ChatMessage] = Field(default_factory=list, max_length=40)
+    scope: Optional[Literal["general", "knowledge_base"]] = None
+    space_id: Optional[str] = Field(default=None, max_length=100)
+
+
+class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_timeout_seconds: Optional[float] = Field(default=None, ge=5, le=300)
+    search_backend: Optional[str] = None
+    parser_backend: Optional[str] = None
+    chunking_backend: Optional[str] = None
+    tokenizer_backend: Optional[str] = None
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict:
     return {"error": {"code": code, "message": message, "retryable": retryable}}
+
+
+def _general_direct_prompt() -> str:
+    return (
+        "你是一个通用大模型助手，可以回答任何学科的一般问题。"
+        "在没有给定参考资料的情况下，根据你自己的知识回答，"
+        "不要假装引用任何课程资料。如果问题需要明确依据，请直接说明当前没有可引用的资料。"
+        "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
+        "不要使用美元符号包裹公式。"
+    )
+
+
+def _space_agent_prompt(space_name: str, document_count: int) -> str:
+    safe_name = space_name.strip() or "当前知识库"
+    return (
+        f"你是「{safe_name}」知识库的专属 Agent，下面会同时提供该知识库中可用的资料（共 {document_count} 份）。"
+        "在回答时必须以该知识库的资料为依据，"
+        "不要编造资料中没有出现的结论；"
+        "若资料不足，请明确说明当前知识库中找不到依据，并提示用户补充或上传资料。"
+        "用简洁中文 Markdown 回答，并在事实后用 [S1] 形式标注引用编号，"
+        "对应顺序与下方「可用资料」一致。"
+        "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
+        "不要使用美元符号包裹公式。"
+    )
+
+
+def _document_in_space(conn: Any, document_id: str, space_id: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM documents WHERE id = ? AND space_id = ? AND status = 'active'",
+        (document_id, space_id),
+    ).fetchone()
+    return row is not None
 
 
 def _clean_document_ids(document_ids: list[str]) -> list[str]:
@@ -66,9 +125,19 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="USTC Course Agent", version="0.1.0")
+    app = FastAPI(title="USTC Course Agent", version="0.6.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
+
+    # ---- Pluggable components (swap via Settings in the future) ---------
+    app.state.search_backend = FTS5SearchBackend()
+    app.state.document_parser = PyMuPDFParser()
+    app.state.chunking_strategy = SentenceChunking()
+    app.state.index_writer = FTS5IndexWriter()
+    app.state.tokenizer = JiebaTokenizer()
+    # Future upgrades: replace any of the above with alternative
+    # implementations that satisfy their respective protocols from .types
+    # --------------------------------------------------------------------
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.session_secret,
@@ -97,6 +166,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         return JSONResponse(
             status_code=422,
             content=_error("validation_error", str(exc.errors()), False),
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:
+        # Ensure any unexpected server error is returned as JSON (not an HTML
+        # traceback) so the frontend can surface a readable message.
+        return JSONResponse(
+            status_code=500,
+            content=_error("internal_error", str(exc) or exc.__class__.__name__, False),
         )
 
     @contextmanager
@@ -144,7 +222,13 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.get("/api/health")
     def api_health() -> dict:
-        return {**healthcheck(settings), "llm_configured": settings.llm_configured}
+        from . import __version__
+
+        return {
+            **healthcheck(settings),
+            "llm_configured": settings.llm_configured,
+            "version": __version__,
+        }
 
     @app.get("/api/users")
     def users() -> dict:
@@ -215,8 +299,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         title: str = Form(...),
         material_type: str = Form("课程资料"),
         license_status: str = Form("private-team-use"),
-        semester: str | None = Form(None),
-        source_url: str | None = Form(None),
+        semester: Optional[str] = Form(None),
+        source_url: Optional[str] = Form(None),
         user_id: str = Depends(current_user),
     ) -> dict:
         with get_db() as conn:
@@ -296,46 +380,122 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
         return dict(page)
 
+    @app.get("/api/settings")
+    def get_settings(user_id: str = Depends(current_user)) -> dict:
+        return app.state.settings.to_safe_dict()
+
+    @app.post("/api/settings")
+    def update_settings(payload: SettingsUpdate, user_id: str = Depends(current_user)) -> dict:
+        try:
+            app.state.settings.update_from_dict(payload.model_dump(exclude_unset=True))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=_error("bad_settings", str(exc)))
+        try:
+            app.state.settings.save()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=_error("settings_save_failed", f"无法写入配置文件：{exc}"),
+            )
+        app.state.llm = LLMAdapter(app.state.settings)
+        return app.state.settings.to_safe_dict()
+
+    @app.post("/api/settings/test")
+    def test_settings(user_id: str = Depends(current_user)) -> dict:
+        adapter = LLMAdapter(app.state.settings)
+        result = adapter.generate_direct("你好，请回复“配置测试成功”即可。")
+        return {
+            "ok": not result.degraded,
+            "model": result.model,
+            "degraded": result.degraded,
+            "model_error": (
+                {"code": result.error_code, "message": result.error_message}
+                if result.error_code
+                else None
+            ),
+        }
+
     @app.post("/api/query")
     def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
+        history = [m.model_dump() for m in payload.messages]
+        scope = payload.scope or ("knowledge_base" if payload.mode == "retrieval" else "general")
         if payload.mode == "direct":
-            llm_result = app.state.llm.generate_direct(payload.question)
+            if scope != "general":
+                raise HTTPException(
+                    status_code=422,
+                    detail=_error("invalid_scope", "direct 模式仅适用于通用模型，请进入知识库后提问"),
+                )
+            system = _general_direct_prompt()
+            llm_result = app.state.llm.generate_direct(
+                payload.question, history=history, system=system
+            )
             return {
                 "answer": llm_result.answer,
                 "mode": "direct",
+                "scope": "general",
                 "degraded": llm_result.degraded,
                 "model": llm_result.model,
                 "retrieval_count": 0,
                 "citations": [],
-                "model_error": {"code": llm_result.error_code} if llm_result.error_code else None,
+                "model_error": (
+                    {"code": llm_result.error_code, "message": llm_result.error_message}
+                    if llm_result.error_code
+                    else None
+                ),
             }
+
+        if scope != "knowledge_base":
+            raise HTTPException(
+                status_code=422,
+                detail=_error("invalid_scope", "知识库提问必须进入对应知识空间后发起"),
+            )
+        if not payload.space_id:
+            raise HTTPException(
+                status_code=422,
+                detail=_error("missing_space_id", "请先选择一个知识库空间再提问"),
+            )
 
         document_ids = _clean_document_ids(payload.document_ids)
         if not document_ids:
             raise HTTPException(
                 status_code=422,
-                detail=_error("missing_document_ids", "retrieval 模式必须选择至少一个文档"),
+                detail=_error("missing_document_ids", "知识库提问必须基于至少一份资料"),
             )
         with get_db() as conn:
+            space = require_space(conn, user_id, payload.space_id)
             allowed_documents = accessible_document_ids(conn, user_id, document_ids)
             if set(document_ids) != allowed_documents:
                 raise HTTPException(
                     status_code=404,
                     detail=_error("document_not_found", "资料不存在、已删除或当前用户不可访问"),
                 )
+            if not all(_document_in_space(conn, doc_id, payload.space_id) for doc_id in document_ids):
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error("document_not_in_space", "所选资料不属于当前知识库"),
+                )
             results = search(conn, user_id, payload.question, document_ids, payload.top_k)
-        llm_result = app.state.llm.generate(payload.question, results)
+        system = _space_agent_prompt(space["name"], len(allowed_documents))
+        llm_result = app.state.llm.generate(
+            payload.question, results, history=history, system=system
+        )
         source_map = {item.citation_id: item.as_dict() for item in results}
         citation_ids = llm_result.citation_ids or ([] if not llm_result.degraded else list(source_map))
         citations = [source_map[item] for item in citation_ids if item in source_map]
         return {
             "answer": llm_result.answer,
             "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": payload.space_id,
             "degraded": llm_result.degraded,
             "model": llm_result.model,
             "retrieval_count": len(results),
             "citations": citations,
-            "model_error": {"code": llm_result.error_code} if llm_result.error_code else None,
+            "model_error": (
+                {"code": llm_result.error_code, "message": llm_result.error_message}
+                if llm_result.error_code
+                else None
+            ),
         }
 
     @app.get("/", response_class=FileResponse)

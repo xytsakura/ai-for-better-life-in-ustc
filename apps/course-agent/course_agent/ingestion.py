@@ -1,3 +1,26 @@
+"""Document ingestion pipeline: parse, chunk, deduplicate, and index.
+
+Public API (stable):
+    DocumentMetadata   -- metadata for a document being ingested.
+    IngestionError     -- base error for ingestion failures.
+    DuplicateDocument  -- raised when a SHA-256 duplicate is detected.
+
+    PyMuPDFParser      -- default PDF parser, satisfies DocumentParserProto.
+    SentenceChunking   -- default chunking strategy, satisfies ChunkingStrategyProto.
+    FTS5IndexWriter    -- default index writer, satisfies IndexWriterProto.
+
+    ingest_pdf         -- backward-compatible wrapper.
+    delete_document    -- backward-compatible wrapper.
+    reparse_document   -- backward-compatible wrapper.
+    document_details   -- backward-compatible wrapper.
+    validate_pdf / file_sha256 / classify_page / chunk_page / extract_pdf
+                       -- legacy module-level functions, kept for test compatibility.
+
+To swap parsers, provide a DocumentParserProto implementation.
+To swap chunking, provide a ChunkingStrategyProto implementation.
+To swap index writing (e.g. vector DB), provide an IndexWriterProto implementation.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -12,10 +35,18 @@ import fitz
 
 from .config import Settings
 from .tokenizer import normalize_text, tokenize_for_search
+from .types import (
+    ChunkRecord,
+    ChunkingStrategyProto,
+    DocumentParserProto,
+    IndexWriterProto,
+    PageRecord,
+    ParseCounts,
+    ParseOutput,
+)
 
 
-PARSER_VERSION = "pymupdf-pages-v1"
-
+# ---- Errors -----------------------------------------------------------
 
 class IngestionError(Exception):
     pass
@@ -26,6 +57,8 @@ class DuplicateDocument(IngestionError):
         super().__init__("duplicate document")
         self.document_id = document_id
 
+
+# ---- Document metadata ------------------------------------------------
 
 @dataclass(frozen=True)
 class DocumentMetadata:
@@ -38,6 +71,8 @@ class DocumentMetadata:
     source_type: str = "team-material"
 
 
+# ---- Utilities --------------------------------------------------------
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -46,19 +81,8 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_pdf(path: Path, settings: Settings) -> None:
-    if not path.is_file():
-        raise IngestionError("file not found")
-    if path.suffix.lower() != ".pdf":
-        raise IngestionError("only PDF files are supported")
-    if path.stat().st_size > settings.max_upload_bytes:
-        raise IngestionError("file exceeds 50 MiB limit")
-    with path.open("rb") as handle:
-        if handle.read(5) != b"%PDF-":
-            raise IngestionError("file content is not a PDF")
-
-
 def classify_page(text: str) -> str:
+    """Classify a parsed page as text_ok, needs_ocr, needs_review, or failed."""
     normalized = normalize_text(text)
     if len(normalized.replace(" ", "")) < 30:
         return "needs_ocr"
@@ -73,24 +97,132 @@ def classify_page(text: str) -> str:
     return "text_ok"
 
 
-def chunk_page(text: str, max_chars: int = 1800, overlap: int = 180) -> list[str]:
-    normalized = normalize_text(text)
-    if not normalized:
-        return []
-    chunks: list[str] = []
-    start = 0
-    while start < len(normalized):
-        end = min(len(normalized), start + max_chars)
-        if end < len(normalized):
-            boundary = max(normalized.rfind(mark, start, end) for mark in ("。", "；", "\n", " "))
-            if boundary > start + max_chars // 2:
-                end = boundary + 1
-        chunks.append(normalized[start:end].strip())
-        if end >= len(normalized):
-            break
-        start = max(start + 1, end - overlap)
-    return [chunk for chunk in chunks if chunk]
+# ---- Chunking strategy ------------------------------------------------
 
+class SentenceChunking:
+    """Default chunking: split at sentence boundaries within character limits.
+
+    Satisfies ChunkingStrategyProto.
+    """
+
+    @staticmethod
+    def chunk(text: str, max_chars: int = 1800, overlap: int = 180) -> list[str]:
+        normalized = normalize_text(text)
+        if not normalized:
+            return []
+        chunks: list[str] = []
+        start = 0
+        while start < len(normalized):
+            end = min(len(normalized), start + max_chars)
+            if end < len(normalized):
+                boundary = max(
+                    normalized.rfind(mark, start, end) for mark in ("。", "；", "\n", " ")
+                )
+                if boundary > start + max_chars // 2:
+                    end = boundary + 1
+            chunks.append(normalized[start:end].strip())
+            if end >= len(normalized):
+                break
+            start = max(start + 1, end - overlap)
+        return [c for c in chunks if c]
+
+
+def chunk_page(text: str, max_chars: int = 1800, overlap: int = 180) -> list[str]:
+    """Backward-compatible wrapper."""
+    return SentenceChunking.chunk(text, max_chars, overlap)
+
+
+# ---- PDF parser -------------------------------------------------------
+
+class PyMuPDFParser:
+    """Default PDF parser using PyMuPDF.
+
+    Satisfies DocumentParserProto.
+    """
+
+    PARSER_VERSION = "pymupdf-pages-v1"
+
+    @property
+    def version(self) -> str:
+        return self.PARSER_VERSION
+
+    @staticmethod
+    def validate(path: Path, max_bytes: int) -> None:
+        if not path.is_file():
+            raise IngestionError("file not found")
+        if path.suffix.lower() != ".pdf":
+            raise IngestionError("only PDF files are supported")
+        if path.stat().st_size > max_bytes:
+            raise IngestionError("file exceeds 50 MiB limit")
+        with path.open("rb") as handle:
+            if handle.read(5) != b"%PDF-":
+                raise IngestionError("file content is not a PDF")
+
+    @staticmethod
+    def extract(path: Path, revision_id: str) -> ParseOutput:
+        pages: list[PageRecord] = []
+        chunks: list[ChunkRecord] = []
+        counts = ParseCounts()
+        pdf = fitz.open(path)
+        for page_index in range(len(pdf)):
+            page_number = page_index + 1
+            page_id = str(uuid.uuid4())
+            try:
+                text = pdf[page_index].get_text("text")
+                status = classify_page(text)
+            except Exception:
+                text = ""
+                status = "failed"
+            setattr(counts, status, getattr(counts, status) + 1)
+            pages.append(PageRecord(page_id, revision_id, page_number, status, text))
+            if status != "text_ok":
+                continue
+            for ordinal, content in enumerate(SentenceChunking.chunk(text)):
+                chunk_id = str(uuid.uuid4())
+                chunks.append(
+                    ChunkRecord(
+                        chunk_id, revision_id, page_number,
+                        ordinal, content, tokenize_for_search(content),
+                    )
+                )
+        pdf.close()
+        return ParseOutput(pages=pages, chunks=chunks, counts=counts)
+
+
+# ---- FTS5 index writer ------------------------------------------------
+
+class FTS5IndexWriter:
+    """Write parsed chunks into SQLite FTS5 virtual table.
+
+    Satisfies IndexWriterProto.
+    """
+
+    @staticmethod
+    def write_chunks(conn: sqlite3.Connection, chunk_rows: list[tuple]) -> None:
+        conn.executemany(
+            "INSERT INTO chunk_fts(chunk_id, search_text) VALUES (?, ?)",
+            ((row[0], row[5]) for row in chunk_rows),
+        )
+
+    @staticmethod
+    def delete_chunks(conn: sqlite3.Connection, chunk_ids: list[str]) -> None:
+        if chunk_ids:
+            conn.executemany(
+                "DELETE FROM chunk_fts WHERE chunk_id = ?",
+                ((item,) for item in chunk_ids),
+            )
+
+
+# ---- Legacy module-level references -----------------------------------
+
+PARSER_VERSION = PyMuPDFParser.PARSER_VERSION
+
+_default_parser = PyMuPDFParser()
+_default_chunker = SentenceChunking()
+_default_index_writer = FTS5IndexWriter()
+
+
+# ---- Document ingestion -----------------------------------------------
 
 def _active_duplicate(conn: sqlite3.Connection, space_id: str, content_hash: str) -> str | None:
     row = conn.execute(
@@ -104,30 +236,73 @@ def _active_duplicate(conn: sqlite3.Connection, space_id: str, content_hash: str
 
 
 def extract_pdf(path: Path, revision_id: str) -> tuple[list[tuple], list[tuple], dict[str, int]]:
-    page_rows: list[tuple] = []
-    chunk_rows: list[tuple] = []
-    counts = {"text_ok": 0, "needs_ocr": 0, "needs_review": 0, "failed": 0}
-    pdf = fitz.open(path)
-    for page_index in range(len(pdf)):
-        page_number = page_index + 1
-        page_id = str(uuid.uuid4())
-        try:
-            text = pdf[page_index].get_text("text")
-            status = classify_page(text)
-        except Exception:
-            text = ""
-            status = "failed"
-        counts[status] += 1
-        page_rows.append((page_id, revision_id, page_number, status, text))
-        if status != "text_ok":
-            continue
-        for ordinal, content in enumerate(chunk_page(text)):
-            chunk_id = str(uuid.uuid4())
-            chunk_rows.append(
-                (chunk_id, revision_id, page_number, ordinal, content, tokenize_for_search(content))
-            )
-    pdf.close()
-    return page_rows, chunk_rows, counts
+    """Backward-compatible wrapper; delegates to PyMuPDFParser."""
+    output = _default_parser.extract(path, revision_id)
+    return output.as_db_rows()
+
+
+def _write_ingestion_records(
+    conn: sqlite3.Connection,
+    metadata: DocumentMetadata,
+    document_id: str,
+    source_id: str,
+    space_id: str,
+    stored_path: Path,
+    content_hash: str,
+    parse_output: ParseOutput,
+    copy_to_uploads: bool,
+    revision_id: str,
+) -> None:
+    """Write all ingestion records inside a single transaction."""
+    page_rows, chunk_rows, counts = parse_output.as_db_rows()
+    parse_status = "ready" if counts["text_ok"] else "needs_ocr"
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """INSERT INTO sources
+               (id, source_type, source_url, license_status, access_mode)
+               VALUES (?, ?, ?, ?, 'private-team-use')""",
+            (source_id, metadata.source_type, metadata.source_url, metadata.license_status),
+        )
+        conn.execute(
+            """INSERT INTO documents
+               (id, space_id, source_id, title, course, semester, material_type,
+                file_path, is_repo_source, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+            (
+                document_id, space_id, source_id, metadata.title, metadata.course,
+                metadata.semester, metadata.material_type, str(stored_path),
+                0 if copy_to_uploads else 1,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO revisions
+               (id, document_id, content_hash, parser_version, page_count,
+                searchable_pages, needs_ocr_pages, needs_review_pages, failed_pages,
+                parse_status, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+            (
+                revision_id, document_id, content_hash, _default_parser.version,
+                ParseCounts(**counts).total, counts["text_ok"],
+                counts["needs_ocr"], counts["needs_review"], counts["failed"],
+                parse_status,
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO pages(id, revision_id, page_number, status, content) VALUES (?, ?, ?, ?, ?)",
+            page_rows,
+        )
+        conn.executemany(
+            """INSERT INTO chunks
+               (id, revision_id, page_number, ordinal, content, search_text)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            chunk_rows,
+        )
+        _default_index_writer.write_chunks(conn, chunk_rows)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def ingest_pdf(
@@ -139,8 +314,9 @@ def ingest_pdf(
     *,
     copy_to_uploads: bool = False,
 ) -> dict:
+    """Backward-compatible ingestion entry point."""
     path = path.resolve()
-    validate_pdf(path, settings)
+    _default_parser.validate(path, settings.max_upload_bytes)
     content_hash = file_sha256(path)
     duplicate = _active_duplicate(conn, space_id, content_hash)
     if duplicate:
@@ -155,74 +331,18 @@ def ingest_pdf(
         shutil.copy2(path, stored_path)
 
     try:
-        page_rows, chunk_rows, counts = extract_pdf(stored_path, revision_id)
+        parse_output = _default_parser.extract(stored_path, revision_id)
     except Exception as exc:
         if copy_to_uploads and stored_path.exists():
             stored_path.unlink(missing_ok=True)
         raise IngestionError(f"PDF parse failed: {exc}") from exc
 
-    parse_status = "ready" if counts["text_ok"] else "needs_ocr"
     try:
-        conn.execute("BEGIN")
-        conn.execute(
-            """INSERT INTO sources
-               (id, source_type, source_url, license_status, access_mode)
-               VALUES (?, ?, ?, ?, 'private-team-use')""",
-            (source_id, metadata.source_type, metadata.source_url, metadata.license_status),
+        _write_ingestion_records(
+            conn, metadata, document_id, source_id, space_id, stored_path,
+            content_hash, parse_output, copy_to_uploads, revision_id,
         )
-        conn.execute(
-            """INSERT INTO documents
-               (id, space_id, source_id, title, course, semester, material_type,
-                file_path, is_repo_source, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
-            (
-                document_id,
-                space_id,
-                source_id,
-                metadata.title,
-                metadata.course,
-                metadata.semester,
-                metadata.material_type,
-                str(stored_path),
-                0 if copy_to_uploads else 1,
-            ),
-        )
-        conn.execute(
-            """INSERT INTO revisions
-               (id, document_id, content_hash, parser_version, page_count,
-                searchable_pages, needs_ocr_pages, needs_review_pages, failed_pages,
-                parse_status, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
-            (
-                revision_id,
-                document_id,
-                content_hash,
-                PARSER_VERSION,
-                sum(counts.values()),
-                counts["text_ok"],
-                counts["needs_ocr"],
-                counts["needs_review"],
-                counts["failed"],
-                parse_status,
-            ),
-        )
-        conn.executemany(
-            "INSERT INTO pages(id, revision_id, page_number, status, content) VALUES (?, ?, ?, ?, ?)",
-            page_rows,
-        )
-        conn.executemany(
-            """INSERT INTO chunks
-               (id, revision_id, page_number, ordinal, content, search_text)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            chunk_rows,
-        )
-        conn.executemany(
-            "INSERT INTO chunk_fts(chunk_id, search_text) VALUES (?, ?)",
-            ((row[0], row[5]) for row in chunk_rows),
-        )
-        conn.commit()
     except Exception:
-        conn.rollback()
         if copy_to_uploads and stored_path.exists():
             stored_path.unlink(missing_ok=True)
         raise
@@ -262,8 +382,7 @@ def delete_document(conn: sqlite3.Connection, document_id: str) -> None:
         )
     ]
     conn.execute("BEGIN")
-    if chunk_ids:
-        conn.executemany("DELETE FROM chunk_fts WHERE chunk_id = ?", ((item,) for item in chunk_ids))
+    _default_index_writer.delete_chunks(conn, chunk_ids)
     conn.execute(
         "DELETE FROM chunks WHERE revision_id IN (SELECT id FROM revisions WHERE document_id = ?)",
         (document_id,),
@@ -295,11 +414,13 @@ def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: 
     if not row:
         raise IngestionError("document not found")
     path = Path(row["file_path"])
-    validate_pdf(path, settings)
+    _default_parser.validate(path, settings.max_upload_bytes)
     new_revision_id = str(uuid.uuid4())
     content_hash = file_sha256(path)
-    page_rows, chunk_rows, counts = extract_pdf(path, new_revision_id)
+    parse_output = _default_parser.extract(path, new_revision_id)
+    page_rows, chunk_rows, counts = parse_output.as_db_rows()
     parse_status = "ready" if counts["text_ok"] else "needs_ocr"
+
     old_revision_ids = [
         str(item["id"])
         for item in conn.execute(
@@ -311,11 +432,13 @@ def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: 
         marks = ",".join("?" for _ in old_revision_ids)
         old_chunk_ids = [
             str(item["id"])
-            for item in conn.execute(f"SELECT id FROM chunks WHERE revision_id IN ({marks})", old_revision_ids)
+            for item in conn.execute(
+                f"SELECT id FROM chunks WHERE revision_id IN ({marks})", old_revision_ids
+            )
         ]
+
     conn.execute("BEGIN")
-    if old_chunk_ids:
-        conn.executemany("DELETE FROM chunk_fts WHERE chunk_id = ?", ((item,) for item in old_chunk_ids))
+    _default_index_writer.delete_chunks(conn, old_chunk_ids)
     conn.execute(
         "DELETE FROM chunks WHERE revision_id IN (SELECT id FROM revisions WHERE document_id = ?)",
         (document_id,),
@@ -324,7 +447,10 @@ def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: 
         "DELETE FROM pages WHERE revision_id IN (SELECT id FROM revisions WHERE document_id = ?)",
         (document_id,),
     )
-    conn.execute("UPDATE revisions SET status = 'superseded' WHERE document_id = ? AND status = 'active'", (document_id,))
+    conn.execute(
+        "UPDATE revisions SET status = 'superseded' WHERE document_id = ? AND status = 'active'",
+        (document_id,),
+    )
     conn.execute(
         """INSERT INTO revisions
            (id, document_id, content_hash, parser_version, page_count,
@@ -332,15 +458,9 @@ def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: 
             parse_status, status)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
         (
-            new_revision_id,
-            document_id,
-            content_hash,
-            PARSER_VERSION,
-            sum(counts.values()),
-            counts["text_ok"],
-            counts["needs_ocr"],
-            counts["needs_review"],
-            counts["failed"],
+            new_revision_id, document_id, content_hash, _default_parser.version,
+            ParseCounts(**counts).total, counts["text_ok"],
+            counts["needs_ocr"], counts["needs_review"], counts["failed"],
             parse_status,
         ),
     )
@@ -354,9 +474,6 @@ def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: 
            VALUES (?, ?, ?, ?, ?, ?)""",
         chunk_rows,
     )
-    conn.executemany(
-        "INSERT INTO chunk_fts(chunk_id, search_text) VALUES (?, ?)",
-        ((row[0], row[5]) for row in chunk_rows),
-    )
+    _default_index_writer.write_chunks(conn, chunk_rows)
     conn.commit()
     return document_details(conn, document_id)
