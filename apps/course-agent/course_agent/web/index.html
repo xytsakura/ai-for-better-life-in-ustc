@@ -53,6 +53,14 @@
       <button class="logout-button" id="logout-button" type="button">切换身份</button>
     </div>
   </aside>
+  <div
+    class="resize-handle resize-vertical"
+    data-resize="sidebar"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="拖动调整侧边栏宽度"
+    tabindex="0"
+  ></div>
 
   <main class="app-main">
     <!-- 首页 / 问问 Agent -->
@@ -138,6 +146,15 @@
           </div>
         </aside>
 
+        <div
+          class="resize-handle resize-vertical"
+          data-resize="librarySpaces"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整知识库空间列表宽度"
+          tabindex="0"
+        ></div>
+
         <!-- 中：空间内容 -->
         <section class="library-content">
           <div class="library-content-header">
@@ -163,6 +180,15 @@
             </div>
           </div>
         </section>
+
+        <div
+          class="resize-handle resize-vertical"
+          data-resize="libraryChat"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="拖动调整问答栏宽度"
+          tabindex="0"
+        ></div>
 
         <!-- 右：问答 -->
         <section class="library-chat">

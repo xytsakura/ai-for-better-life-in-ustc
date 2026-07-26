@@ -37,10 +37,21 @@
 ### 修复
 - 修复 pytest 在 Python 3.9 环境下收集阶段失败的问题：`QueryRequest` 的 `scope` 与 `space_id` 字段由 PEP 604 联合注解（`Literal[...] | None`、`str | None`）改为 `typing.Optional[...]`，使 Pydantic 在 Python 3.9 可正常求值；其余 `@dataclass` 字段与函数签名因已使用 `from __future__ import annotations` 不受影响。
 
+### 新增（四面板边界可拉伸）
+- **侧边栏 / 知识库空间列表 / 文档列表 / 问答栏** 之间的边界均可拖拽调整宽度，带最大最小限制：
+  - 侧边栏：200–400px（默认 260px）
+  - 知识库空间列表：200–380px（默认 260px）
+  - 问答栏：320–720px（默认 420px）
+- **持久化**：拖拽后的宽度会保存到 `localStorage`，刷新或重新登录后保留。
+- **键盘可访问**：聚焦分隔条后可用 `← / →` 微调（`Shift` 加大步长）。
+- **触屏支持**：兼容移动设备触屏拖拽。
+- **拖拽过程**：拖动时全局锁定文本选择与光标为 `col-resize`，避免误选文字。
+- **响应式**：窄屏下分隔条按既有断点自动隐藏，避免布局冲突。
+
 ## 改动文件
-- `course_agent/web/index.html`：首页结构调整（移除快捷卡片，改为会话区 + 底部输入框 + 新对话按钮）；新增模式切换按钮、知识检索资料选择面板与当前模型显示节点。
-- `course_agent/web/styles.css`：聊天气泡、会话历史项、操作菜单与置顶/高亮样式；模式切换、资料选择面板、当前模型标识样式。
-- `course_agent/web/app.js`：多轮状态管理、会话历史增删改查、点击恢复、模式记忆；模式状态管理、资料选择同步、当前模型加载与刷新、历史模式恢复。
+- `course_agent/web/index.html`：首页结构调整（移除快捷卡片，改为会话区 + 底部输入框 + 新对话按钮）；新增模式切换按钮、知识检索资料选择面板与当前模型显示节点；在侧边栏与主区、空间列表与文档列表、文档列表与问答栏之间插入 3 条可拖拽分隔条。
+- `course_agent/web/styles.css`：聊天气泡、会话历史项、操作菜单与置顶/高亮样式；模式切换、资料选择面板、当前模型标识样式；面板宽度 CSS 变量（`--library-spaces-width`、`--library-chat-width`、`--resize-handle-size`）、分隔条可视化与拖拽光标/选中文本锁定、`.library-layout` 网格改用变量化列宽、各面板 `min-width: 0`、响应式断点中同步隐藏分隔条。
+- `course_agent/web/app.js`：多轮状态管理、会话历史增删改查、点击恢复、模式记忆；模式状态管理、资料选择同步、当前模型加载与刷新、历史模式恢复；面板分隔条拖拽/键盘/触屏交互、`clamp()` 边界限制、`localStorage` 持久化（`course-agent:panel-width:*`）。
 - `course_agent/main.py`：`QueryRequest` 增加 `messages` 字段并透传 `history`；`QueryRequest.scope` / `space_id` 字段改为 `Optional[...]`（兼容 Python 3.9），并在请求返回后用实际模型名刷新前端展示。
 - `course_agent/llm.py`：`generate_direct` / `generate` 支持 `history`，新增 `_sanitize_history()`。
 - `tests/test_llm.py`：多轮历史拼接与过滤测试。

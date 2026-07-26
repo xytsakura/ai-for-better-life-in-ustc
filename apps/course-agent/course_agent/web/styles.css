@@ -38,6 +38,9 @@
   --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.5);
 
   --sidebar-width: 260px;
+  --library-spaces-width: 260px;
+  --library-chat-width: 420px;
+  --resize-handle-size: 4px;
   --font: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -87,6 +90,48 @@ textarea {
   background: var(--bg-2);
   border-right: 1px solid var(--border-1);
   flex-shrink: 0;
+}
+
+/* ---------- Resize handles ---------- */
+.resize-handle {
+  flex-shrink: 0;
+  position: relative;
+  width: var(--resize-handle-size);
+  cursor: col-resize;
+  background: transparent;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+  outline: none;
+}
+.resize-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: var(--border-1);
+  transform: translateX(-50%);
+  transition: background 0.15s ease, width 0.15s ease;
+}
+.resize-handle:hover::before,
+.resize-handle:focus-visible::before,
+.resize-handle.dragging::before {
+  background: var(--accent);
+  width: 2px;
+}
+.resize-handle:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+body.resizing {
+  cursor: col-resize !important;
+}
+body.resizing,
+body.resizing * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }
 
 .app-main {
@@ -624,7 +669,12 @@ textarea {
 
 .library-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 420px;
+  grid-template-columns:
+    var(--library-spaces-width, 260px)
+    var(--resize-handle-size, 4px)
+    minmax(320px, 1fr)
+    var(--resize-handle-size, 4px)
+    var(--library-chat-width, 420px);
   height: 100%;
 }
 
@@ -635,6 +685,7 @@ textarea {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .library-spaces-header {
@@ -694,6 +745,7 @@ textarea {
   background: var(--bg-1);
   padding: 24px 28px;
   overflow-y: auto;
+  min-width: 0;
 }
 
 .library-content-header {
@@ -724,6 +776,7 @@ textarea {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;
 }
 
 .library-chat-header {
@@ -1170,7 +1223,13 @@ textarea {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1200px) {
-  .library-layout { grid-template-columns: 220px minmax(0, 1fr); }
+  .library-layout {
+    grid-template-columns:
+      var(--library-spaces-width, 220px)
+      var(--resize-handle-size, 4px)
+      minmax(0, 1fr);
+  }
+  .library-layout > .resize-handle[data-resize="libraryChat"] { display: none; }
   .library-chat { display: none; }
   .view-library.chat-open .library-content { display: none; }
   .view-library.chat-open .library-chat { display: flex; }
@@ -1179,7 +1238,12 @@ textarea {
 @media (max-width: 900px) {
   :root { --sidebar-width: 220px; }
   .app-sidebar { width: var(--sidebar-width); }
-  .library-layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .library-layout {
+    grid-template-columns:
+      var(--library-spaces-width, 200px)
+      var(--resize-handle-size, 4px)
+      minmax(0, 1fr);
+  }
   .view-home { padding-top: 6vh; }
   .settings-layout { grid-template-columns: 1fr; }
   .settings-sidebar { display: flex; gap: 8px; }
@@ -1206,4 +1270,6 @@ textarea {
   .app-main { height: calc(100vh - 62px); }
   .library-layout { grid-template-columns: 1fr; }
   .library-spaces { display: none; }
+  .library-layout > .resize-handle,
+  body > .resize-handle { display: none; }
 }

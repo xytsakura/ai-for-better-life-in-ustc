@@ -1238,9 +1238,116 @@ function initEventListeners() {
 async function init() {
   loadHistory();
   initEventListeners();
+  initResizeHandles();
   initRouting();
   updateHomeModeLabel();
   await loadBase();
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ---------- Resize handles ----------
+const PANEL_LIMITS = {
+  sidebar:       { min: 200, max: 400, default: 260 },
+  librarySpaces: { min: 200, max: 380, default: 260 },
+  libraryChat:   { min: 320, max: 720, default: 420 },
+};
+
+const PANEL_SELECTORS = {
+  sidebar:       '.app-sidebar',
+  librarySpaces: '.library-spaces',
+  libraryChat:   '.library-chat',
+};
+
+const PANEL_CSS_VARS = {
+  sidebar:       '--sidebar-width',
+  librarySpaces: '--library-spaces-width',
+  libraryChat:   '--library-chat-width',
+};
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function loadPanelWidth(name) {
+  const limits = PANEL_LIMITS[name];
+  if (!limits) return 0;
+  try {
+    const raw = localStorage.getItem(`course-agent:panel-width:${name}`);
+    const value = Number(raw);
+    return Number.isFinite(value) ? clamp(value, limits.min, limits.max) : limits.default;
+  } catch {
+    return limits.default;
+  }
+}
+
+function savePanelWidth(name, value) {
+  try { localStorage.setItem(`course-agent:panel-width:${name}`, String(Math.round(value))); } catch {}
+}
+
+function applyPanelWidth(name, value) {
+  const cssVar = PANEL_CSS_VARS[name];
+  if (cssVar) document.documentElement.style.setProperty(cssVar, `${Math.round(value)}px`);
+}
+
+function getPanelWidth(name) {
+  const selector = PANEL_SELECTORS[name];
+  const el = selector ? $(selector) : null;
+  if (el && el.getBoundingClientRect().width) {
+    return el.getBoundingClientRect().width;
+  }
+  return PANEL_LIMITS[name]?.default ?? 0;
+}
+
+function initResizeHandles() {
+  $$('.resize-handle').forEach(handle => {
+    const name = handle.dataset.resize;
+    const limits = PANEL_LIMITS[name];
+    if (!limits) return;
+
+    applyPanelWidth(name, loadPanelWidth(name));
+
+    const beginDrag = (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      event.preventDefault();
+      handle.focus({ preventScroll: true });
+      const startX = event.clientX;
+      const startWidth = getPanelWidth(name);
+
+      const onMove = (moveEvent) => {
+        const next = clamp(startWidth + (moveEvent.clientX - startX), limits.min, limits.max);
+        applyPanelWidth(name, next);
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.classList.remove('resizing');
+        handle.classList.remove('dragging');
+        savePanelWidth(name, getPanelWidth(name));
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      document.body.classList.add('resizing');
+      handle.classList.add('dragging');
+    };
+
+    handle.addEventListener('mousedown', beginDrag);
+
+    handle.addEventListener('touchstart', (event) => {
+      if (!event.touches.length) return;
+      const touch = event.touches[0];
+      beginDrag({ preventDefault: () => event.preventDefault(), clientX: touch.clientX, button: 0 });
+    }, { passive: false });
+
+    handle.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const step = event.shiftKey ? 24 : 8;
+      const delta = event.key === 'ArrowRight' ? step : -step;
+      const next = clamp(getPanelWidth(name) + delta, limits.min, limits.max);
+      applyPanelWidth(name, next);
+      savePanelWidth(name, next);
+    });
+  });
+}
