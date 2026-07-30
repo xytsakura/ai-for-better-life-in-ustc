@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import fitz
+import httpx
 from fastapi.testclient import TestClient
 
 from course_agent.config import Settings
@@ -51,6 +52,349 @@ def personal_space(client: TestClient) -> dict:
 def shared_space(client: TestClient) -> dict:
     spaces = client.get("/api/spaces").json()["items"]
     return next(item for item in spaces if item["space_type"] == "shared")
+
+
+def test_today_weather_uses_fixed_ustc_location_and_returns_chinese_data(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+    original_async_client = httpx.AsyncClient
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        captured["url"] = request.url
+        return httpx.Response(
+            200,
+            json={
+                "current": {
+                    "time": "2026-07-30T14:15",
+                    "temperature_2m": 32.4,
+                    "relative_humidity_2m": 61,
+                    "apparent_temperature": 36.1,
+                    "wind_speed_10m": 10.8,
+                    "wind_direction_10m": 142,
+                },
+                "daily": {
+                    "time": ["2026-07-30"],
+                    "weather_code": [61],
+                    "temperature_2m_max": [34.2],
+                    "temperature_2m_min": [26.8],
+                    "precipitation_probability_max": [70],
+                    "sunrise": ["2026-07-30T05:25"],
+                    "sunset": ["2026-07-30T19:09"],
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        captured["timeout"] = kwargs.get("timeout")
+        captured["follow_redirects"] = kwargs.get("follow_redirects")
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.main.httpx.AsyncClient", mocked_async_client)
+    client, _ = make_client(tmp_path)
+
+    assert client.get("/api/weather/today").status_code == 401
+    login(client, "demo-a")
+    response = client.get(
+        "/api/weather/today",
+        params={"url": "http://127.0.0.1/private", "latitude": 0, "longitude": 0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {
+        "location": {
+            "name": "中国科学技术大学",
+            "city": "合肥",
+            "latitude": 31.8206,
+            "longitude": 117.2272,
+            "timezone": "Asia/Shanghai",
+        },
+        "date": "2026-07-30",
+        "weather": {"code": 61, "description": "小雨"},
+        "temperature": {
+            "current_c": 32.4,
+            "apparent_c": 36.1,
+            "min_c": 26.8,
+            "max_c": 34.2,
+        },
+        "humidity_percent": 61,
+        "precipitation_probability_max_percent": 70,
+        "wind": {"speed_kmh": 10.8, "direction_degrees": 142},
+        "sunrise": "2026-07-30T05:25",
+        "sunset": "2026-07-30T19:09",
+        "updated_at": "2026-07-30T14:15",
+        "summary": "合肥今日小雨，26.8℃～34.2℃，当前32.4℃",
+    }
+
+    request_url = captured["url"]
+    assert isinstance(request_url, httpx.URL)
+    assert request_url.scheme == "https"
+    assert request_url.host == "api.open-meteo.com"
+    assert request_url.path == "/v1/forecast"
+    assert request_url.params["latitude"] == "31.8206"
+    assert request_url.params["longitude"] == "117.2272"
+    assert request_url.params["timezone"] == "Asia/Shanghai"
+    assert "url" not in request_url.params
+    assert captured["follow_redirects"] is False
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 3.0
+    assert timeout.read == 8.0
+
+
+def test_today_weather_returns_502_when_open_meteo_fails(monkeypatch, tmp_path: Path):
+    original_async_client = httpx.AsyncClient
+
+    def upstream(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"reason": "maintenance"})
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.main.httpx.AsyncClient", mocked_async_client)
+    client, _ = make_client(tmp_path)
+    login(client, "demo-a")
+
+    response = client.get("/api/weather/today")
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error": {
+            "code": "weather_upstream_unavailable",
+            "message": "天气服务暂时不可用，请稍后重试",
+            "retryable": True,
+        }
+    }
+
+
+def test_theme_selector_and_light_palette_are_packaged(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    html = client.get("/").text
+    assert 'data-theme="dark"' in html
+    assert 'data-settings-tab="theme"' in html
+    assert 'name="theme" value="dark"' in html
+    assert 'name="theme" value="light"' in html
+    assert html.index("course-agent:theme") < html.index("/assets/styles.css")
+
+    styles = client.get("/assets/styles.css").text
+    assert ':root[data-theme="light"]' in styles
+    assert "--bg-1: #ffffff" in styles
+    assert "--text-primary: #111111" in styles
+    assert "--accent: #6d28d9" in styles
+    assert ".segment-option input:focus-visible + span" in styles
+
+    script = client.get("/assets/app.js").text
+    assert "const THEME_KEY = 'course-agent:theme'" in script
+    assert "localStorage.setItem(THEME_KEY, theme)" in script
+
+
+def test_schedule_view_and_safe_import_placeholder_are_packaged(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    html = client.get("/").text
+    assert 'data-view="schedule"' in html
+    assert 'id="view-schedule"' in html
+    assert 'id="schedule-calendar"' in html
+    assert 'id="plan-modal"' in html
+    assert 'id="exam-import-modal"' in html
+    import_markup = html.split('id="exam-import-modal"', 1)[1].split("<!-- Toast -->", 1)[0]
+    assert 'type="password"' not in import_markup
+    assert "本应用不会要求或保存你的学号、密码" in import_markup
+
+    styles = client.get("/assets/styles.css").text
+    assert ".schedule-layout" in styles
+    assert ".schedule-calendar" in styles
+    assert ".schedule-agenda" in styles
+
+    script = client.get("/assets/app.js").text
+    assert "const SCHEDULE_KEY_PREFIX = 'course-agent:schedule-v1:'" in script
+    assert "['home', 'library', 'schedule', 'settings']" in script
+    assert "function renderSchedule()" in script
+    assert "教务处导入接口尚未接入" in script
+
+
+def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    html = client.get("/").text
+    user_card_markup = html.split('id="user-card"', 1)[1].split('id="logout-button"', 1)[0]
+    assert "</button>" in user_card_markup
+    assert 'data-settings-tab="profile"' in html
+    assert 'id="profile-avatar-input"' in html
+    assert 'accept="image/png,image/jpeg,image/webp"' in html
+    assert 'id="profile-nickname"' in html
+    assert 'data-settings-tab="features"' in html
+    assert 'id="feature-schedule-toggle"' in html
+    assert 'id="feature-avatar-toggle"' in html
+    assert 'id="feature-avatar-status"' in html
+    assert 'aria-label="启用虚拟形象"' in html
+    assert 'aria-describedby="feature-avatar-status"' in html
+    assert 'aria-controls="feature-avatar-character-options"' in html
+    assert 'id="feature-avatar-character-options"' in html
+    assert 'name="avatar-character" value="male" checked' in html
+    assert 'name="avatar-character" value="female"' in html
+    assert '<span>男生</span>' in html
+    assert '<span>女生</span>' in html
+    assert 'id="feature-avatar-action-schedule-toggle"' in html
+    assert 'id="feature-avatar-action-weather-toggle"' in html
+    assert 'id="feature-avatar-action-literature-toggle"' in html
+    assert 'id="feature-avatar-action-exams-toggle"' in html
+    assert 'id="feature-avatar-literature-direction"' in html
+    assert 'role="switch"' in html
+    assert 'role="tablist"' in html
+    assert 'data-settings-tab="profile">个人信息</button>' in html
+    assert 'data-settings-tab="theme">主题设置</button>' in html
+    assert "最大 5 MB" not in html
+    assert 'id="avatar-crop-modal"' in html
+    assert 'id="avatar-crop-canvas"' in html
+    assert 'id="avatar-crop-preview"' in html
+    assert 'id="avatar-crop-zoom" type="range"' in html
+    assert 'id="avatar-crop-zoom-out"' in html
+    assert 'id="avatar-crop-zoom-in"' in html
+    assert 'id="avatar-crop-rotate-left"' in html
+    assert 'id="avatar-crop-rotate-right"' in html
+    assert 'id="avatar-crop-apply"' in html
+    assert '/assets/styles.css?v=avatar-actions-v2' in html
+    assert '/assets/app.js?v=avatar-actions-v2' in html
+
+    styles = client.get("/assets/styles.css").text
+    assert ".profile-avatar-preview" in styles
+    assert ".avatar-crop-stage" in styles
+    assert "touch-action: none" in styles
+    assert ".avatar-crop-ring" in styles
+    assert ".avatar-crop-preview-panel" in styles
+    assert ".switch-control input:checked + .switch-track" in styles
+    assert ".feature-avatar-character-options" in styles
+    assert ".feature-avatar-character-control" in styles
+    assert ".feature-avatar-action-settings" in styles
+    assert ".feature-avatar-literature-direction" in styles
+    assert ".home-workspace.home-avatar-disabled" in styles
+    assert ".app-main.home-avatar-drag-surface" in styles
+    assert ".settings-nav-item { width: auto; min-height: 44px; flex: 0 0 auto; }" in styles
+
+    script = client.get("/assets/app.js").text
+    assert "const PROFILE_KEY_PREFIX = 'course-agent:profile-v1:'" in script
+    assert "const FEATURES_KEY_PREFIX = 'course-agent:features-v1:'" in script
+    assert "function normalizeFeaturePreferences(value = {})" in script
+    assert "avatar: features.avatar !== false" in script
+    assert "avatarCharacter: normalizeHomeAgentAvatarCharacter(features.avatarCharacter)" in script
+    assert "avatarActions: normalizeAvatarActions(features.avatarActions)" in script
+    assert "state.features = normalizeFeaturePreferences();" in script
+    assert "const AVATAR_FILE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])" in script
+    assert "MAX_AVATAR_FILE_SIZE" not in script
+    assert "async function readImageDimensions(file)" in script
+    assert "function decodeAvatarBitmap(file)" in script
+    assert "function openAvatarCropModal" in script
+    assert "function applyAvatarCrop" in script
+    assert "function closeAvatarCropModal" in script
+    assert "function stepAvatarCropZoom" in script
+    assert "function createCroppedAvatarDataUrl" in script
+    assert "createAvatarDataUrl" not in script
+    assert "['#avatar-crop-modal', '#plan-modal', '#exam-import-modal', '#login-modal']" in script
+    assert "function syncFeatureAvailability" in script
+    assert "function syncHomeAgentAvatarAvailability" in script
+    assert "function updateAvatarFeature" in script
+    assert "function updateAvatarCharacter" in script
+    assert "function updateAvatarActionPreference" in script
+    assert "function updateLiteratureDirection" in script
+    assert "function saveFeaturePreferences" in script
+    assert "avatarCharacterOptions.classList.toggle('hidden', !avatarEnabled);" in script
+    assert "input.disabled = !state.user || !avatarEnabled;" in script
+    assert "classList.remove('feature-preferences-pending')" in script
+    assert "workspace.classList.toggle('home-avatar-disabled', !enabled);" in script
+    assert "viewName === 'schedule' && state.features.schedule === false" in script
+
+
+def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    script = client.get("/assets/app.js").text
+    styles = client.get("/assets/styles.css").text
+    assert '.space-tree-item[aria-disabled="true"]' in styles
+
+    def section(start_marker: str, end_marker: str) -> str:
+        start = script.index(start_marker)
+        end = script.index(end_marker, start)
+        return script[start:end]
+
+    set_loading = section("function setLoading(", "// ---------- Views ----------")
+    loading_assignment = set_loading.index("state.isQuerying = isLoading;")
+    assert "if (isLoading && state.features.avatar !== false) startHomeAgentAvatarThinking();" in set_loading
+    assert loading_assignment < set_loading.index("renderSourceSelector();")
+    assert loading_assignment < set_loading.index("renderHistory();")
+    assert "if (newChat) newChat.disabled = isLoading;" in set_loading
+    assert "renderSpaces();" in set_loading
+
+    home_mode = section("function updateHomeModeLabel()", "function updateHomeModelLabel()")
+    assert "button.disabled = state.isQuerying;" in home_mode
+
+    render_history = section("function renderHistory()", "// ---------- Schedule ----------")
+    assert "clearButton.disabled = state.isQuerying;" in render_history
+    assert "const disabled = state.isQuerying ? ' disabled' : '';" in render_history
+    assert render_history.count("${disabled}") == 5
+    assert "if (state.isQuerying) {\n        closeHistoryMenus();\n        return;\n      }" in render_history
+
+    open_history = section("function openHistory(", "function appendHomeMessageBubble(")
+    assert open_history.index("if (state.isQuerying) return;") < open_history.index("resetHomeConversation();")
+
+    history_action = section("function handleHistoryAction(", "function renderHistory()")
+    assert history_action.index("if (state.isQuerying) return;") < history_action.index("const item = state.history[index];")
+    assert "$('#clear-history').addEventListener('click', () => {\n    if (state.isQuerying) return;" in script
+
+    source_list = section("function renderSourceList(", "function renderSourceSelector()")
+    assert "button.disabled = state.isQuerying;" in source_list
+    assert "${state.isQuerying ? ' disabled' : ''}" in source_list
+    source_change_guard = source_list.index("if (state.isQuerying) {")
+    assert source_change_guard < source_list.index("if (input.checked)")
+    assert "input.checked = state.selectedDocumentIds.has(input.value);" in source_list
+
+    source_action = section("function selectDocumentsByAction(", "function updateQueryStatus()")
+    assert source_action.index("if (state.isQuerying) return;") < source_action.index("clearAnswer('library');")
+
+    render_spaces = section("function renderSpaces()", "async function selectSpace(")
+    assert 'aria-disabled="${state.isQuerying}"' in render_spaces
+    select_space = section("async function selectSpace(", "// ---------- Documents ----------")
+    assert select_space.index("if (state.isQuerying) return;") < select_space.index("state.currentSpace =")
+
+    home_submit = section("function handleHomeSubmit(", "function handleHomeShortcuts(")
+    assert home_submit.index("if (state.isQuerying) return;") < home_submit.index("textarea.value = '';")
+
+    save_profile = section("function saveUserProfile(", "function renderFeatureSettings()")
+    assert "if (!state.isQuerying) resetHomeAgentAvatar();" in save_profile
+
+    login_script = section("async function login(", "async function logout(")
+    close_login = login_script.index("closeLoginModal();")
+    for statement in (
+        "state.spaces = [];",
+        "state.currentSpace = null;",
+        "state.documents = [];",
+        "state.selectedDocumentIds.clear();",
+        "state.settings = {};",
+        "state.modelName = '';",
+        "renderSpaces();",
+        "renderDocuments();",
+        "renderSourceSelector();",
+        "renderHomeSourceSelector();",
+        "updateQueryStatus();",
+        "updateHomeModelLabel();",
+        "renderSettings();",
+    ):
+        assert login_script.index(statement) < close_login
+
+    logout_script = section("async function logout(", "// ---------- Spaces ----------")
+    delete_session = logout_script.index("await api('/api/session', { method: 'DELETE' });")
+    assert delete_session < logout_script.index("state.authGeneration += 1;")
+    assert delete_session < logout_script.index("state.queryRequestId += 1;")
+    assert delete_session < logout_script.index("setLoading(false);")
+
+    render_documents = section("function renderDocuments()", "async function removeDocument(")
+    no_space = render_documents.index("if (!state.currentSpace)")
+    no_space_return = render_documents.index("return;", no_space)
+    clear_document_list = render_documents.index("if (list) list.replaceChildren();", no_space)
+    assert clear_document_list < no_space_return
 
 
 def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>虚拟形象预览 · 瀚海行agent</title>
+  <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
+  <link rel="stylesheet" href="/assets/avatar-preview.css?v=product-logo-v1">
+</head>
+<body>
+  <header class="preview-header">
+    <div class="preview-brand" role="img" aria-label="瀚海行agent，虚拟形象预览">
+      <img class="preview-brand-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="" width="38" height="38">
+      <span class="preview-brand-copy">
+        <strong>瀚海行agent</strong>
+        <span>虚拟形象预览</span>
+      </span>
+    </div>
+
+    <div class="state-readout" id="state-readout" data-state="idle" role="status" aria-live="polite" aria-atomic="true">
+      <span class="state-dot" aria-hidden="true"></span>
+      <span id="state-label">待机</span>
+    </div>
+  </header>
+
+  <main class="preview-main">
+    <section class="avatar-scene" aria-labelledby="preview-title">
+      <h1 class="sr-only" id="preview-title">虚拟形象交互预览</h1>
+
+      <div class="speech-zone">
+        <div class="speech-bubble" id="speech-bubble" data-visible="false" role="status" aria-live="polite" aria-atomic="true">
+          <p id="speech-text"></p>
+        </div>
+      </div>
+
+      <div class="avatar-stage">
+        <button class="avatar-button" id="avatar-button" type="button" data-state="idle" aria-label="虚拟形象，点击互动" aria-disabled="false">
+          <img
+            class="avatar-image"
+            id="avatar-image"
+            src="/assets/avatar-preview/agent-idle.png"
+            alt=""
+            draggable="false"
+            decoding="async"
+          >
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="preview-controls">
+    <button class="simulate-button" id="simulate-reply" type="button">
+      <span class="simulate-icon" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span>模拟 Agent 回复</span>
+    </button>
+  </footer>
+
+  <script src="/assets/avatar-preview.js?v=avatar-preview-v1" defer></script>
+</body>
+</html>

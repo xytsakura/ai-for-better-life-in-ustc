@@ -8,6 +8,8 @@ const state = {
   settings: {},
   modelName: '',
   apiKeyTouched: false,
+  isLoggingIn: false,
+  authGeneration: 0,
   isQuerying: false,
   queryRequestId: 0,
   currentView: 'home',
@@ -15,6 +17,61 @@ const state = {
   homeConversation: [],
   history: [],
   activeHistoryId: null,
+  scheduleItems: [],
+  scheduleMonth: null,
+  selectedScheduleDate: '',
+  editingScheduleId: null,
+  modalReturnFocus: null,
+  userProfile: { nickname: '', avatar: '' },
+  profileDraftAvatar: '',
+  avatarOperationId: 0,
+  avatarCrop: {
+    bitmap: null,
+    rotation: 0,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    pointerId: null,
+    lastClientX: 0,
+    lastClientY: 0,
+  },
+  homeAgentAvatar: {
+    mode: 'idle',
+    quoteIndex: 0,
+    awaitingSecondClick: false,
+    controlsOpen: false,
+    controlsCloseTimer: 0,
+    lastPointerType: '',
+    activeAction: '',
+    actionRequestId: 0,
+    poseTimer: 0,
+    bubbleTimer: 0,
+    secondClickTimer: 0,
+    waveFrameTimer: 0,
+    waveFrameIsA: true,
+    announcementId: 0,
+    drag: {
+      offsetX: 0,
+      offsetY: 0,
+      pointerId: null,
+      startClientX: 0,
+      startClientY: 0,
+      startOffsetX: 0,
+      startOffsetY: 0,
+      hasMoved: false,
+      suppressPointerClick: false,
+      suppressPointerClickTimer: 0,
+      resizeObserver: null,
+    },
+  },
+  features: {
+    schedule: true,
+    avatar: true,
+    avatarCharacter: 'male',
+    avatarScale: 1,
+    avatarActions: { schedule: true, weather: true, literature: true, exams: true },
+    literatureDirection: 'ai',
+  },
 };
 
 
@@ -27,7 +84,267 @@ const SOURCE_GROUPS = [
   { id: 'other', title: '其他资料', keywords: [] },
 ];
 
-const HISTORY_KEY = 'course-agent-history-v1';
+const HISTORY_KEY_PREFIX = 'course-agent:history-v2:';
+const THEME_KEY = 'course-agent:theme';
+const SCHEDULE_KEY_PREFIX = 'course-agent:schedule-v1:';
+const PROFILE_KEY_PREFIX = 'course-agent:profile-v1:';
+const FEATURES_KEY_PREFIX = 'course-agent:features-v1:';
+const AVATAR_FILE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const MAX_AVATAR_DATA_URL_LENGTH = 400000;
+const MAX_AVATAR_DIMENSION = 8192;
+const MAX_AVATAR_PIXELS = 20000000;
+const AVATAR_CROP_STAGE_SIZE = 400;
+const AVATAR_CROP_DIAMETER = 304;
+const AVATAR_CROP_OUTPUT_SIZE = 256;
+const AVATAR_CROP_PREVIEW_SIZE = 96;
+const AVATAR_CROP_MIN_ZOOM = 1;
+const AVATAR_CROP_MAX_ZOOM = 3;
+const HOME_AGENT_AVATAR_SECOND_CLICK_WINDOW_MS = 5000;
+const HOME_AGENT_AVATAR_WAVE_DURATION_MS = 1600;
+const HOME_AGENT_AVATAR_READING_DURATION_MS = 3600;
+const HOME_AGENT_AVATAR_GREETING_DURATION_MS = 4000;
+const HOME_AGENT_AVATAR_QUOTE_DURATION_MS = 6000;
+const HOME_AGENT_AVATAR_DRAG_THRESHOLD_PX = 7;
+const HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX = 8;
+const HOME_AGENT_AVATAR_SPEECH_GAP_PX = 14;
+const HOME_AGENT_AVATAR_SPEECH_MIN_WIDTH_PX = 64;
+const HOME_AGENT_AVATAR_SPEECH_MAX_WIDTH_PX = 200;
+const HOME_AGENT_AVATAR_SPEECH_SIDE_HYSTERESIS_PX = 24;
+const HOME_AGENT_AVATAR_KEYBOARD_STEP_PX = 8;
+const HOME_AGENT_AVATAR_KEYBOARD_FAST_STEP_PX = 32;
+const HOME_AGENT_AVATAR_SCALE_MIN = 0.67;
+const HOME_AGENT_AVATAR_SCALE_MAX = 1.33;
+const HOME_AGENT_AVATAR_SCALE_STEP = 0.05;
+const HOME_AGENT_AVATAR_ACTION_DURATION_MS = 0;
+const HOME_AGENT_AVATAR_POSE_SETS = {
+  male: {
+    idle: '/assets/avatar-preview/agent-idle.png',
+    thinking: '/assets/avatar-preview/agent-thinking.png',
+    waveA: '/assets/avatar-preview/agent-wave-a.png',
+    waveB: '/assets/avatar-preview/agent-wave-b.png',
+    read: '/assets/avatar-preview/agent-reading.png',
+  },
+  female: {
+    idle: '/assets/avatar-preview/female/agent-idle.png',
+    thinking: '/assets/avatar-preview/female/agent-thinking.png',
+    waveA: '/assets/avatar-preview/female/agent-wave-a.png',
+    waveB: '/assets/avatar-preview/female/agent-wave-b.png',
+    read: '/assets/avatar-preview/female/agent-reading.png',
+  },
+};
+const HOME_AGENT_AVATAR_LABELS = {
+  idle: '待机',
+  thinking: '思考中',
+  wave: '向你挥手',
+  read: '阅读中',
+};
+const HOME_AGENT_AVATAR_ARIA_LABELS = {
+  idle: '虚拟形象，可拖动，点击互动；使用方向键移动，Home 键复位',
+  thinking: '虚拟形象正在思考，可拖动；使用方向键移动，Home 键复位',
+  wave: '虚拟形象正在挥手，可拖动；使用方向键移动，Home 键复位',
+  read: '虚拟形象正在看书，可拖动；使用方向键移动，Home 键复位',
+};
+const HOME_AGENT_AVATAR_QUOTES = Object.freeze([
+  '《论语》：学而不思则罔，思而不学则殆。',
+  '《论语》：温故而知新，可以为师矣。',
+  '《论语》：知之者不如好之者，好之者不如乐之者。',
+  '《荀子·劝学》：不积跬步，无以至千里；不积小流，无以成江海。',
+  '韩愈《进学解》：业精于勤，荒于嬉；行成于思，毁于随。',
+  '陆游《冬夜读书示子聿》：纸上得来终觉浅，绝知此事要躬行。',
+  '《礼记·中庸》：博学之，审问之，慎思之，明辨之，笃行之。',
+  '朱熹《观书有感》：问渠那得清如许？为有源头活水来。',
+]);
+const HOME_AGENT_AVATAR_ACTION_LABELS = Object.freeze({
+  schedule: '日程查询',
+  weather: '天气查询',
+  literature: '文献推荐',
+  exams: '考试信息',
+});
+const LITERATURE_RECOMMENDATIONS = Object.freeze({
+  ai: {
+    label: '人工智能',
+    title: 'DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning',
+    source: 'arXiv，2025',
+    note: '聚焦强化学习驱动的大模型推理能力。',
+  },
+  'computer-science': {
+    label: '计算机科学',
+    title: 'The Llama 3 Herd of Models',
+    source: 'arXiv，2024',
+    note: '系统介绍开放大模型的训练、评测与安全设计。',
+  },
+  mathematics: {
+    label: '数学',
+    title: 'Solving olympiad geometry without human demonstrations',
+    source: 'Nature，2024',
+    note: '展示神经语言模型与符号推理结合的几何证明方法。',
+  },
+  physics: {
+    label: '物理',
+    title: 'Learning high-accuracy error decoding for quantum processors',
+    source: 'Nature，2024',
+    note: '利用机器学习提升量子纠错解码精度。',
+  },
+  'life-science': {
+    label: '生命科学',
+    title: 'Accurate structure prediction of biomolecular interactions with AlphaFold 3',
+    source: 'Nature，2024',
+    note: '面向蛋白质、核酸与小分子相互作用的结构预测。',
+  },
+});
+const SCHEDULE_CATEGORIES = {
+  study: '学习',
+  exam: '考试',
+  other: '其他',
+};
+
+function normalizeTheme(value) {
+  return value === 'light' ? 'light' : 'dark';
+}
+
+function loadTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch {}
+  return normalizeTheme(document.documentElement.dataset.theme);
+}
+
+function syncThemeControls(theme) {
+  $$('input[name="theme"]').forEach(input => {
+    input.checked = input.value === theme;
+  });
+}
+
+function applyTheme(value, { persist = false, announce = false } = {}) {
+  const theme = normalizeTheme(value);
+  document.documentElement.dataset.theme = theme;
+  syncThemeControls(theme);
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, theme); } catch {}
+  }
+  if (announce) toast(`已切换为${theme === 'light' ? '浅色' : '深色'}主题`, 'success');
+}
+
+function initTheme() {
+  applyTheme(loadTheme());
+}
+
+function firstCharacter(value) {
+  return Array.from(String(value || '').trim())[0] || '?';
+}
+
+function normalizeNickname(value, fallback = '') {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  return Array.from(normalized).slice(0, 24).join('') || fallback;
+}
+
+function normalizeAvatar(value) {
+  if (typeof value !== 'string' || value.length > MAX_AVATAR_DATA_URL_LENGTH) return '';
+  return /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : '';
+}
+
+function normalizeHomeAgentAvatarCharacter(value) {
+  return value === 'female' ? 'female' : 'male';
+}
+
+function normalizeHomeAgentAvatarScale(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 1;
+  return Math.min(HOME_AGENT_AVATAR_SCALE_MAX, Math.max(HOME_AGENT_AVATAR_SCALE_MIN, number));
+}
+
+function normalizeAvatarActions(value) {
+  const actions = value && typeof value === 'object' ? value : {};
+  return {
+    schedule: actions.schedule !== false,
+    weather: actions.weather !== false,
+    literature: actions.literature !== false,
+    exams: actions.exams !== false,
+  };
+}
+
+function normalizeLiteratureDirection(value) {
+  return Object.prototype.hasOwnProperty.call(LITERATURE_RECOMMENDATIONS, value) ? value : 'ai';
+}
+
+function normalizeFeaturePreferences(value = {}) {
+  const features = value && typeof value === 'object' ? value : {};
+  return {
+    schedule: features.schedule !== false,
+    avatar: features.avatar !== false,
+    avatarCharacter: normalizeHomeAgentAvatarCharacter(features.avatarCharacter),
+    avatarScale: normalizeHomeAgentAvatarScale(features.avatarScale),
+    avatarActions: normalizeAvatarActions(features.avatarActions),
+    literatureDirection: normalizeLiteratureDirection(features.literatureDirection),
+  };
+}
+
+function readUserProfile(user) {
+  const fallback = { nickname: user?.display_name || '', avatar: '' };
+  if (!user?.id) return fallback;
+  try {
+    const raw = localStorage.getItem(`${PROFILE_KEY_PREFIX}${user.id}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      nickname: normalizeNickname(parsed.nickname, fallback.nickname),
+      avatar: normalizeAvatar(parsed.avatar),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function readFeaturePreferences(user) {
+  if (!user?.id) return normalizeFeaturePreferences();
+  try {
+    const raw = localStorage.getItem(`${FEATURES_KEY_PREFIX}${user.id}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeFeaturePreferences(parsed);
+  } catch {
+    return normalizeFeaturePreferences();
+  }
+}
+
+function effectiveDisplayName(user = state.user, profile = state.userProfile) {
+  return normalizeNickname(profile?.nickname, user?.display_name || '未选择身份');
+}
+
+function renderAvatar(container, nickname, avatarDataUrl) {
+  if (!container) return;
+  container.replaceChildren();
+  const safeAvatar = normalizeAvatar(avatarDataUrl);
+  if (safeAvatar) {
+    const image = document.createElement('img');
+    image.src = safeAvatar;
+    image.alt = '';
+    container.appendChild(image);
+  } else {
+    container.textContent = firstCharacter(nickname);
+  }
+}
+
+function loadUserPreferences() {
+  state.avatarOperationId += 1;
+  closeAvatarCropModal({ restoreFocus: false });
+  state.features = readFeaturePreferences(state.user);
+  resetHomeAgentAvatar({ resetQuotes: true });
+  state.userProfile = readUserProfile(state.user);
+  state.profileDraftAvatar = state.userProfile.avatar;
+  syncFeatureAvailability();
+  $('#home-agent-avatar-dock')?.classList.remove('feature-preferences-pending');
+  renderProfileSettings();
+  renderFeatureSettings();
+}
+
+function captureAuthContext() {
+  return { generation: state.authGeneration, userId: state.user?.id || null };
+}
+
+function authContextMatches(context) {
+  return context.generation === state.authGeneration
+    && context.userId === (state.user?.id || null);
+}
 
 // ---------- Helpers ----------
 function escapeHtml(value) {
@@ -183,32 +500,770 @@ function autoResize(textarea) {
   textarea.style.height = Math.min(textarea.scrollHeight, max) + 'px';
 }
 
+function clearHomeAgentAvatarPoseTimers() {
+  const avatar = state.homeAgentAvatar;
+  window.clearTimeout(avatar.poseTimer);
+  window.clearInterval(avatar.waveFrameTimer);
+  avatar.poseTimer = 0;
+  avatar.waveFrameTimer = 0;
+}
+
+function clearHomeAgentAvatarSecondClickWindow() {
+  const avatar = state.homeAgentAvatar;
+  window.clearTimeout(avatar.secondClickTimer);
+  avatar.secondClickTimer = 0;
+  avatar.awaitingSecondClick = false;
+}
+
+function setHomeAgentAvatarSource(source) {
+  const image = $('#home-agent-avatar-image');
+  if (image && image.getAttribute('src') !== source) image.setAttribute('src', source);
+}
+
+function activeHomeAgentAvatarPoses() {
+  const character = normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter);
+  return HOME_AGENT_AVATAR_POSE_SETS[character];
+}
+
+function syncHomeAgentAvatarSource() {
+  const poses = activeHomeAgentAvatarPoses();
+  const avatar = state.homeAgentAvatar;
+  const source = avatar.mode === 'wave'
+    ? (avatar.waveFrameIsA ? poses.waveA : poses.waveB)
+    : poses[avatar.mode];
+  if (source) setHomeAgentAvatarSource(source);
+}
+
+function setHomeAgentAvatarMode(mode) {
+  if (!Object.prototype.hasOwnProperty.call(HOME_AGENT_AVATAR_LABELS, mode)) return;
+  state.homeAgentAvatar.mode = mode;
+  const button = $('#home-agent-avatar-button');
+  const dock = $('#home-agent-avatar-dock');
+  const status = $('#home-agent-avatar-state');
+  if (button) {
+    button.dataset.state = mode;
+    button.setAttribute('aria-label', HOME_AGENT_AVATAR_ARIA_LABELS[mode]);
+    button.setAttribute('aria-disabled', String(mode === 'thinking'));
+  }
+  if (dock) dock.setAttribute('aria-busy', String(mode === 'thinking'));
+  if (status) status.textContent = HOME_AGENT_AVATAR_LABELS[mode];
+  syncHomeAgentAvatarSource();
+}
+
+function setHomeAgentAvatarControlsOpen(open, { focusAvatar = false } = {}) {
+  const avatar = state.homeAgentAvatar;
+  window.clearTimeout(avatar.controlsCloseTimer);
+  avatar.controlsCloseTimer = 0;
+  const dock = $('#home-agent-avatar-dock');
+  const button = $('#home-agent-avatar-button');
+  const canOpen = Boolean(open)
+    && state.features.avatar !== false
+    && state.currentView === 'home'
+    && !avatar.activeAction
+    && dock?.dataset.speechVisible !== 'true';
+  avatar.controlsOpen = canOpen;
+  if (dock) dock.dataset.controlsOpen = String(canOpen);
+  if (button) button.setAttribute('aria-expanded', String(canOpen));
+  if (!canOpen && focusAvatar && button) button.focus({ preventScroll: true });
+}
+
+function scheduleHomeAgentAvatarControlsClose() {
+  const avatar = state.homeAgentAvatar;
+  window.clearTimeout(avatar.controlsCloseTimer);
+  avatar.controlsCloseTimer = window.setTimeout(() => {
+    const dock = $('#home-agent-avatar-dock');
+    if (!dock?.contains(document.activeElement)) setHomeAgentAvatarControlsOpen(false);
+  }, 160);
+}
+
+function syncHomeAgentAvatarControlGeometry() {
+  const dock = $('#home-agent-avatar-dock');
+  const button = $('#home-agent-avatar-button');
+  if (!dock || !button) return;
+  const buttonRect = button.getBoundingClientRect();
+  if (buttonRect.width > 0) {
+    dock.style.setProperty('--home-avatar-control-half-width', `${buttonRect.width / 2}px`);
+  }
+}
+
+function applyHomeAgentAvatarScale(value) {
+  const scale = normalizeHomeAgentAvatarScale(value);
+  state.features.avatarScale = scale;
+  const dock = $('#home-agent-avatar-dock');
+  const input = $('#home-agent-avatar-scale');
+  const output = $('#home-agent-avatar-scale-output');
+  const percent = Math.round(scale * 100);
+  if (dock) dock.style.setProperty('--home-avatar-scale', scale.toFixed(2));
+  if (input) {
+    input.value = String(percent);
+    input.setAttribute('aria-valuenow', String(percent));
+    input.setAttribute('aria-valuetext', `${percent}%`);
+  }
+  if (output) output.textContent = `${percent}%`;
+  window.requestAnimationFrame(() => {
+    syncHomeAgentAvatarControlGeometry();
+    clampHomeAgentAvatarPosition();
+    positionHomeAgentAvatarSpeech();
+  });
+  return scale;
+}
+
+function syncHomeAgentAvatarActionControls() {
+  const enabled = Boolean(state.user)
+    && !state.isQuerying
+    && state.features.avatar !== false
+    && state.currentView === 'home';
+  const actions = normalizeAvatarActions(state.features.avatarActions);
+  const busy = Boolean(state.homeAgentAvatar.activeAction);
+  const dock = $('#home-agent-avatar-dock');
+  if (dock) dock.dataset.actionBusy = String(busy);
+  $$('[data-avatar-action]').forEach(button => {
+    const visible = actions[button.dataset.avatarAction] !== false;
+    button.hidden = !visible;
+    button.disabled = !enabled || busy;
+    button.setAttribute('aria-hidden', String(!visible));
+  });
+  $$('.home-agent-avatar-action-group').forEach(group => {
+    group.hidden = !group.querySelector('[data-avatar-action]:not([hidden])');
+  });
+  const scaleInput = $('#home-agent-avatar-scale');
+  const scaleDown = $('#home-agent-avatar-scale-down');
+  const scaleUp = $('#home-agent-avatar-scale-up');
+  if (scaleInput) scaleInput.disabled = !enabled || busy;
+  if (scaleDown) scaleDown.disabled = !enabled || busy;
+  if (scaleUp) scaleUp.disabled = !enabled || busy;
+  window.requestAnimationFrame(() => {
+    syncHomeAgentAvatarControlGeometry();
+    clampHomeAgentAvatarPosition();
+  });
+}
+
+function cancelHomeAgentAvatarAction() {
+  const avatar = state.homeAgentAvatar;
+  avatar.actionRequestId += 1;
+  avatar.activeAction = '';
+  if (avatar.mode === 'thinking' && !state.isQuerying) setHomeAgentAvatarMode('idle');
+  setHomeAgentAvatarControlsOpen(false);
+  syncHomeAgentAvatarActionControls();
+}
+
+function hideHomeAgentAvatarSpeech({ clearText = false } = {}) {
+  const avatar = state.homeAgentAvatar;
+  avatar.announcementId += 1;
+  window.clearTimeout(avatar.bubbleTimer);
+  avatar.bubbleTimer = 0;
+  const bubble = $('#home-agent-avatar-speech');
+  const text = $('#home-agent-avatar-speech-text');
+  const announcer = $('#home-agent-avatar-announcer');
+  if (bubble) {
+    bubble.dataset.visible = 'false';
+    bubble.dataset.dismissible = 'false';
+    bubble.setAttribute('aria-hidden', 'true');
+  }
+  const dock = $('#home-agent-avatar-dock');
+  if (dock) dock.dataset.speechVisible = 'false';
+  if (clearText && text) text.textContent = '';
+  if (announcer) announcer.textContent = '';
+}
+
+function positionHomeAgentAvatarSpeech() {
+  const surface = $('.app-main');
+  const dock = $('#home-agent-avatar-dock');
+  const button = $('#home-agent-avatar-button');
+  const speechZone = $('.home-agent-avatar-speech-zone');
+  const bubble = $('#home-agent-avatar-speech');
+  if (!surface || !dock || !button || !speechZone || !bubble) return false;
+
+  const surfaceRect = surface.getBoundingClientRect();
+  const dockRect = dock.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  if (
+    surfaceRect.width <= 0
+    || surfaceRect.height <= 0
+    || dockRect.width <= 0
+    || buttonRect.width <= 0
+    || buttonRect.height <= 0
+  ) return false;
+
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const leftSpace = buttonRect.left - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX;
+  const rightSpace = viewportWidth - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - buttonRect.right;
+  let side = dock.dataset.speechSide;
+  if (side !== 'left' && side !== 'right') side = rightSpace >= leftSpace ? 'right' : 'left';
+  if (side === 'left' && rightSpace > leftSpace + HOME_AGENT_AVATAR_SPEECH_SIDE_HYSTERESIS_PX) side = 'right';
+  if (side === 'right' && leftSpace > rightSpace + HOME_AGENT_AVATAR_SPEECH_SIDE_HYSTERESIS_PX) side = 'left';
+  const availableWidth = Math.max(0, (side === 'right' ? rightSpace : leftSpace) - HOME_AGENT_AVATAR_SPEECH_GAP_PX);
+  const speechMaxWidth = Math.min(HOME_AGENT_AVATAR_SPEECH_MAX_WIDTH_PX, availableWidth);
+  if (speechMaxWidth <= 0) return false;
+
+  dock.dataset.speechSide = side;
+  dock.style.setProperty('--home-avatar-speech-max-width', `${speechMaxWidth}px`);
+  dock.style.setProperty(
+    '--home-avatar-speech-min-width',
+    `${Math.min(HOME_AGENT_AVATAR_SPEECH_MIN_WIDTH_PX, speechMaxWidth)}px`,
+  );
+  const measuredWidth = speechZone.getBoundingClientRect().width;
+  const speechWidth = Math.min(speechMaxWidth, Math.max(1, measuredWidth));
+  const speechLeft = side === 'right'
+    ? buttonRect.right - dockRect.left + HOME_AGENT_AVATAR_SPEECH_GAP_PX
+    : buttonRect.left - dockRect.left - HOME_AGENT_AVATAR_SPEECH_GAP_PX - speechWidth;
+  dock.style.setProperty('--home-avatar-speech-left', `${speechLeft}px`);
+
+  const bubbleHeight = bubble.getBoundingClientRect().height;
+  const surfaceTop = Math.max(0, surfaceRect.top);
+  const surfaceBottom = Math.min(viewportHeight, surfaceRect.bottom);
+  const minTop = surfaceTop + HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX;
+  const maxTop = Math.max(minTop, surfaceBottom - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - bubbleHeight);
+  const headAnchorY = buttonRect.top + Math.min(96, buttonRect.height * 0.22);
+  const speechTopViewport = clamp(headAnchorY - bubbleHeight / 2, minTop, maxTop);
+  const tailTop = clamp(headAnchorY - speechTopViewport, 16, Math.max(16, bubbleHeight - 16));
+  dock.style.setProperty('--home-avatar-speech-top', `${speechTopViewport - dockRect.top}px`);
+  dock.style.setProperty('--home-avatar-speech-tail-top', `${tailTop}px`);
+  return true;
+}
+
+function showHomeAgentAvatarSpeech(message, durationMs) {
+  hideHomeAgentAvatarSpeech({ clearText: true });
+  const avatar = state.homeAgentAvatar;
+  const bubble = $('#home-agent-avatar-speech');
+  const text = $('#home-agent-avatar-speech-text');
+  const announcer = $('#home-agent-avatar-announcer');
+  if (!bubble || !text || !announcer) return;
+  text.textContent = message;
+  setHomeAgentAvatarControlsOpen(false);
+  const dock = $('#home-agent-avatar-dock');
+  if (dock) dock.dataset.speechVisible = 'true';
+  bubble.dataset.dismissible = String(!(Number(durationMs) > 0));
+  positionHomeAgentAvatarSpeech();
+  bubble.dataset.visible = 'true';
+  bubble.setAttribute('aria-hidden', 'false');
+  const announcementId = ++avatar.announcementId;
+  window.requestAnimationFrame(() => {
+    if (state.homeAgentAvatar.announcementId !== announcementId) return;
+    positionHomeAgentAvatarSpeech();
+    announcer.textContent = message;
+  });
+  if (!(Number(durationMs) > 0)) return;
+  avatar.bubbleTimer = window.setTimeout(() => {
+    bubble.dataset.visible = 'false';
+    bubble.setAttribute('aria-hidden', 'true');
+    if (dock) dock.dataset.speechVisible = 'false';
+    text.textContent = '';
+    announcer.textContent = '';
+    avatar.bubbleTimer = 0;
+  }, durationMs);
+}
+
+function resetHomeAgentAvatar({ resetQuotes = false } = {}) {
+  cancelHomeAgentAvatarAction();
+  clearHomeAgentAvatarPoseTimers();
+  clearHomeAgentAvatarSecondClickWindow();
+  hideHomeAgentAvatarSpeech({ clearText: true });
+  if (resetQuotes) state.homeAgentAvatar.quoteIndex = 0;
+  setHomeAgentAvatarMode('idle');
+}
+
+function startHomeAgentAvatarThinking() {
+  cancelHomeAgentAvatarAction();
+  clearHomeAgentAvatarPoseTimers();
+  clearHomeAgentAvatarSecondClickWindow();
+  hideHomeAgentAvatarSpeech({ clearText: true });
+  setHomeAgentAvatarMode('thinking');
+}
+
+function stopHomeAgentAvatarThinking() {
+  if (state.homeAgentAvatar.mode !== 'thinking') return;
+  clearHomeAgentAvatarPoseTimers();
+  setHomeAgentAvatarMode('idle');
+}
+
+function returnHomeAgentAvatarToIdle(expectedMode) {
+  if (state.homeAgentAvatar.mode !== expectedMode) return;
+  clearHomeAgentAvatarPoseTimers();
+  setHomeAgentAvatarMode('idle');
+}
+
+function startHomeAgentAvatarWave() {
+  const avatar = state.homeAgentAvatar;
+  clearHomeAgentAvatarPoseTimers();
+  clearHomeAgentAvatarSecondClickWindow();
+  avatar.awaitingSecondClick = true;
+  avatar.secondClickTimer = window.setTimeout(
+    clearHomeAgentAvatarSecondClickWindow,
+    HOME_AGENT_AVATAR_SECOND_CLICK_WINDOW_MS,
+  );
+  avatar.waveFrameIsA = true;
+  setHomeAgentAvatarMode('wave');
+
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    avatar.waveFrameTimer = window.setInterval(() => {
+      avatar.waveFrameIsA = !avatar.waveFrameIsA;
+      syncHomeAgentAvatarSource();
+    }, 220);
+  }
+
+  const name = state.user ? effectiveDisplayName() : '同学';
+  showHomeAgentAvatarSpeech(`你好呀，${name}`, HOME_AGENT_AVATAR_GREETING_DURATION_MS);
+  avatar.poseTimer = window.setTimeout(
+    () => returnHomeAgentAvatarToIdle('wave'),
+    HOME_AGENT_AVATAR_WAVE_DURATION_MS,
+  );
+}
+
+function nextHomeAgentAvatarQuote() {
+  const avatar = state.homeAgentAvatar;
+  const quote = HOME_AGENT_AVATAR_QUOTES[avatar.quoteIndex];
+  avatar.quoteIndex = (avatar.quoteIndex + 1) % HOME_AGENT_AVATAR_QUOTES.length;
+  return quote;
+}
+
+function startHomeAgentAvatarReading() {
+  const avatar = state.homeAgentAvatar;
+  clearHomeAgentAvatarPoseTimers();
+  clearHomeAgentAvatarSecondClickWindow();
+  setHomeAgentAvatarMode('read');
+  showHomeAgentAvatarSpeech(nextHomeAgentAvatarQuote(), HOME_AGENT_AVATAR_QUOTE_DURATION_MS);
+  avatar.poseTimer = window.setTimeout(
+    () => returnHomeAgentAvatarToIdle('read'),
+    HOME_AGENT_AVATAR_READING_DURATION_MS,
+  );
+}
+
+function formatAvatarScheduleEntry(item, { includeDate = false } = {}) {
+  const date = includeDate ? `${formatScheduleDate(item.date, true)} ` : '';
+  const location = item.location ? `，地点：${item.location}` : '';
+  const completed = item.completed ? '（已完成）' : '';
+  return `${date}${scheduleTimeLabel(item)} ${item.title}${completed}${location}`;
+}
+
+function formatTodayScheduleSpeech() {
+  const today = localDateKey(new Date());
+  const items = scheduleSort(state.scheduleItems.filter(item => item.date === today));
+  if (!items.length) return '今天还没有安排计划~';
+  return `今日安排（${items.length} 项）：\n${items.map(item => formatAvatarScheduleEntry(item)).join('\n')}`;
+}
+
+function formatExamSpeech() {
+  const exams = scheduleSort(state.scheduleItems.filter(item => item.category === 'exam' || item.source === 'ustc'));
+  if (!exams.length) return '目前还没有记录考试信息。';
+  return `考试信息（${exams.length} 项）：\n${exams.map(item => formatAvatarScheduleEntry(item, { includeDate: true })).join('\n')}`;
+}
+
+function formatLiteratureSpeech() {
+  const direction = normalizeLiteratureDirection(state.features.literatureDirection);
+  const recommendation = LITERATURE_RECOMMENDATIONS[direction];
+  return `文献推荐 · ${recommendation.label}\n${recommendation.title}\n${recommendation.source}\n${recommendation.note}\n当前为静态精选，后续接入实时文献源。`;
+}
+
+function finiteWeatherNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatWeatherSpeech(payload) {
+  const city = payload?.location?.city || payload?.location?.name || '合肥';
+  const description = payload?.weather?.description || '天气状况未知';
+  const current = finiteWeatherNumber(payload?.temperature?.current_c);
+  const apparent = finiteWeatherNumber(payload?.temperature?.apparent_c);
+  const minimum = finiteWeatherNumber(payload?.temperature?.min_c);
+  const maximum = finiteWeatherNumber(payload?.temperature?.max_c);
+  const humidity = finiteWeatherNumber(payload?.humidity_percent);
+  const precipitation = finiteWeatherNumber(payload?.precipitation_probability_max_percent);
+  const temperatureText = current === null ? '' : `，当前 ${Math.round(current)}°C`;
+  const apparentText = apparent === null ? '' : `（体感 ${Math.round(apparent)}°C）`;
+  const rangeText = minimum === null || maximum === null
+    ? ''
+    : `，最高 ${Math.round(maximum)}°C / 最低 ${Math.round(minimum)}°C`;
+  const precipitationText = precipitation === null ? '' : `，降水概率 ${Math.round(precipitation)}%`;
+  const humidityText = humidity === null ? '' : `，湿度 ${Math.round(humidity)}%`;
+  return `${city}今日天气：${description}${temperatureText}${apparentText}${rangeText}${precipitationText}${humidityText}。`;
+}
+
+async function handleHomeAgentAvatarAction(event) {
+  const button = event.target.closest('[data-avatar-action]');
+  const container = $('#home-agent-avatar-actions');
+  if (!button || !container?.contains(button) || button.disabled) return;
+  const action = button.dataset.avatarAction;
+  const actions = normalizeAvatarActions(state.features.avatarActions);
+  if (!state.user || state.isQuerying || state.features.avatar === false || actions[action] === false) return;
+
+  const avatar = state.homeAgentAvatar;
+  const requestId = ++avatar.actionRequestId;
+  const authContext = captureAuthContext();
+  avatar.activeAction = action;
+  setHomeAgentAvatarControlsOpen(false);
+  hideHomeAgentAvatarSpeech({ clearText: true });
+  button.blur();
+  syncHomeAgentAvatarActionControls();
+  if (action === 'weather') {
+    clearHomeAgentAvatarPoseTimers();
+    clearHomeAgentAvatarSecondClickWindow();
+    setHomeAgentAvatarMode('thinking');
+  }
+
+  try {
+    let message = '';
+    if (action === 'schedule') message = formatTodayScheduleSpeech();
+    else if (action === 'exams') message = formatExamSpeech();
+    else if (action === 'literature') message = formatLiteratureSpeech();
+    else if (action === 'weather') message = formatWeatherSpeech(await api('/api/weather/today', {}, 12000));
+    if (avatar.actionRequestId !== requestId || !authContextMatches(authContext)) return;
+    avatar.activeAction = '';
+    syncHomeAgentAvatarActionControls();
+    if (avatar.mode === 'thinking' && !state.isQuerying) setHomeAgentAvatarMode('idle');
+    showHomeAgentAvatarSpeech(message, HOME_AGENT_AVATAR_ACTION_DURATION_MS);
+  } catch (error) {
+    if (avatar.actionRequestId !== requestId || !authContextMatches(authContext)) return;
+    avatar.activeAction = '';
+    syncHomeAgentAvatarActionControls();
+    if (avatar.mode === 'thinking' && !state.isQuerying) setHomeAgentAvatarMode('idle');
+    const label = HOME_AGENT_AVATAR_ACTION_LABELS[action] || '查询';
+    showHomeAgentAvatarSpeech(`${label}暂时不可用，请稍后再试。`, HOME_AGENT_AVATAR_ACTION_DURATION_MS);
+  }
+}
+
+function persistHomeAgentAvatarScale(value, { announce = false } = {}) {
+  const avatarScale = normalizeHomeAgentAvatarScale(value);
+  if (!state.user) {
+    applyHomeAgentAvatarScale(avatarScale);
+    return;
+  }
+  const nextFeatures = { ...state.features, avatarScale };
+  if (!saveFeaturePreferences(nextFeatures)) return;
+  applyHomeAgentAvatarScale(avatarScale);
+  if (announce) toast(`虚拟形象大小已调整为 ${Math.round(avatarScale * 100)}%`, 'success');
+}
+
+function homeAgentAvatarDragBounds() {
+  const drag = state.homeAgentAvatar.drag;
+  const surface = $('.app-main');
+  const dock = $('#home-agent-avatar-dock');
+  if (!surface || !dock) return null;
+
+  const surfaceRect = surface.getBoundingClientRect();
+  syncHomeAgentAvatarControlGeometry();
+  const paintedRects = [
+    dock.getBoundingClientRect(),
+    $('#home-agent-avatar-button')?.getBoundingClientRect(),
+    ...Array.from(dock.querySelectorAll('[data-avatar-control-boundary]'), element => element.getBoundingClientRect()),
+  ].filter(rect => rect && rect.width > 0 && rect.height > 0);
+  if (
+    surfaceRect.width <= 0
+    || surfaceRect.height <= 0
+    || !paintedRects.length
+  ) return null;
+
+  const paintedRect = {
+    left: Math.min(...paintedRects.map(rect => rect.left)),
+    right: Math.max(...paintedRects.map(rect => rect.right)),
+    top: Math.min(...paintedRects.map(rect => rect.top)),
+    bottom: Math.max(...paintedRects.map(rect => rect.bottom)),
+  };
+  const baseLeft = paintedRect.left - drag.offsetX;
+  const baseTop = paintedRect.top - drag.offsetY;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const minX = HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - baseLeft;
+  const maxX = viewportWidth - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - (baseLeft + paintedRect.right - paintedRect.left);
+  const surfaceTop = Math.max(0, surfaceRect.top);
+  const surfaceBottom = Math.min(viewportHeight, surfaceRect.bottom);
+  const minY = surfaceTop + HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - baseTop;
+  const maxY = surfaceBottom - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - (baseTop + paintedRect.bottom - paintedRect.top);
+
+  const normalizeAxis = (min, max) => {
+    if (min <= max) return { min, max };
+    const centered = (min + max) / 2;
+    return { min: centered, max: centered };
+  };
+  return {
+    x: normalizeAxis(minX, maxX),
+    y: normalizeAxis(minY, maxY),
+  };
+}
+
+function setHomeAgentAvatarOffset(offsetX, offsetY) {
+  const bounds = homeAgentAvatarDragBounds();
+  const dock = $('#home-agent-avatar-dock');
+  if (!bounds || !dock) return false;
+
+  const drag = state.homeAgentAvatar.drag;
+  drag.offsetX = clamp(Number(offsetX) || 0, bounds.x.min, bounds.x.max);
+  drag.offsetY = clamp(Number(offsetY) || 0, bounds.y.min, bounds.y.max);
+  dock.style.setProperty('--home-avatar-drag-x', `${drag.offsetX}px`);
+  dock.style.setProperty('--home-avatar-drag-y', `${drag.offsetY}px`);
+  syncHomeAgentAvatarControlGeometry();
+  positionHomeAgentAvatarSpeech();
+  return true;
+}
+
+function clampHomeAgentAvatarPosition() {
+  const drag = state.homeAgentAvatar.drag;
+  setHomeAgentAvatarOffset(drag.offsetX, drag.offsetY);
+}
+
+function resetHomeAgentAvatarPosition() {
+  const drag = state.homeAgentAvatar.drag;
+  if (!setHomeAgentAvatarOffset(0, 0)) {
+    drag.offsetX = 0;
+    drag.offsetY = 0;
+  }
+}
+
+function armHomeAgentAvatarPointerClickSuppression() {
+  const drag = state.homeAgentAvatar.drag;
+  window.clearTimeout(drag.suppressPointerClickTimer);
+  drag.suppressPointerClick = true;
+  drag.suppressPointerClickTimer = window.setTimeout(() => {
+    drag.suppressPointerClick = false;
+    drag.suppressPointerClickTimer = 0;
+  }, 0);
+}
+
+function startHomeAgentAvatarDrag(event) {
+  state.homeAgentAvatar.lastPointerType = event.pointerType || '';
+  const drag = state.homeAgentAvatar.drag;
+  if (drag.pointerId !== null || event.button !== 0 || event.isPrimary === false) return;
+  window.clearTimeout(drag.suppressPointerClickTimer);
+  drag.suppressPointerClick = false;
+  drag.suppressPointerClickTimer = 0;
+  drag.pointerId = event.pointerId;
+  drag.startClientX = event.clientX;
+  drag.startClientY = event.clientY;
+  drag.startOffsetX = drag.offsetX;
+  drag.startOffsetY = drag.offsetY;
+  drag.hasMoved = false;
+  event.currentTarget.setPointerCapture(event.pointerId);
+}
+
+function moveHomeAgentAvatarDrag(event) {
+  const drag = state.homeAgentAvatar.drag;
+  if (drag.pointerId !== event.pointerId) return;
+  const deltaX = event.clientX - drag.startClientX;
+  const deltaY = event.clientY - drag.startClientY;
+  if (!drag.hasMoved && Math.hypot(deltaX, deltaY) < HOME_AGENT_AVATAR_DRAG_THRESHOLD_PX) return;
+
+  event.preventDefault();
+  drag.hasMoved = true;
+  const dock = $('#home-agent-avatar-dock');
+  if (dock) dock.dataset.dragging = 'true';
+  setHomeAgentAvatarOffset(drag.startOffsetX + deltaX, drag.startOffsetY + deltaY);
+}
+
+function endHomeAgentAvatarDrag(event) {
+  const drag = state.homeAgentAvatar.drag;
+  if (drag.pointerId !== event.pointerId) return;
+  const button = event.currentTarget;
+  const pointerId = drag.pointerId;
+  const didDrag = drag.hasMoved;
+  drag.pointerId = null;
+  drag.hasMoved = false;
+  const dock = $('#home-agent-avatar-dock');
+  if (dock) dock.dataset.dragging = 'false';
+  if (button.hasPointerCapture?.(pointerId)) button.releasePointerCapture(pointerId);
+  if (didDrag) armHomeAgentAvatarPointerClickSuppression();
+}
+
+function handleHomeAgentAvatarKeydown(event) {
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
+  if (event.key === 'Home') {
+    event.preventDefault();
+    resetHomeAgentAvatarPosition();
+    return;
+  }
+  const direction = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  }[event.key];
+  if (!direction) return;
+
+  event.preventDefault();
+  const drag = state.homeAgentAvatar.drag;
+  const step = event.shiftKey
+    ? HOME_AGENT_AVATAR_KEYBOARD_FAST_STEP_PX
+    : HOME_AGENT_AVATAR_KEYBOARD_STEP_PX;
+  setHomeAgentAvatarOffset(
+    drag.offsetX + direction[0] * step,
+    drag.offsetY + direction[1] * step,
+  );
+}
+
+function handleHomeAgentAvatarInteraction(event) {
+  const avatar = state.homeAgentAvatar;
+  const drag = state.homeAgentAvatar.drag;
+  if (drag.suppressPointerClick && event.detail !== 0) {
+    event.preventDefault();
+    drag.suppressPointerClick = false;
+    window.clearTimeout(drag.suppressPointerClickTimer);
+    drag.suppressPointerClickTimer = 0;
+    avatar.lastPointerType = '';
+    return;
+  }
+  const pointerType = event.pointerType || avatar.lastPointerType;
+  if (pointerType === 'touch' && !avatar.controlsOpen) {
+    setHomeAgentAvatarControlsOpen(true);
+    avatar.lastPointerType = '';
+    return;
+  }
+  if (pointerType === 'touch') setHomeAgentAvatarControlsOpen(false);
+  avatar.lastPointerType = '';
+  if (state.isQuerying || state.homeAgentAvatar.mode === 'thinking') return;
+  if (state.homeAgentAvatar.awaitingSecondClick) {
+    startHomeAgentAvatarReading();
+    return;
+  }
+  startHomeAgentAvatarWave();
+}
+
+function initHomeAgentAvatar() {
+  Object.values(HOME_AGENT_AVATAR_POSE_SETS).flatMap(Object.values).forEach(source => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.src = source;
+  });
+  resetHomeAgentAvatar({ resetQuotes: true });
+  const dock = $('#home-agent-avatar-dock');
+  const button = $('#home-agent-avatar-button');
+  if (!dock || !button) return;
+  dock.dataset.dragging = 'false';
+  dock.dataset.controlsOpen = 'false';
+  dock.dataset.speechVisible = 'false';
+  dock.dataset.actionBusy = 'false';
+  button.setAttribute('aria-controls', 'home-agent-avatar-actions home-agent-avatar-scale-control');
+  button.setAttribute('aria-expanded', 'false');
+  button.setAttribute('aria-keyshortcuts', 'ArrowLeft ArrowRight ArrowUp ArrowDown Home');
+  button.addEventListener('pointerdown', startHomeAgentAvatarDrag);
+  button.addEventListener('pointermove', moveHomeAgentAvatarDrag);
+  button.addEventListener('pointerup', endHomeAgentAvatarDrag);
+  button.addEventListener('pointercancel', endHomeAgentAvatarDrag);
+  button.addEventListener('lostpointercapture', endHomeAgentAvatarDrag);
+  button.addEventListener('keydown', handleHomeAgentAvatarKeydown);
+  button.addEventListener('click', handleHomeAgentAvatarInteraction);
+  $('#home-agent-avatar-actions')?.addEventListener('click', handleHomeAgentAvatarAction);
+  $('#home-agent-avatar-speech-dismiss')?.addEventListener('click', () => {
+    hideHomeAgentAvatarSpeech({ clearText: true });
+    setHomeAgentAvatarControlsOpen(false, { focusAvatar: true });
+  });
+  const scaleInput = $('#home-agent-avatar-scale');
+  scaleInput?.addEventListener('input', event => applyHomeAgentAvatarScale(Number(event.currentTarget.value) / 100));
+  scaleInput?.addEventListener('change', event => persistHomeAgentAvatarScale(Number(event.currentTarget.value) / 100));
+  $('#home-agent-avatar-scale-down')?.addEventListener('click', () => {
+    persistHomeAgentAvatarScale(state.features.avatarScale - HOME_AGENT_AVATAR_SCALE_STEP, { announce: true });
+  });
+  $('#home-agent-avatar-scale-up')?.addEventListener('click', () => {
+    persistHomeAgentAvatarScale(state.features.avatarScale + HOME_AGENT_AVATAR_SCALE_STEP, { announce: true });
+  });
+  dock.addEventListener('pointerenter', event => {
+    if (event.pointerType !== 'touch') setHomeAgentAvatarControlsOpen(true);
+  });
+  dock.addEventListener('pointerleave', () => {
+    scheduleHomeAgentAvatarControlsClose();
+  });
+  dock.addEventListener('focusin', () => {
+    if (state.homeAgentAvatar.lastPointerType !== 'touch') setHomeAgentAvatarControlsOpen(true);
+  });
+  dock.addEventListener('focusout', () => {
+    scheduleHomeAgentAvatarControlsClose();
+  });
+  dock.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    setHomeAgentAvatarControlsOpen(false, { focusAvatar: true });
+  });
+  document.addEventListener('pointerdown', event => {
+    if (!dock.contains(event.target)) setHomeAgentAvatarControlsOpen(false);
+  }, true);
+  applyHomeAgentAvatarScale(state.features.avatarScale);
+  syncHomeAgentAvatarActionControls();
+
+  const drag = state.homeAgentAvatar.drag;
+  if (typeof ResizeObserver === 'function') {
+    drag.resizeObserver = new ResizeObserver(clampHomeAgentAvatarPosition);
+    drag.resizeObserver.observe($('.app-main'));
+    drag.resizeObserver.observe($('.home-workspace'));
+    drag.resizeObserver.observe(dock);
+  }
+  window.addEventListener('resize', clampHomeAgentAvatarPosition);
+  window.requestAnimationFrame(clampHomeAgentAvatarPosition);
+}
+
 function setLoading(isLoading) {
   state.isQuerying = isLoading;
   const send = $('#home-send-button');
+  const newChat = $('#home-new-chat');
   const libSubmit = $('#library-query-submit');
   if (send) send.disabled = isLoading;
+  if (newChat) newChat.disabled = isLoading;
   if (libSubmit) {
     libSubmit.disabled = isLoading;
     libSubmit.textContent = isLoading ? '生成中…' : '回答';
   }
+  if (isLoading && state.features.avatar !== false) startHomeAgentAvatarThinking();
+  else stopHomeAgentAvatarThinking();
+  syncHomeAgentAvatarActionControls();
+  renderSpaces();
+  renderSourceSelector();
+  renderHistory();
   updateHomeModeLabel();
 }
 
 // ---------- Views ----------
 function showView(viewName) {
-  state.currentView = viewName;
+  const scheduleBlocked = viewName === 'schedule' && state.features.schedule === false;
+  const resolvedView = scheduleBlocked
+    ? 'home'
+    : viewName;
+  const targetView = $(`#view-${resolvedView}`);
+  if (!targetView) return;
+  state.currentView = resolvedView;
   $$('.view').forEach(v => v.classList.add('hidden'));
-  $(`#view-${viewName}`).classList.remove('hidden');
-  $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === viewName));
-  window.location.hash = `#/${viewName}`;
-  if (viewName === 'settings') loadSettings();
-  if (viewName === 'library' && state.currentSpace && !state.documents.length) loadDocuments();
+  targetView.classList.remove('hidden');
+  $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === resolvedView));
+  if (scheduleBlocked) window.history.replaceState(null, '', '#/home');
+  else window.location.hash = `#/${resolvedView}`;
+  if (resolvedView === 'settings') loadSettings();
+  if (resolvedView === 'library' && state.currentSpace && !state.documents.length) loadDocuments();
+  if (resolvedView === 'schedule') renderSchedule();
+  syncHomeAgentAvatarAvailability();
+}
+
+function syncHomeAgentAvatarAvailability() {
+  const enabled = state.features.avatar !== false;
+  const dock = $('#home-agent-avatar-dock');
+  const button = $('#home-agent-avatar-button');
+  const appMain = $('.app-main');
+  const workspace = $('.home-workspace');
+  const active = enabled && state.currentView === 'home';
+  if (dock) {
+    dock.classList.toggle('hidden', !enabled);
+    dock.setAttribute('aria-hidden', String(!enabled));
+  }
+  if (button) button.tabIndex = enabled ? 0 : -1;
+  if (workspace) workspace.classList.toggle('home-avatar-disabled', !enabled);
+  if (appMain) appMain.classList.toggle('home-avatar-drag-surface', active);
+  if (!active) setHomeAgentAvatarControlsOpen(false);
+  applyHomeAgentAvatarScale(state.features.avatarScale);
+  syncHomeAgentAvatarActionControls();
+  if (active) window.requestAnimationFrame(clampHomeAgentAvatarPosition);
+}
+
+function syncFeatureAvailability({ redirect = true } = {}) {
+  const enabled = state.features.schedule !== false;
+  const scheduleNav = $('[data-view="schedule"]');
+  if (scheduleNav) {
+    scheduleNav.classList.toggle('hidden', !enabled);
+    scheduleNav.setAttribute('aria-hidden', String(!enabled));
+  }
+  syncHomeAgentAvatarAvailability();
+  renderFeatureSettings();
+  if (!enabled && redirect && state.currentView === 'schedule') showView('home');
 }
 
 function initRouting() {
   const hash = window.location.hash.replace(/^#\//, '') || 'home';
-  const valid = ['home', 'library', 'settings'];
+  const valid = ['home', 'library', 'schedule', 'settings'];
   showView(valid.includes(hash) ? hash : 'home');
   window.addEventListener('hashchange', () => {
     const h = window.location.hash.replace(/^#\//, '') || 'home';
@@ -224,14 +1279,21 @@ async function loadBase() {
     api('/api/health').catch(() => ({ database: false, search: false, llm_configured: false })),
   ]);
   state.users = users.items;
+  state.authGeneration += 1;
   state.user = session.user;
+  resetHomeConversation();
+  loadHistory();
+  loadUserPreferences();
   updateUserCard();
   updateAbout(health);
   if (state.user) {
+    loadSchedule();
     await loadSpaces();
     await loadSettings();
     renderLoginUsers();
   } else {
+    state.scheduleItems = [];
+    renderSchedule();
     openLoginModal();
   }
 }
@@ -241,13 +1303,14 @@ function updateUserCard() {
   const status = $('#user-status');
   const avatar = $('#user-avatar');
   if (state.user) {
-    name.textContent = state.user.display_name;
+    const displayName = effectiveDisplayName();
+    name.textContent = displayName;
     status.textContent = state.user.id;
-    avatar.textContent = state.user.display_name.slice(0, 1);
+    renderAvatar(avatar, displayName, state.userProfile.avatar);
   } else {
     name.textContent = '未选择身份';
     status.textContent = '点击选择演示身份';
-    avatar.textContent = '?';
+    renderAvatar(avatar, '?', '');
   }
 }
 
@@ -261,41 +1324,84 @@ function closeLoginModal() {
 }
 
 function renderLoginUsers() {
-  $('#login-user-list').innerHTML = state.users.map(user => `
-    <button class="login-user-button" data-user="${escapeHtml(user.id)}" type="button">
-      <div class="login-user-avatar">${escapeHtml(user.display_name.slice(0, 1))}</div>
-      <div>
-        <div class="login-user-name">${escapeHtml(user.display_name)}</div>
-        <div class="login-user-id">${escapeHtml(user.id)}</div>
-      </div>
-    </button>
-  `).join('');
+  $('#login-user-list').innerHTML = state.users.map(user => {
+    const profile = readUserProfile(user);
+    const displayName = effectiveDisplayName(user, profile);
+    const avatarMarkup = profile.avatar
+      ? `<img src="${escapeHtml(profile.avatar)}" alt="">`
+      : escapeHtml(firstCharacter(displayName));
+    return `
+      <button class="login-user-button" data-user="${escapeHtml(user.id)}" type="button"${state.isLoggingIn ? ' disabled' : ''}>
+        <div class="login-user-avatar">${avatarMarkup}</div>
+        <div>
+          <div class="login-user-name">${escapeHtml(displayName)}</div>
+          <div class="login-user-id">${escapeHtml(user.id)}</div>
+        </div>
+      </button>
+    `;
+  }).join('');
   $$('#login-user-list [data-user]').forEach(btn => {
     btn.addEventListener('click', () => login(btn.dataset.user));
   });
 }
 
 async function login(userId) {
+  if (state.isLoggingIn) return;
+  state.isLoggingIn = true;
+  renderLoginUsers();
   try {
     const result = await api('/api/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: userId }),
     });
+    state.authGeneration += 1;
+    state.queryRequestId += 1;
+    setLoading(false);
     state.user = result.user;
+    state.spaces = [];
+    state.currentSpace = null;
+    state.documents = [];
     state.selectedDocumentIds.clear();
+    state.settings = {};
+    state.modelName = '';
+    renderSpaces();
+    renderDocuments();
+    renderSourceSelector();
+    renderHomeSourceSelector();
+    updateQueryStatus();
+    updateHomeModelLabel();
+    renderSettings();
+    resetHomeConversation();
+    loadHistory();
+    loadUserPreferences();
+    loadSchedule();
     updateUserCard();
     closeLoginModal();
     await loadSpaces();
     await loadSettings();
-    toast(`已以 ${state.user.display_name} 身份登录`, 'success');
+    toast(`已以 ${effectiveDisplayName()} 身份登录`, 'success');
   } catch (error) {
     toast(error.message, 'error');
+  } finally {
+    state.isLoggingIn = false;
+    if (!$('#login-modal').classList.contains('hidden')) renderLoginUsers();
   }
 }
 
 async function logout() {
-  await api('/api/session', { method: 'DELETE' });
+  if (state.isLoggingIn) return;
+  try {
+    await api('/api/session', { method: 'DELETE' });
+  } catch (error) {
+    toast(error.message, 'error');
+    return;
+  }
+  state.authGeneration += 1;
+  state.queryRequestId += 1;
+  state.avatarOperationId += 1;
+  closeAvatarCropModal({ restoreFocus: false });
+  setLoading(false);
   state.user = null;
   state.spaces = [];
   state.currentSpace = null;
@@ -303,14 +1409,26 @@ async function logout() {
   state.selectedDocumentIds.clear();
   state.settings = {};
   state.modelName = '';
+  state.scheduleItems = [];
+  state.selectedScheduleDate = localDateKey(new Date());
+  state.userProfile = { nickname: '', avatar: '' };
+  state.profileDraftAvatar = '';
+  state.features = normalizeFeaturePreferences();
+  resetHomeConversation();
+  loadHistory();
+  resetHomeAgentAvatar({ resetQuotes: true });
+  syncFeatureAvailability();
   updateHomeModelLabel();
   updateUserCard();
+  renderSchedule();
   openLoginModal();
 }
 
 // ---------- Spaces ----------
 async function loadSpaces() {
+  const authContext = captureAuthContext();
   const result = await api('/api/spaces');
+  if (!authContextMatches(authContext)) return;
   state.spaces = result.items;
   const previousId = state.currentSpace?.id;
   state.currentSpace = state.spaces.find(s => s.id === previousId)
@@ -330,7 +1448,7 @@ function renderSpaces() {
     const container = $(`#${containerId}`);
     if (!container) return;
     container.innerHTML = list.map(space => `
-      <div class="space-tree-item ${state.currentSpace?.id === space.id ? 'active' : ''}" data-space="${escapeHtml(space.id)}">
+      <div class="space-tree-item ${state.currentSpace?.id === space.id ? 'active' : ''}" data-space="${escapeHtml(space.id)}" aria-disabled="${state.isQuerying}">
         <span class="space-tree-dot ${space.space_type}"></span>
         <div>
           <div class="space-tree-name">${escapeHtml(space.name)}</div>
@@ -349,6 +1467,7 @@ function renderSpaces() {
 }
 
 async function selectSpace(spaceId) {
+  if (state.isQuerying) return;
   if (state.currentSpace?.id !== spaceId) state.selectedDocumentIds.clear();
   state.currentSpace = state.spaces.find(s => s.id === spaceId);
   renderSpaces();
@@ -358,7 +1477,10 @@ async function selectSpace(spaceId) {
 // ---------- Documents ----------
 async function loadDocuments() {
   if (!state.currentSpace) return;
-  const result = await api(`/api/spaces/${encodeURIComponent(state.currentSpace.id)}/documents?page_size=100`);
+  const authContext = captureAuthContext();
+  const spaceId = state.currentSpace.id;
+  const result = await api(`/api/spaces/${encodeURIComponent(spaceId)}/documents?page_size=100`);
+  if (!authContextMatches(authContext) || state.currentSpace?.id !== spaceId) return;
   state.documents = result.items;
   pruneDocumentSelection();
   renderDocuments();
@@ -396,6 +1518,7 @@ function renderDocuments() {
     if (title) title.textContent = '未选择空间';
     if (type) type.textContent = '';
     if (role) role.textContent = '';
+    if (list) list.replaceChildren();
     return;
   }
 
@@ -440,7 +1563,9 @@ function renderDocuments() {
 async function removeDocument(documentId) {
   if (!window.confirm('确认删除这份资料？删除后不会再参与检索。')) return;
   try {
+    const authContext = captureAuthContext();
     await api(`/api/documents/${documentId}`, { method: 'DELETE' });
+    if (!authContextMatches(authContext)) return;
     toast('资料已删除，索引已失效', 'success');
     await loadSpaces();
   } catch (error) {
@@ -450,7 +1575,9 @@ async function removeDocument(documentId) {
 
 async function reparse(documentId) {
   try {
+    const authContext = captureAuthContext();
     await api(`/api/documents/${documentId}/reparse`, { method: 'POST' });
+    if (!authContextMatches(authContext)) return;
     toast('资料已重新解析', 'success');
     await loadSpaces();
   } catch (error) {
@@ -469,7 +1596,9 @@ async function upload(file) {
   form.append('material_type', '用户上传资料');
   form.append('license_status', 'private-team-use');
   try {
+    const authContext = captureAuthContext();
     await api(`/api/spaces/${encodeURIComponent(state.currentSpace.id)}/documents`, { method: 'POST', body: form });
+    if (!authContextMatches(authContext)) return;
     toast('资料已导入', 'success');
     await loadSpaces();
   } catch (error) {
@@ -481,7 +1610,11 @@ async function upload(file) {
 function renderSourceList(listId, countId, onChange) {
   const count = $(`#${countId}`);
   const list = $(`#${listId}`);
+  const actionSelector = listId === 'home-source-list'
+    ? '[data-home-source-action]'
+    : '[data-source-action]';
   if (count) count.textContent = `已选 ${state.selectedDocumentIds.size} 份`;
+  $$(actionSelector).forEach(button => { button.disabled = state.isQuerying; });
   if (!list) return;
 
   const grouped = SOURCE_GROUPS.map(group => ({
@@ -495,7 +1628,7 @@ function renderSourceList(listId, countId, onChange) {
       <div class="source-group-list">
         ${group.documents.map(doc => `
           <label class="source-checkbox">
-            <input type="checkbox" value="${escapeHtml(doc.id)}" ${state.selectedDocumentIds.has(doc.id) ? 'checked' : ''}>
+            <input type="checkbox" value="${escapeHtml(doc.id)}" ${state.selectedDocumentIds.has(doc.id) ? 'checked' : ''}${state.isQuerying ? ' disabled' : ''}>
             <div>
               <div class="source-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</div>
               <div class="source-meta">${escapeHtml(doc.material_type)} · ${doc.page_count} 页</div>
@@ -508,6 +1641,10 @@ function renderSourceList(listId, countId, onChange) {
 
   $$(`#${listId} input[type="checkbox"]`).forEach(input => {
     input.addEventListener('change', () => {
+      if (state.isQuerying) {
+        input.checked = state.selectedDocumentIds.has(input.value);
+        return;
+      }
       if (input.checked) state.selectedDocumentIds.add(input.value);
       else state.selectedDocumentIds.delete(input.value);
       onChange();
@@ -536,6 +1673,7 @@ function renderHomeSourceSelector() {
 }
 
 function selectDocumentsByAction(action, context = 'library') {
+  if (state.isQuerying) return;
   if (context !== 'home') clearAnswer('library');
   if (action === 'clear') {
     state.selectedDocumentIds.clear();
@@ -563,6 +1701,7 @@ function updateQueryStatus() {
 // ---------- Query ----------
 function clearAnswer(prefix) {
   state.queryRequestId += 1;
+  if (state.isQuerying) setLoading(false);
   $(`#${prefix}-answer-area`).classList.add('hidden');
   $(`#${prefix}-answer-text`).replaceChildren();
   const citation = $(`#${prefix}-citation-section`);
@@ -725,8 +1864,9 @@ async function query(question, mode, prefix) {
     }
   }
 
-  setLoading(true);
   const isHome = prefix === 'home';
+  if (!isHome) clearAnswer(prefix);
+  setLoading(true);
   const isFirstHomeQuestion = isHome && state.homeConversation.length === 0;
   const requestId = ++state.queryRequestId;
 
@@ -736,7 +1876,6 @@ async function query(question, mode, prefix) {
     if (isFirstHomeQuestion) addHistory(question, '');
     ctx = beginHomeAssistantMessage(mode);
   } else {
-    clearAnswer(prefix);
     ctx = {
       textEl: $(`#${prefix}-answer-text`),
       modeEl: $(`#${prefix}-answer-mode`),
@@ -806,6 +1945,7 @@ function updateHomeModeLabel() {
   $$('.home-mode-button').forEach(button => {
     button.classList.toggle('active', button.dataset.homeMode === state.homeMode);
     button.setAttribute('aria-pressed', button.dataset.homeMode === state.homeMode ? 'true' : 'false');
+    button.disabled = state.isQuerying;
   });
   renderHomeSourceSelector();
 }
@@ -827,6 +1967,7 @@ function setHomeMode(mode) {
 
 function handleHomeSubmit(event) {
   event.preventDefault();
+  if (state.isQuerying) return;
   const textarea = $('#home-question');
   const question = textarea.value.trim();
   if (!question) return;
@@ -856,9 +1997,20 @@ function sortHistory() {
   );
 }
 
+function historyStorageKey(user = state.user) {
+  return user?.id ? `${HISTORY_KEY_PREFIX}${user.id}` : '';
+}
+
 function loadHistory() {
+  const storageKey = historyStorageKey();
+  if (!storageKey) {
+    state.history = [];
+    state.activeHistoryId = null;
+    renderHistory();
+    return;
+  }
   try {
-    const raw = localStorage.getItem(HISTORY_KEY);
+    const raw = localStorage.getItem(storageKey);
     const parsed = raw ? JSON.parse(raw) : [];
     state.history = Array.isArray(parsed) ? parsed
       .filter(item => item && typeof item.question === 'string' && item.question.trim())
@@ -880,9 +2032,12 @@ function loadHistory() {
 function saveHistory() {
   sortHistory();
   state.history = state.history.slice(0, 30);
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
-  } catch {}
+  const storageKey = historyStorageKey();
+  if (storageKey) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state.history));
+    } catch {}
+  }
   renderHistory();
 }
 
@@ -909,12 +2064,16 @@ function updateActiveHistoryPreview(answer, mode) {
   item.preview = answerText.replace(/\s+/g, ' ').slice(0, 60) + (answerText.length > 60 ? '…' : '');
   item.mode = mode === 'retrieval' ? 'retrieval' : 'direct';
   item.conversation = state.homeConversation.slice();
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history.slice(0, 30)));
-  } catch {}
+  const storageKey = historyStorageKey();
+  if (storageKey) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state.history.slice(0, 30)));
+    } catch {}
+  }
 }
 
 function openHistory(index) {
+  if (state.isQuerying) return;
   const item = state.history[index];
   if (!item) return;
   resetHomeConversation();
@@ -980,6 +2139,7 @@ function closeHistoryMenus() {
 }
 
 function handleHistoryAction(action, index) {
+  if (state.isQuerying) return;
   const item = state.history[index];
   if (!item) return;
 
@@ -1017,18 +2177,21 @@ function handleHistoryAction(action, index) {
 
 function renderHistory() {
   const list = $('#history-list');
+  const clearButton = $('#clear-history');
+  if (clearButton) clearButton.disabled = state.isQuerying;
   if (!list) return;
+  const disabled = state.isQuerying ? ' disabled' : '';
   list.innerHTML = state.history.length ? state.history.map((item, index) => `
     <div class="history-item${item.pinned ? ' pinned' : ''}" data-history-index="${index}">
-      <button class="history-open" data-history-open="${index}" type="button" title="${escapeHtml(item.question)}">
+      <button class="history-open" data-history-open="${index}" type="button" title="${escapeHtml(item.question)}"${disabled}>
         ${item.pinned ? '<span class="history-pin-indicator" aria-label="已置顶"></span>' : ''}
         <span class="history-title">${escapeHtml(item.question)}</span>
       </button>
-      <button class="history-menu-button" data-history-menu="${index}" type="button" aria-label="会话操作" aria-expanded="false">⋯</button>
+      <button class="history-menu-button" data-history-menu="${index}" type="button" aria-label="会话操作" aria-expanded="false"${disabled}>⋯</button>
       <div class="history-menu hidden" role="menu">
-        <button type="button" role="menuitem" data-history-action="pin" data-history-index="${index}">${item.pinned ? '取消置顶' : '置顶'}</button>
-        <button type="button" role="menuitem" data-history-action="rename" data-history-index="${index}">重命名</button>
-        <button type="button" role="menuitem" class="danger" data-history-action="delete" data-history-index="${index}">删除</button>
+        <button type="button" role="menuitem" data-history-action="pin" data-history-index="${index}"${disabled}>${item.pinned ? '取消置顶' : '置顶'}</button>
+        <button type="button" role="menuitem" data-history-action="rename" data-history-index="${index}"${disabled}>重命名</button>
+        <button type="button" role="menuitem" class="danger" data-history-action="delete" data-history-index="${index}"${disabled}>删除</button>
       </div>
     </div>
   `).join('') : '<div class="muted" style="font-size:.72rem;padding:8px 10px">还没有问答记录</div>';
@@ -1040,6 +2203,10 @@ function renderHistory() {
   $$('[data-history-menu]').forEach(button => {
     button.addEventListener('click', event => {
       event.stopPropagation();
+      if (state.isQuerying) {
+        closeHistoryMenus();
+        return;
+      }
       const menu = button.parentElement.querySelector('.history-menu');
       const shouldOpen = menu.classList.contains('hidden');
       closeHistoryMenus();
@@ -1059,11 +2226,1170 @@ function renderHistory() {
   });
 }
 
+// ---------- Schedule ----------
+function localDateKey(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseLocalDate(value) {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day, 12);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+}
+
+function formatScheduleMonth(date) {
+  return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(date);
+}
+
+function formatScheduleDate(value, includeYear = false) {
+  const date = parseLocalDate(value);
+  if (!date) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    ...(includeYear ? { year: 'numeric' } : {}),
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date);
+}
+
+function isValidTime(value) {
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(value || ''));
+}
+
+function createScheduleId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function normalizeScheduleItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const title = String(item.title || '').trim().slice(0, 80);
+  const date = String(item.date || '');
+  if (!title || !parseLocalDate(date)) return null;
+  const category = Object.prototype.hasOwnProperty.call(SCHEDULE_CATEGORIES, item.category)
+    ? item.category
+    : 'study';
+  const allDay = Boolean(item.allDay);
+  const startTime = !allDay && isValidTime(item.startTime) ? item.startTime : '';
+  const endTime = !allDay && isValidTime(item.endTime) ? item.endTime : '';
+  return {
+    id: String(item.id || createScheduleId()),
+    title,
+    date,
+    startTime,
+    endTime: endTime && (!startTime || endTime > startTime) ? endTime : '',
+    allDay,
+    category,
+    location: String(item.location || '').trim().slice(0, 100),
+    notes: String(item.notes || '').trim().slice(0, 500),
+    completed: Boolean(item.completed),
+    source: item.source === 'ustc' ? 'ustc' : 'manual',
+    createdAt: Number(item.createdAt) || Date.now(),
+  };
+}
+
+function scheduleStorageKey() {
+  return state.user?.id ? `${SCHEDULE_KEY_PREFIX}${state.user.id}` : null;
+}
+
+function loadSchedule() {
+  state.selectedScheduleDate = localDateKey(new Date());
+  const selected = parseLocalDate(state.selectedScheduleDate);
+  state.scheduleMonth = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  const key = scheduleStorageKey();
+  if (!key) {
+    state.scheduleItems = [];
+    renderSchedule();
+    return;
+  }
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    state.scheduleItems = Array.isArray(parsed)
+      ? parsed.map(normalizeScheduleItem).filter(Boolean).slice(0, 500)
+      : [];
+  } catch {
+    state.scheduleItems = [];
+  }
+  renderSchedule();
+}
+
+function saveSchedule() {
+  const key = scheduleStorageKey();
+  if (!key) return false;
+  try {
+    localStorage.setItem(key, JSON.stringify(state.scheduleItems));
+    return true;
+  } catch {
+    toast('计划未能保存到浏览器', 'error');
+    return false;
+  }
+}
+
+function scheduleSort(items) {
+  return items.slice().sort((a, b) =>
+    a.date.localeCompare(b.date)
+    || (a.allDay ? '00:00' : a.startTime || '23:59').localeCompare(b.allDay ? '00:00' : b.startTime || '23:59')
+    || Number(a.createdAt) - Number(b.createdAt)
+  );
+}
+
+function scheduleTimeLabel(item) {
+  if (item.allDay) return '全天';
+  if (item.startTime && item.endTime) return `${item.startTime}–${item.endTime}`;
+  return item.startTime || '时间待定';
+}
+
+function renderScheduleCalendar() {
+  const calendar = $('#schedule-calendar');
+  if (!calendar || !state.scheduleMonth) return;
+  const year = state.scheduleMonth.getFullYear();
+  const month = state.scheduleMonth.getMonth();
+  const firstDay = new Date(year, month, 1, 12);
+  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const gridStart = new Date(year, month, 1 - mondayOffset, 12);
+  const todayKey = localDateKey(new Date());
+  const cells = [];
+
+  for (let index = 0; index < 42; index += 1) {
+    const date = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index, 12);
+    const dateKey = localDateKey(date);
+    const dayItems = scheduleSort(state.scheduleItems.filter(item => item.date === dateKey));
+    const classes = ['schedule-day'];
+    if (date.getMonth() !== month) classes.push('outside-month');
+    if (dateKey === todayKey) classes.push('today');
+    if (dateKey === state.selectedScheduleDate) classes.push('selected');
+    const visibleItems = dayItems.slice(0, 3).map(item => `
+      <button
+        class="schedule-event category-${item.category}${item.completed ? ' completed' : ''}"
+        type="button"
+        tabindex="-1"
+        data-schedule-plan="${escapeHtml(item.id)}"
+        aria-label="${escapeHtml(`${item.title}，${scheduleTimeLabel(item)}`)}"
+        title="${escapeHtml(item.title)}"
+      >${escapeHtml(`${item.allDay ? '' : `${item.startTime} `}${item.title}`)}</button>
+    `).join('');
+    const more = dayItems.length > 3 ? `<div class="schedule-more">还有 ${dayItems.length - 3} 项</div>` : '';
+    cells.push(`
+      <div class="${classes.join(' ')}" role="gridcell" aria-selected="${dateKey === state.selectedScheduleDate}">
+        <button
+          class="schedule-day-number"
+          type="button"
+          tabindex="${dateKey === state.selectedScheduleDate ? '0' : '-1'}"
+          data-schedule-date="${dateKey}"
+          aria-label="${escapeHtml(formatScheduleDate(dateKey, true))}"
+        >${date.getDate()}</button>
+        <div class="schedule-events">${visibleItems}${more}</div>
+      </div>
+    `);
+  }
+  calendar.innerHTML = Array.from({ length: 6 }, (_, weekIndex) => `
+    <div class="schedule-week" role="row">
+      ${cells.slice(weekIndex * 7, weekIndex * 7 + 7).join('')}
+    </div>
+  `).join('');
+}
+
+function renderScheduleAgenda() {
+  const heading = $('#schedule-day-heading');
+  const count = $('#schedule-day-count');
+  const list = $('#schedule-agenda-list');
+  if (!heading || !count || !list) return;
+  const selected = state.selectedScheduleDate || localDateKey(new Date());
+  const items = scheduleSort(state.scheduleItems.filter(item => item.date === selected));
+  const completedCount = items.filter(item => item.completed).length;
+  heading.textContent = formatScheduleDate(selected);
+  count.textContent = `${items.length} 项计划${completedCount ? ` · ${completedCount} 项已完成` : ''}`;
+  if (!items.length) {
+    list.innerHTML = `
+      <div class="schedule-agenda-empty">
+        <div class="schedule-agenda-empty-mark">＋</div>
+        <span>当天还没有计划</span>
+        <button class="button button-secondary" type="button" data-schedule-action="add">新增计划</button>
+      </div>
+    `;
+    return;
+  }
+  list.innerHTML = items.map(item => `
+    <div class="schedule-agenda-item${item.completed ? ' completed' : ''}">
+      <button
+        class="schedule-complete${item.completed ? ' completed' : ''}"
+        type="button"
+        data-schedule-action="toggle"
+        data-schedule-id="${escapeHtml(item.id)}"
+        aria-label="${item.completed ? '取消完成' : '标记完成'}：${escapeHtml(item.title)}"
+        title="${item.completed ? '取消完成' : '标记完成'}"
+      >✓</button>
+      <button class="schedule-agenda-main" type="button" data-schedule-action="edit" data-schedule-id="${escapeHtml(item.id)}">
+        <div class="schedule-agenda-title">${escapeHtml(item.title)}</div>
+        <div class="schedule-agenda-meta">
+          <span>${escapeHtml(scheduleTimeLabel(item))}</span>
+          <span class="schedule-category category-${item.category}">${escapeHtml(SCHEDULE_CATEGORIES[item.category])}</span>
+          ${item.location ? `<span>${escapeHtml(item.location)}</span>` : ''}
+          ${item.source === 'ustc' ? '<span>教务处</span>' : ''}
+        </div>
+      </button>
+      <button
+        class="schedule-delete"
+        type="button"
+        data-schedule-action="delete"
+        data-schedule-id="${escapeHtml(item.id)}"
+        aria-label="删除计划：${escapeHtml(item.title)}"
+        title="删除"
+      >×</button>
+    </div>
+  `).join('');
+}
+
+function renderSchedule() {
+  const label = $('#schedule-month-label');
+  if (!label) return;
+  if (!state.selectedScheduleDate || !parseLocalDate(state.selectedScheduleDate)) {
+    state.selectedScheduleDate = localDateKey(new Date());
+  }
+  if (!state.scheduleMonth) {
+    const selected = parseLocalDate(state.selectedScheduleDate);
+    state.scheduleMonth = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  }
+  label.textContent = formatScheduleMonth(state.scheduleMonth);
+  renderScheduleCalendar();
+  renderScheduleAgenda();
+}
+
+function focusScheduleDate(value) {
+  window.requestAnimationFrame(() => {
+    const target = Array.from($$('[data-schedule-date]'))
+      .find(button => button.dataset.scheduleDate === value);
+    if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+  });
+}
+
+function focusScheduleAction(action, scheduleId = null) {
+  window.requestAnimationFrame(() => {
+    const target = scheduleId
+      ? Array.from($$(`[data-schedule-action="${action}"]`))
+        .find(button => button.dataset.scheduleId === scheduleId)
+      : $('#schedule-add-selected');
+    if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+  });
+}
+
+function selectScheduleDate(value, focusAfterRender = false) {
+  const date = parseLocalDate(value);
+  if (!date) return;
+  state.selectedScheduleDate = value;
+  state.scheduleMonth = new Date(date.getFullYear(), date.getMonth(), 1, 12);
+  renderSchedule();
+  if (focusAfterRender) focusScheduleDate(value);
+}
+
+function shiftScheduleMonth(delta) {
+  const base = state.scheduleMonth || new Date();
+  state.scheduleMonth = new Date(base.getFullYear(), base.getMonth() + delta, 1, 12);
+  state.selectedScheduleDate = localDateKey(state.scheduleMonth);
+  renderSchedule();
+}
+
+function showScheduleToday() {
+  const today = new Date();
+  state.selectedScheduleDate = localDateKey(today);
+  state.scheduleMonth = new Date(today.getFullYear(), today.getMonth(), 1, 12);
+  renderSchedule();
+}
+
+function rememberModalTrigger(trigger) {
+  state.modalReturnFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+}
+
+function restoreModalTrigger(fallbackSelector = '#schedule-add') {
+  const trigger = state.modalReturnFocus;
+  state.modalReturnFocus = null;
+  window.requestAnimationFrame(() => {
+    const fallback = typeof fallbackSelector === 'string' ? $(fallbackSelector) : fallbackSelector;
+    const target = trigger instanceof HTMLElement && trigger.isConnected && !trigger.disabled ? trigger : fallback;
+    if (target instanceof HTMLElement) target.focus({ preventScroll: true });
+  });
+}
+
+function syncPlanTimeFields() {
+  const allDay = $('#plan-all-day').checked;
+  const fields = $('#plan-time-fields');
+  $('#plan-start-time').disabled = allDay;
+  $('#plan-end-time').disabled = allDay;
+  fields.classList.toggle('plan-time-fields-disabled', allDay);
+}
+
+function openPlanModal(dateValue = state.selectedScheduleDate, scheduleId = null, trigger = document.activeElement) {
+  const item = scheduleId ? state.scheduleItems.find(entry => entry.id === scheduleId) : null;
+  const date = item?.date || (parseLocalDate(dateValue) ? dateValue : localDateKey(new Date()));
+  state.editingScheduleId = item?.id || null;
+  rememberModalTrigger(trigger);
+  $('#plan-modal-title').textContent = item ? '编辑计划' : '新增计划';
+  $('#plan-modal-date-label').textContent = formatScheduleDate(date, true);
+  $('#plan-title').value = item?.title || '';
+  $('#plan-date').value = date;
+  $('#plan-category').value = item?.category || 'study';
+  $('#plan-all-day').checked = Boolean(item?.allDay);
+  $('#plan-start-time').value = item?.startTime || '09:00';
+  $('#plan-end-time').value = item?.endTime || '10:00';
+  $('#plan-location').value = item?.location || '';
+  $('#plan-notes').value = item?.notes || '';
+  $('#plan-delete').classList.toggle('hidden', !item);
+  syncPlanTimeFields();
+  $('#plan-modal').classList.remove('hidden');
+  window.requestAnimationFrame(() => $('#plan-title').focus());
+}
+
+function closePlanModal() {
+  $('#plan-modal').classList.add('hidden');
+  $('#plan-form').reset();
+  state.editingScheduleId = null;
+  restoreModalTrigger();
+}
+
+function savePlan(event) {
+  event.preventDefault();
+  const title = $('#plan-title').value.trim();
+  const date = $('#plan-date').value;
+  const allDay = $('#plan-all-day').checked;
+  const startTime = allDay ? '' : $('#plan-start-time').value;
+  const endTime = allDay ? '' : $('#plan-end-time').value;
+  if (!title) {
+    toast('请输入计划名称', 'error');
+    $('#plan-title').focus();
+    return;
+  }
+  if (!parseLocalDate(date)) {
+    toast('请选择有效日期', 'error');
+    $('#plan-date').focus();
+    return;
+  }
+  if (!allDay && !isValidTime(startTime)) {
+    toast('请选择开始时间', 'error');
+    $('#plan-start-time').focus();
+    return;
+  }
+  if (!allDay && endTime && (!isValidTime(endTime) || endTime <= startTime)) {
+    toast('结束时间必须晚于开始时间', 'error');
+    $('#plan-end-time').focus();
+    return;
+  }
+
+  const existingIndex = state.scheduleItems.findIndex(item => item.id === state.editingScheduleId);
+  const existing = existingIndex >= 0 ? state.scheduleItems[existingIndex] : null;
+  if (!existing && state.scheduleItems.length >= 500) {
+    toast('最多保存 500 项计划', 'error');
+    return;
+  }
+  const categoryValue = $('#plan-category').value;
+  const item = normalizeScheduleItem({
+    id: existing?.id || createScheduleId(),
+    title,
+    date,
+    startTime,
+    endTime,
+    allDay,
+    category: Object.prototype.hasOwnProperty.call(SCHEDULE_CATEGORIES, categoryValue) ? categoryValue : 'study',
+    location: $('#plan-location').value,
+    notes: $('#plan-notes').value,
+    completed: existing?.completed || false,
+    source: existing?.source || 'manual',
+    createdAt: existing?.createdAt || Date.now(),
+  });
+  if (!item) return;
+  const previousItems = state.scheduleItems.slice();
+  const previousSelectedDate = state.selectedScheduleDate;
+  const previousScheduleMonth = state.scheduleMonth
+    ? new Date(state.scheduleMonth.getTime())
+    : null;
+  if (existingIndex >= 0) state.scheduleItems.splice(existingIndex, 1, item);
+  else state.scheduleItems.push(item);
+  state.selectedScheduleDate = item.date;
+  const selected = parseLocalDate(item.date);
+  state.scheduleMonth = new Date(selected.getFullYear(), selected.getMonth(), 1, 12);
+  if (!saveSchedule()) {
+    state.scheduleItems = previousItems;
+    state.selectedScheduleDate = previousSelectedDate;
+    state.scheduleMonth = previousScheduleMonth;
+    renderSchedule();
+    return;
+  }
+  renderSchedule();
+  closePlanModal();
+  toast(existing ? '计划已更新' : '计划已添加', 'success');
+}
+
+function deletePlan(scheduleId, closeModalAfter = false) {
+  const item = state.scheduleItems.find(entry => entry.id === scheduleId);
+  if (!item || !window.confirm(`确认删除计划“${item.title}”？`)) return;
+  const dayItems = scheduleSort(state.scheduleItems.filter(entry => entry.date === item.date));
+  const itemIndex = dayItems.findIndex(entry => entry.id === scheduleId);
+  const nextFocusId = dayItems[itemIndex + 1]?.id || dayItems[itemIndex - 1]?.id || null;
+  const previousItems = state.scheduleItems;
+  state.scheduleItems = state.scheduleItems.filter(entry => entry.id !== scheduleId);
+  if (!saveSchedule()) {
+    state.scheduleItems = previousItems;
+    renderSchedule();
+    if (!closeModalAfter) focusScheduleAction('delete', scheduleId);
+    return;
+  }
+  renderSchedule();
+  if (closeModalAfter) closePlanModal();
+  else focusScheduleAction('edit', nextFocusId);
+  toast('计划已删除', 'success');
+}
+
+function togglePlan(scheduleId) {
+  const item = state.scheduleItems.find(entry => entry.id === scheduleId);
+  if (!item) return;
+  const previousCompleted = item.completed;
+  item.completed = !item.completed;
+  if (!saveSchedule()) {
+    item.completed = previousCompleted;
+    renderSchedule();
+    focusScheduleAction('toggle', scheduleId);
+    return;
+  }
+  renderSchedule();
+  focusScheduleAction('toggle', scheduleId);
+  toast(item.completed ? '计划已完成' : '计划已恢复', 'success');
+}
+
+function openExamImportModal(trigger = document.activeElement) {
+  rememberModalTrigger(trigger);
+  $('#exam-import-modal').classList.remove('hidden');
+  window.requestAnimationFrame(() => $('#exam-import-connect').focus());
+}
+
+function closeExamImportModal() {
+  $('#exam-import-modal').classList.add('hidden');
+  restoreModalTrigger();
+}
+
+function connectExamImport() {
+  closeExamImportModal();
+  toast('教务处导入接口尚未接入', '');
+}
+
+function activeModal() {
+  return ['#avatar-crop-modal', '#plan-modal', '#exam-import-modal', '#login-modal']
+    .map(selector => $(selector))
+    .find(modal => modal && !modal.classList.contains('hidden')) || null;
+}
+
+function trapModalFocus(event) {
+  if (event.key !== 'Tab') return;
+  const modal = activeModal();
+  if (!modal) return;
+  const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+    .filter(element => !element.hidden && element.getClientRects().length);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (!modal.contains(document.activeElement)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  } else if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 // ---------- Settings ----------
+function activateSettingsTab(target, { focus = false } = {}) {
+  const tabs = $$('[data-settings-tab]');
+  const selectedTab = tabs.find(tab => tab.dataset.settingsTab === target);
+  const selectedPanel = $(`#settings-tab-${target}`);
+  if (!selectedTab || !selectedPanel) return;
+  tabs.forEach(tab => {
+    const selected = tab === selectedTab;
+    tab.classList.toggle('active', selected);
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+  });
+  $$('.settings-tab').forEach(panel => panel.classList.toggle('hidden', panel !== selectedPanel));
+  if (focus) selectedTab.focus({ preventScroll: true });
+}
+
+function syncSettingsTabOrientation() {
+  const tablist = $('.settings-nav[role="tablist"]');
+  if (!tablist) return;
+  tablist.setAttribute('aria-orientation', window.matchMedia('(max-width: 900px)').matches ? 'horizontal' : 'vertical');
+}
+
+function updateProfileNicknameCount() {
+  const input = $('#profile-nickname');
+  const count = $('#profile-nickname-count');
+  if (!input || !count) return;
+  count.textContent = `${Array.from(input.value).length} / 24`;
+}
+
+function setProfileNicknameError(message = '') {
+  const input = $('#profile-nickname');
+  const error = $('#profile-nickname-error');
+  if (!input || !error) return;
+  input.setAttribute('aria-invalid', String(Boolean(message)));
+  error.textContent = message;
+  error.classList.toggle('hidden', !message);
+}
+
+function renderProfileAvatarPreview() {
+  const input = $('#profile-nickname');
+  const nickname = normalizeNickname(input?.value, effectiveDisplayName());
+  renderAvatar($('#profile-avatar-preview'), nickname, state.profileDraftAvatar);
+  const reset = $('#profile-avatar-reset');
+  if (reset) reset.disabled = !state.user || !state.profileDraftAvatar;
+}
+
+function renderProfileSettings() {
+  const form = $('#profile-form');
+  const nickname = $('#profile-nickname');
+  if (!form || !nickname) return;
+  nickname.value = state.user ? effectiveDisplayName() : '';
+  form.querySelectorAll('button, input').forEach(control => {
+    control.disabled = !state.user;
+  });
+  setProfileNicknameError();
+  renderProfileAvatarPreview();
+  updateProfileNicknameCount();
+}
+
+function imageBytesLabel(bytes, offset, length) {
+  return String.fromCharCode(...bytes.slice(offset, offset + length));
+}
+
+async function readImageDimensions(file) {
+  const headerSize = Math.min(file.size, 1024 * 1024);
+  const bytes = new Uint8Array(await file.slice(0, headerSize).arrayBuffer());
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+  if (bytes.length >= 24
+    && bytes[0] === 0x89
+    && imageBytesLabel(bytes, 1, 3) === 'PNG'
+    && bytes[4] === 0x0d
+    && bytes[5] === 0x0a
+    && bytes[6] === 0x1a
+    && bytes[7] === 0x0a
+    && imageBytesLabel(bytes, 12, 4) === 'IHDR') {
+    return { width: view.getUint32(16, false), height: view.getUint32(20, false) };
+  }
+
+  if (bytes.length >= 12 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    const startOfFrameMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    let offset = 2;
+    while (offset + 8 < bytes.length) {
+      while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+      const marker = bytes[offset];
+      offset += 1;
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (marker === 0xda) break;
+      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+      if (offset + 1 >= bytes.length) break;
+      const segmentLength = (bytes[offset] << 8) | bytes[offset + 1];
+      if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
+      if (startOfFrameMarkers.has(marker) && segmentLength >= 7) {
+        return {
+          width: (bytes[offset + 5] << 8) | bytes[offset + 6],
+          height: (bytes[offset + 3] << 8) | bytes[offset + 4],
+        };
+      }
+      offset += segmentLength;
+    }
+  }
+
+  if (bytes.length >= 30
+    && imageBytesLabel(bytes, 0, 4) === 'RIFF'
+    && imageBytesLabel(bytes, 8, 4) === 'WEBP') {
+    const chunk = imageBytesLabel(bytes, 12, 4);
+    if (chunk === 'VP8X') {
+      return {
+        width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16),
+        height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16),
+      };
+    }
+    if (chunk === 'VP8L' && bytes[20] === 0x2f) {
+      return {
+        width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+        height: 1 + ((bytes[22] & 0xc0) >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+      };
+    }
+    if (chunk === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+      return {
+        width: (bytes[26] | (bytes[27] << 8)) & 0x3fff,
+        height: (bytes[28] | (bytes[29] << 8)) & 0x3fff,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function decodeAvatarBitmap(file) {
+  if (!AVATAR_FILE_TYPES.has(file.type)) {
+    throw new Error('仅支持 PNG、JPG 或 WebP 图片');
+  }
+  if (typeof createImageBitmap !== 'function') {
+    throw new Error('当前浏览器不支持头像处理');
+  }
+
+  const dimensions = await readImageDimensions(file);
+  if (!dimensions?.width
+    || !dimensions?.height
+    || dimensions.width > MAX_AVATAR_DIMENSION
+    || dimensions.height > MAX_AVATAR_DIMENSION
+    || dimensions.width * dimensions.height > MAX_AVATAR_PIXELS) {
+    throw new Error('图片尺寸无效或过大');
+  }
+
+  let bitmap = null;
+  try {
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch {
+      try {
+        bitmap = await createImageBitmap(file);
+      } catch {
+        throw new Error('无法读取这张图片，请换一张重试');
+      }
+    }
+    if (!bitmap.width
+      || !bitmap.height
+      || bitmap.width > MAX_AVATAR_DIMENSION
+      || bitmap.height > MAX_AVATAR_DIMENSION
+      || bitmap.width * bitmap.height > MAX_AVATAR_PIXELS) {
+      throw new Error('图片尺寸无效或过大');
+    }
+    return bitmap;
+  } catch (error) {
+    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    throw error;
+  }
+}
+
+function avatarCropMetrics() {
+  const crop = state.avatarCrop;
+  const bitmap = crop.bitmap;
+  if (!bitmap) return null;
+  const quarterTurns = Math.round(crop.rotation / 90) % 4;
+  const rotatedWidth = quarterTurns % 2 ? bitmap.height : bitmap.width;
+  const rotatedHeight = quarterTurns % 2 ? bitmap.width : bitmap.height;
+  const coverScale = Math.max(1 / rotatedWidth, 1 / rotatedHeight);
+  const scaledWidth = rotatedWidth * coverScale * crop.zoom;
+  const scaledHeight = rotatedHeight * coverScale * crop.zoom;
+  return {
+    bitmap,
+    coverScale,
+    maxPanX: Math.max(0, (scaledWidth - 1) / 2),
+    maxPanY: Math.max(0, (scaledHeight - 1) / 2),
+  };
+}
+
+function clampAvatarCropPan() {
+  const crop = state.avatarCrop;
+  crop.zoom = clamp(Number(crop.zoom) || AVATAR_CROP_MIN_ZOOM, AVATAR_CROP_MIN_ZOOM, AVATAR_CROP_MAX_ZOOM);
+  const metrics = avatarCropMetrics();
+  if (!metrics) return;
+  crop.panX = clamp(Number(crop.panX) || 0, -metrics.maxPanX, metrics.maxPanX);
+  crop.panY = clamp(Number(crop.panY) || 0, -metrics.maxPanY, metrics.maxPanY);
+}
+
+function drawAvatarCropImage(context, centerX, centerY, diameter, { clipCircle = false } = {}) {
+  const crop = state.avatarCrop;
+  const metrics = avatarCropMetrics();
+  if (!metrics) return;
+  context.save();
+  if (clipCircle) {
+    context.beginPath();
+    context.arc(centerX, centerY, diameter / 2, 0, Math.PI * 2);
+    context.clip();
+  }
+  context.translate(centerX + crop.panX * diameter, centerY + crop.panY * diameter);
+  context.rotate(crop.rotation * Math.PI / 180);
+  const scale = diameter * metrics.coverScale * crop.zoom;
+  context.scale(scale, scale);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(metrics.bitmap, -metrics.bitmap.width / 2, -metrics.bitmap.height / 2);
+  context.restore();
+}
+
+function renderAvatarCrop() {
+  if (!state.avatarCrop.bitmap) return;
+  clampAvatarCropPan();
+
+  const canvas = $('#avatar-crop-canvas');
+  if (canvas) {
+    if (canvas.width !== AVATAR_CROP_STAGE_SIZE) canvas.width = AVATAR_CROP_STAGE_SIZE;
+    if (canvas.height !== AVATAR_CROP_STAGE_SIZE) canvas.height = AVATAR_CROP_STAGE_SIZE;
+    const context = canvas.getContext('2d');
+    if (context) {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, AVATAR_CROP_STAGE_SIZE, AVATAR_CROP_STAGE_SIZE);
+      context.fillStyle = '#202326';
+      context.fillRect(0, 0, AVATAR_CROP_STAGE_SIZE, AVATAR_CROP_STAGE_SIZE);
+      drawAvatarCropImage(
+        context,
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_DIAMETER,
+      );
+
+      context.save();
+      context.beginPath();
+      context.rect(0, 0, AVATAR_CROP_STAGE_SIZE, AVATAR_CROP_STAGE_SIZE);
+      context.arc(
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_DIAMETER / 2,
+        0,
+        Math.PI * 2,
+        true,
+      );
+      context.fillStyle = 'rgba(0, 0, 0, 0.62)';
+      context.fill('evenodd');
+      context.beginPath();
+      context.arc(
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_STAGE_SIZE / 2,
+        AVATAR_CROP_DIAMETER / 2 - 1,
+        0,
+        Math.PI * 2,
+      );
+      context.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+      context.lineWidth = 2;
+      context.stroke();
+      context.restore();
+    }
+  }
+
+  const preview = $('#avatar-crop-preview');
+  if (preview) {
+    if (preview.width !== AVATAR_CROP_PREVIEW_SIZE) preview.width = AVATAR_CROP_PREVIEW_SIZE;
+    if (preview.height !== AVATAR_CROP_PREVIEW_SIZE) preview.height = AVATAR_CROP_PREVIEW_SIZE;
+    const context = preview.getContext('2d');
+    if (context) {
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, AVATAR_CROP_PREVIEW_SIZE, AVATAR_CROP_PREVIEW_SIZE);
+      drawAvatarCropImage(
+        context,
+        AVATAR_CROP_PREVIEW_SIZE / 2,
+        AVATAR_CROP_PREVIEW_SIZE / 2,
+        AVATAR_CROP_PREVIEW_SIZE,
+        { clipCircle: true },
+      );
+    }
+  }
+
+  const zoomPercent = Math.round(state.avatarCrop.zoom * 100);
+  const zoom = $('#avatar-crop-zoom');
+  if (zoom) {
+    zoom.value = String(state.avatarCrop.zoom);
+    zoom.setAttribute('aria-valuetext', `${zoomPercent}%`);
+  }
+  const zoomValue = $('#avatar-crop-zoom-value');
+  if (zoomValue) zoomValue.textContent = `${zoomPercent}%`;
+  const zoomOut = $('#avatar-crop-zoom-out');
+  const zoomIn = $('#avatar-crop-zoom-in');
+  if (zoomOut) zoomOut.disabled = state.avatarCrop.zoom <= AVATAR_CROP_MIN_ZOOM;
+  if (zoomIn) zoomIn.disabled = state.avatarCrop.zoom >= AVATAR_CROP_MAX_ZOOM;
+}
+
+function resetAvatarCropTransform() {
+  if (!state.avatarCrop.bitmap) return;
+  Object.assign(state.avatarCrop, {
+    rotation: 0,
+    zoom: AVATAR_CROP_MIN_ZOOM,
+    panX: 0,
+    panY: 0,
+  });
+  renderAvatarCrop();
+  const status = $('#avatar-crop-live-status');
+  if (status) status.textContent = '已重置头像位置、缩放和旋转';
+}
+
+function setAvatarCropZoom(value) {
+  if (!state.avatarCrop.bitmap) return;
+  state.avatarCrop.zoom = clamp(Number(value) || AVATAR_CROP_MIN_ZOOM, AVATAR_CROP_MIN_ZOOM, AVATAR_CROP_MAX_ZOOM);
+  clampAvatarCropPan();
+  renderAvatarCrop();
+}
+
+function stepAvatarCropZoom(delta) {
+  if (!state.avatarCrop.bitmap) return;
+  setAvatarCropZoom(Math.round((state.avatarCrop.zoom + delta) * 100) / 100);
+  const status = $('#avatar-crop-live-status');
+  if (status) status.textContent = `头像缩放至 ${Math.round(state.avatarCrop.zoom * 100)}%`;
+}
+
+function rotateAvatarCrop(delta) {
+  if (!state.avatarCrop.bitmap) return;
+  state.avatarCrop.rotation = (state.avatarCrop.rotation + delta + 360) % 360;
+  clampAvatarCropPan();
+  renderAvatarCrop();
+  const status = $('#avatar-crop-live-status');
+  if (status) status.textContent = `已向${delta < 0 ? '左' : '右'}旋转 90 度，当前角度 ${state.avatarCrop.rotation} 度`;
+}
+
+function startAvatarCropDrag(event) {
+  const crop = state.avatarCrop;
+  if (!crop.bitmap || crop.pointerId !== null || event.button !== 0) return;
+  event.preventDefault();
+  crop.pointerId = event.pointerId;
+  crop.lastClientX = event.clientX;
+  crop.lastClientY = event.clientY;
+  event.currentTarget.setPointerCapture(event.pointerId);
+  event.currentTarget.classList.add('dragging');
+}
+
+function moveAvatarCropDrag(event) {
+  const crop = state.avatarCrop;
+  if (!crop.bitmap || crop.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const stage = event.currentTarget;
+  const rect = stage.getBoundingClientRect();
+  if (!rect.width) return;
+  const internalPixelsPerCssPixel = AVATAR_CROP_STAGE_SIZE / rect.width;
+  crop.panX += (event.clientX - crop.lastClientX) * internalPixelsPerCssPixel / AVATAR_CROP_DIAMETER;
+  crop.panY += (event.clientY - crop.lastClientY) * internalPixelsPerCssPixel / AVATAR_CROP_DIAMETER;
+  crop.lastClientX = event.clientX;
+  crop.lastClientY = event.clientY;
+  clampAvatarCropPan();
+  renderAvatarCrop();
+}
+
+function endAvatarCropDrag(event) {
+  const crop = state.avatarCrop;
+  if (crop.pointerId !== event.pointerId) return;
+  const stage = event.currentTarget;
+  const pointerId = crop.pointerId;
+  crop.pointerId = null;
+  stage.classList.remove('dragging');
+  if (stage.hasPointerCapture?.(pointerId)) stage.releasePointerCapture(pointerId);
+}
+
+function handleAvatarCropKeydown(event) {
+  if (!state.avatarCrop.bitmap) return;
+  const direction = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1],
+  }[event.key];
+  if (!direction) return;
+  event.preventDefault();
+  const step = (event.shiftKey ? 10 : 2) / AVATAR_CROP_DIAMETER;
+  state.avatarCrop.panX += direction[0] * step;
+  state.avatarCrop.panY += direction[1] * step;
+  clampAvatarCropPan();
+  renderAvatarCrop();
+}
+
+function clearAvatarCropCanvases() {
+  [$('#avatar-crop-canvas'), $('#avatar-crop-preview')].forEach(canvas => {
+    const context = canvas?.getContext('2d');
+    if (context) context.clearRect(0, 0, canvas.width, canvas.height);
+  });
+}
+
+function closeAvatarCropModal({ restoreFocus = true } = {}) {
+  const modal = $('#avatar-crop-modal');
+  const wasOpen = Boolean(modal && !modal.classList.contains('hidden'));
+  const stage = $('#avatar-crop-stage');
+  const crop = state.avatarCrop;
+  if (crop.pointerId !== null && stage?.hasPointerCapture?.(crop.pointerId)) {
+    stage.releasePointerCapture(crop.pointerId);
+  }
+  stage?.classList.remove('dragging');
+  const bitmap = crop.bitmap;
+  crop.bitmap = null;
+  if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+  Object.assign(crop, {
+    rotation: 0,
+    zoom: AVATAR_CROP_MIN_ZOOM,
+    panX: 0,
+    panY: 0,
+    pointerId: null,
+    lastClientX: 0,
+    lastClientY: 0,
+  });
+  modal?.classList.add('hidden');
+  clearAvatarCropCanvases();
+  const status = $('#avatar-crop-live-status');
+  if (status) status.textContent = '';
+  if (wasOpen && restoreFocus) restoreModalTrigger('#profile-avatar-upload');
+  else if (wasOpen) state.modalReturnFocus = null;
+}
+
+function openAvatarCropModal(bitmap, trigger = $('#profile-avatar-upload')) {
+  const modal = $('#avatar-crop-modal');
+  const stage = $('#avatar-crop-stage');
+  if (!modal || !stage || !$('#avatar-crop-canvas') || !$('#avatar-crop-preview') || !$('#avatar-crop-zoom')) {
+    throw new Error('头像编辑器未能加载');
+  }
+  closeAvatarCropModal({ restoreFocus: false });
+  Object.assign(state.avatarCrop, {
+    bitmap,
+    rotation: 0,
+    zoom: AVATAR_CROP_MIN_ZOOM,
+    panX: 0,
+    panY: 0,
+    pointerId: null,
+    lastClientX: 0,
+    lastClientY: 0,
+  });
+  const zoom = $('#avatar-crop-zoom');
+  zoom.min = String(AVATAR_CROP_MIN_ZOOM);
+  zoom.max = String(AVATAR_CROP_MAX_ZOOM);
+  zoom.step = '0.01';
+  const status = $('#avatar-crop-live-status');
+  if (status) status.textContent = '';
+  rememberModalTrigger(trigger);
+  modal.classList.remove('hidden');
+  renderAvatarCrop();
+  window.requestAnimationFrame(() => stage.focus());
+}
+
+function createCroppedAvatarDataUrl() {
+  if (!state.avatarCrop.bitmap) throw new Error('请重新选择头像图片');
+  const canvas = document.createElement('canvas');
+  canvas.width = AVATAR_CROP_OUTPUT_SIZE;
+  canvas.height = AVATAR_CROP_OUTPUT_SIZE;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('头像处理失败');
+  context.clearRect(0, 0, AVATAR_CROP_OUTPUT_SIZE, AVATAR_CROP_OUTPUT_SIZE);
+  drawAvatarCropImage(
+    context,
+    AVATAR_CROP_OUTPUT_SIZE / 2,
+    AVATAR_CROP_OUTPUT_SIZE / 2,
+    AVATAR_CROP_OUTPUT_SIZE,
+    { clipCircle: true },
+  );
+  const dataUrl = canvas.toDataURL('image/webp', 0.86);
+  if (!normalizeAvatar(dataUrl)) throw new Error('压缩后的头像仍然过大');
+  return dataUrl;
+}
+
+function applyAvatarCrop() {
+  if (!state.user || !state.avatarCrop.bitmap) return;
+  try {
+    const avatar = createCroppedAvatarDataUrl();
+    state.profileDraftAvatar = avatar;
+    renderProfileAvatarPreview();
+    closeAvatarCropModal();
+    toast('头像已准备，保存后生效', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+async function handleProfileAvatarFile(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  const userId = state.user?.id;
+  const operationId = ++state.avatarOperationId;
+  let bitmap = null;
+  input.value = '';
+  if (!file || !userId) return;
+  closeAvatarCropModal({ restoreFocus: false });
+  const upload = $('#profile-avatar-upload');
+  const reset = $('#profile-avatar-reset');
+  input.disabled = true;
+  upload.disabled = true;
+  reset.disabled = true;
+  try {
+    bitmap = await decodeAvatarBitmap(file);
+    if (state.user?.id !== userId || state.avatarOperationId !== operationId) return;
+    openAvatarCropModal(bitmap, upload);
+    bitmap = null;
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    if (state.avatarOperationId === operationId) {
+      input.disabled = !state.user;
+      upload.disabled = !state.user;
+      reset.disabled = !state.user || !state.profileDraftAvatar;
+    }
+  }
+}
+
+function saveUserProfile(event) {
+  event.preventDefault();
+  if (!state.user) return;
+  const nicknameInput = $('#profile-nickname');
+  const nickname = normalizeNickname(nicknameInput.value);
+  if (!nickname) {
+    toast('昵称不能为空', 'error');
+    setProfileNicknameError('请输入昵称');
+    nicknameInput.focus();
+    return;
+  }
+  const nextProfile = {
+    nickname,
+    avatar: normalizeAvatar(state.profileDraftAvatar),
+  };
+  try {
+    localStorage.setItem(`${PROFILE_KEY_PREFIX}${state.user.id}`, JSON.stringify(nextProfile));
+  } catch {
+    toast('个人资料未能保存到浏览器', 'error');
+    return;
+  }
+  state.userProfile = nextProfile;
+  state.profileDraftAvatar = nextProfile.avatar;
+  if (!state.isQuerying) resetHomeAgentAvatar();
+  updateUserCard();
+  renderLoginUsers();
+  renderProfileSettings();
+  toast('个人资料已保存', 'success');
+}
+
+function renderFeatureSettings() {
+  const scheduleToggle = $('#feature-schedule-toggle');
+  const scheduleStatus = $('#feature-schedule-status');
+  const avatarToggle = $('#feature-avatar-toggle');
+  const avatarStatus = $('#feature-avatar-status');
+  const avatarCharacterOptions = $('#feature-avatar-character-options');
+  const scheduleEnabled = state.features.schedule !== false;
+  const avatarEnabled = state.features.avatar !== false;
+  const avatarCharacter = normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter);
+  const avatarActions = normalizeAvatarActions(state.features.avatarActions);
+  const literatureDirection = normalizeLiteratureDirection(state.features.literatureDirection);
+  if (scheduleToggle) {
+    scheduleToggle.checked = scheduleEnabled;
+    scheduleToggle.disabled = !state.user;
+  }
+  if (scheduleStatus) {
+    scheduleStatus.textContent = scheduleEnabled ? '已启用' : '已停用，已有计划已保留';
+  }
+  if (avatarToggle) {
+    avatarToggle.checked = avatarEnabled;
+    avatarToggle.disabled = !state.user;
+    avatarToggle.setAttribute('aria-expanded', String(avatarEnabled));
+  }
+  if (avatarStatus) {
+    const actionCount = Object.values(avatarActions).filter(Boolean).length;
+    avatarStatus.textContent = avatarEnabled
+      ? `已启用 · ${avatarCharacter === 'female' ? '女生' : '男生'} · ${actionCount} 项快捷功能`
+      : '已停用，首页将隐藏';
+  }
+  if (avatarCharacterOptions) {
+    avatarCharacterOptions.classList.toggle('hidden', !avatarEnabled);
+    avatarCharacterOptions.setAttribute('aria-hidden', String(!avatarEnabled));
+  }
+  $$('input[name="avatar-character"]').forEach(input => {
+    input.checked = input.value === avatarCharacter;
+    input.disabled = !state.user || !avatarEnabled;
+  });
+  $$('[data-avatar-action-toggle]').forEach(input => {
+    input.checked = avatarActions[input.dataset.avatarActionToggle] !== false;
+    input.disabled = !state.user || !avatarEnabled;
+  });
+  const literatureDirectionSelect = $('#feature-avatar-literature-direction');
+  if (literatureDirectionSelect) {
+    literatureDirectionSelect.value = literatureDirection;
+    literatureDirectionSelect.disabled = !state.user || !avatarEnabled || avatarActions.literature === false;
+  }
+}
+
+function saveFeaturePreferences(nextFeatures) {
+  const normalizedFeatures = normalizeFeaturePreferences(nextFeatures);
+  try {
+    localStorage.setItem(`${FEATURES_KEY_PREFIX}${state.user.id}`, JSON.stringify(normalizedFeatures));
+  } catch {
+    renderFeatureSettings();
+    toast('功能设置未能保存到浏览器', 'error');
+    return false;
+  }
+  state.features = normalizedFeatures;
+  return true;
+}
+
+function updateFeaturePreference(feature, enabled) {
+  if (!state.user) {
+    renderFeatureSettings();
+    return;
+  }
+  const nextFeatures = { ...state.features, [feature]: Boolean(enabled) };
+  if (!saveFeaturePreferences(nextFeatures)) return;
+  if (feature === 'avatar') {
+    resetHomeAgentAvatar();
+    if (nextFeatures.avatar && state.isQuerying) startHomeAgentAvatarThinking();
+  }
+  syncFeatureAvailability();
+  const messages = {
+    schedule: nextFeatures.schedule ? '日程表已启用' : '日程表已停用，已有计划已保留',
+    avatar: nextFeatures.avatar ? '虚拟形象已启用' : '虚拟形象已停用',
+  };
+  toast(messages[feature], 'success');
+}
+
+function updateScheduleFeature(enabled) {
+  updateFeaturePreference('schedule', enabled);
+}
+
+function updateAvatarFeature(enabled) {
+  updateFeaturePreference('avatar', enabled);
+}
+
+function updateAvatarCharacter(value) {
+  if (!state.user) {
+    renderFeatureSettings();
+    return;
+  }
+  const avatarCharacter = normalizeHomeAgentAvatarCharacter(value);
+  const nextFeatures = { ...state.features, avatarCharacter };
+  if (!saveFeaturePreferences(nextFeatures)) return;
+  syncHomeAgentAvatarSource();
+  renderFeatureSettings();
+  toast(`已切换为${avatarCharacter === 'female' ? '女生' : '男生'}虚拟形象`, 'success');
+}
+
+function updateAvatarActionPreference(action, enabled) {
+  if (!state.user || !Object.prototype.hasOwnProperty.call(HOME_AGENT_AVATAR_ACTION_LABELS, action)) {
+    renderFeatureSettings();
+    return;
+  }
+  const avatarActions = {
+    ...normalizeAvatarActions(state.features.avatarActions),
+    [action]: Boolean(enabled),
+  };
+  const nextFeatures = { ...state.features, avatarActions };
+  if (!saveFeaturePreferences(nextFeatures)) return;
+  if (!avatarActions[action] && state.homeAgentAvatar.activeAction === action) cancelHomeAgentAvatarAction();
+  syncHomeAgentAvatarActionControls();
+  renderFeatureSettings();
+  toast(`${HOME_AGENT_AVATAR_ACTION_LABELS[action]}已${avatarActions[action] ? '启用' : '停用'}`, 'success');
+}
+
+function updateLiteratureDirection(value) {
+  if (!state.user) {
+    renderFeatureSettings();
+    return;
+  }
+  const literatureDirection = normalizeLiteratureDirection(value);
+  const nextFeatures = { ...state.features, literatureDirection };
+  if (!saveFeaturePreferences(nextFeatures)) return;
+  renderFeatureSettings();
+  toast(`文献方向已设为${LITERATURE_RECOMMENDATIONS[literatureDirection].label}`, 'success');
+}
+
 async function loadSettings() {
   if (!state.user) return;
+  const authContext = captureAuthContext();
   try {
-    state.settings = await api('/api/settings');
+    const settings = await api('/api/settings');
+    if (!authContextMatches(authContext)) return;
+    state.settings = settings;
     state.modelName = state.settings.llm_model || '';
     updateHomeModelLabel();
     renderSettings();
@@ -1082,6 +3408,8 @@ function renderSettings() {
   const versionEl = $('#about-version');
   if (versionEl && state.settings?.version) versionEl.textContent = `v${state.settings.version}`;
   $('#about-model-status').textContent = state.settings.llm_configured ? '已配置' : '未配置';
+  syncThemeControls(normalizeTheme(document.documentElement.dataset.theme));
+  renderFeatureSettings();
 }
 
 async function saveSettings(event) {
@@ -1146,6 +3474,8 @@ function updateAbout(health) {
 
 // ---------- Init ----------
 function initEventListeners() {
+  syncSettingsTabOrientation();
+  window.addEventListener('resize', syncSettingsTabOrientation);
   // Navigation
   $$('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -1159,6 +3489,7 @@ function initEventListeners() {
   $('#user-card').addEventListener('click', openLoginModal);
 
   // Home
+  initHomeAgentAvatar();
   $('#home-query-form').addEventListener('submit', handleHomeSubmit);
   $$('.home-mode-button').forEach(button => {
     button.addEventListener('click', () => setHomeMode(button.dataset.homeMode));
@@ -1211,32 +3542,157 @@ function initEventListeners() {
     e.target.value = '';
   });
 
+  // Schedule
+  $('#schedule-prev-month').addEventListener('click', () => shiftScheduleMonth(-1));
+  $('#schedule-next-month').addEventListener('click', () => shiftScheduleMonth(1));
+  $('#schedule-today').addEventListener('click', showScheduleToday);
+  $('#schedule-add').addEventListener('click', event => openPlanModal(state.selectedScheduleDate, null, event.currentTarget));
+  $('#schedule-add-selected').addEventListener('click', event => openPlanModal(state.selectedScheduleDate, null, event.currentTarget));
+  $('#schedule-import').addEventListener('click', event => openExamImportModal(event.currentTarget));
+  $('#schedule-calendar').addEventListener('click', event => {
+    const planButton = event.target.closest('[data-schedule-plan]');
+    if (planButton) {
+      const item = state.scheduleItems.find(entry => entry.id === planButton.dataset.schedulePlan);
+      if (item) openPlanModal(item.date, item.id, planButton);
+      return;
+    }
+    const dateButton = event.target.closest('[data-schedule-date]');
+    if (dateButton) selectScheduleDate(dateButton.dataset.scheduleDate, true);
+  });
+  $('#schedule-calendar').addEventListener('keydown', event => {
+    const dateButton = event.target.closest('[data-schedule-date]');
+    if (!dateButton) return;
+    const deltas = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+    if (!Object.prototype.hasOwnProperty.call(deltas, event.key)) return;
+    const current = parseLocalDate(dateButton.dataset.scheduleDate);
+    if (!current) return;
+    event.preventDefault();
+    const next = new Date(current.getFullYear(), current.getMonth(), current.getDate() + deltas[event.key], 12);
+    const nextKey = localDateKey(next);
+    selectScheduleDate(nextKey, true);
+  });
+  $('#schedule-agenda-list').addEventListener('click', event => {
+    const target = event.target.closest('[data-schedule-action]');
+    if (!target) return;
+    const action = target.dataset.scheduleAction;
+    const scheduleId = target.dataset.scheduleId;
+    if (action === 'add') openPlanModal(state.selectedScheduleDate, null, target);
+    if (action === 'toggle') togglePlan(scheduleId);
+    if (action === 'edit') openPlanModal(state.selectedScheduleDate, scheduleId, target);
+    if (action === 'delete') deletePlan(scheduleId);
+  });
+  $('#plan-form').addEventListener('submit', savePlan);
+  $('#plan-all-day').addEventListener('change', syncPlanTimeFields);
+  $('#plan-cancel').addEventListener('click', closePlanModal);
+  $('#plan-modal-close').addEventListener('click', closePlanModal);
+  $('#plan-delete').addEventListener('click', () => {
+    if (state.editingScheduleId) deletePlan(state.editingScheduleId, true);
+  });
+  $('#plan-modal [data-close-modal="plan"]').addEventListener('click', closePlanModal);
+  $('#exam-import-close').addEventListener('click', closeExamImportModal);
+  $('#exam-import-cancel').addEventListener('click', closeExamImportModal);
+  $('#exam-import-connect').addEventListener('click', connectExamImport);
+  $('#exam-import-modal [data-close-modal="exam-import"]').addEventListener('click', closeExamImportModal);
+
   // Settings tabs
   $$('[data-settings-tab]').forEach(tab => {
-    tab.addEventListener('click', (e) => {
-      e.preventDefault();
-      const target = tab.dataset.settingsTab;
-      $$('[data-settings-tab]').forEach(t => t.classList.toggle('active', t.dataset.settingsTab === target));
-      $$('.settings-tab').forEach(t => t.classList.toggle('hidden', t.id !== `settings-tab-${target}`));
+    tab.addEventListener('click', event => {
+      event.preventDefault();
+      activateSettingsTab(tab.dataset.settingsTab);
     });
+    tab.addEventListener('keydown', event => {
+      const tabs = $$('[data-settings-tab]');
+      const currentIndex = tabs.indexOf(tab);
+      let nextIndex = null;
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % tabs.length;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+      if (event.key === 'Home') nextIndex = 0;
+      if (event.key === 'End') nextIndex = tabs.length - 1;
+      if (nextIndex === null) return;
+      event.preventDefault();
+      activateSettingsTab(tabs[nextIndex].dataset.settingsTab, { focus: true });
+    });
+  });
+  $('#profile-form').addEventListener('submit', saveUserProfile);
+  $('#profile-avatar-upload').addEventListener('click', () => $('#profile-avatar-input').click());
+  $('#profile-avatar-input').addEventListener('change', handleProfileAvatarFile);
+  const avatarCropStage = $('#avatar-crop-stage');
+  avatarCropStage.addEventListener('pointerdown', startAvatarCropDrag);
+  avatarCropStage.addEventListener('pointermove', moveAvatarCropDrag);
+  avatarCropStage.addEventListener('pointerup', endAvatarCropDrag);
+  avatarCropStage.addEventListener('pointercancel', endAvatarCropDrag);
+  avatarCropStage.addEventListener('lostpointercapture', endAvatarCropDrag);
+  avatarCropStage.addEventListener('keydown', handleAvatarCropKeydown);
+  $('#avatar-crop-zoom').addEventListener('input', event => setAvatarCropZoom(event.currentTarget.value));
+  $('#avatar-crop-zoom-out').addEventListener('click', () => stepAvatarCropZoom(-0.1));
+  $('#avatar-crop-zoom-in').addEventListener('click', () => stepAvatarCropZoom(0.1));
+  $('#avatar-crop-rotate-left').addEventListener('click', () => rotateAvatarCrop(-90));
+  $('#avatar-crop-rotate-right').addEventListener('click', () => rotateAvatarCrop(90));
+  $('#avatar-crop-reset').addEventListener('click', resetAvatarCropTransform);
+  $('#avatar-crop-cancel').addEventListener('click', () => closeAvatarCropModal());
+  $('#avatar-crop-close').addEventListener('click', () => closeAvatarCropModal());
+  $('#avatar-crop-apply').addEventListener('click', applyAvatarCrop);
+  $('#avatar-crop-modal [data-close-modal="avatar-crop"]').addEventListener('click', () => closeAvatarCropModal());
+  $('#profile-avatar-reset').addEventListener('click', () => {
+    state.avatarOperationId += 1;
+    closeAvatarCropModal({ restoreFocus: false });
+    state.profileDraftAvatar = '';
+    renderProfileAvatarPreview();
+    toast('默认头像已准备，保存后生效', '');
+  });
+  $('#profile-nickname').addEventListener('input', () => {
+    updateProfileNicknameCount();
+    if (normalizeNickname($('#profile-nickname').value)) setProfileNicknameError();
+    if (!state.profileDraftAvatar) renderProfileAvatarPreview();
+  });
+  $('#feature-schedule-toggle').addEventListener('change', event => updateScheduleFeature(event.currentTarget.checked));
+  $('#feature-avatar-toggle').addEventListener('change', event => updateAvatarFeature(event.currentTarget.checked));
+  $$('input[name="avatar-character"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) updateAvatarCharacter(input.value);
+    });
+  });
+  $$('[data-avatar-action-toggle]').forEach(input => {
+    input.addEventListener('change', () => {
+      updateAvatarActionPreference(input.dataset.avatarActionToggle, input.checked);
+    });
+  });
+  $('#feature-avatar-literature-direction').addEventListener('change', event => {
+    updateLiteratureDirection(event.currentTarget.value);
   });
   $('#settings-form').addEventListener('submit', saveSettings);
   $('#settings-test').addEventListener('click', testSettings);
   $('#setting-api-key').addEventListener('input', () => { state.apiKeyTouched = true; });
+  $$('input[name="theme"]').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) applyTheme(input.value, { persist: true, announce: true });
+    });
+  });
 
   // History
   $('#clear-history').addEventListener('click', () => {
+    if (state.isQuerying) return;
     state.history = [];
     saveHistory();
   });
   document.addEventListener('click', closeHistoryMenus);
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape') closeHistoryMenus();
+    trapModalFocus(event);
+    if (event.key === 'Escape') {
+      closeHistoryMenus();
+      if (!$('#avatar-crop-modal').classList.contains('hidden')) closeAvatarCropModal();
+      else if (!$('#plan-modal').classList.contains('hidden')) closePlanModal();
+      else if (!$('#exam-import-modal').classList.contains('hidden')) closeExamImportModal();
+    }
+  });
+  window.addEventListener('pagehide', () => {
+    closeAvatarCropModal({ restoreFocus: false });
+    resetHomeAgentAvatar();
   });
 }
 
 async function init() {
-  loadHistory();
+  initTheme();
   initEventListeners();
   initResizeHandles();
   initRouting();

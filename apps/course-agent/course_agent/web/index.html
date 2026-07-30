@@ -1,33 +1,48 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>课程复习 Agent · AI for better life In ustc</title>
+  <title>瀚海行agent · 心游文瀚海，志上理云天</title>
+  <script>
+    (() => {
+      try {
+        const theme = localStorage.getItem('course-agent:theme');
+        if (theme === 'dark' || theme === 'light') {
+          document.documentElement.dataset.theme = theme;
+        }
+      } catch {}
+    })();
+  </script>
+  <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css">
+  <link rel="stylesheet" href="/assets/styles.css?v=avatar-actions-v2">
 </head>
 <body>
   <aside class="app-sidebar">
     <div class="sidebar-top">
-      <div class="brand">
-        <div class="brand-mark">107</div>
+      <div class="brand" role="img" aria-label="瀚海行agent，AI for better life in ustc">
+        <img class="brand-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="" width="36" height="36">
         <div class="brand-text">
-          <div class="brand-title">课程复习 Agent</div>
-          <div class="brand-sub">AI for better life In ustc</div>
+          <div class="brand-title">瀚海行agent</div>
+          <div class="brand-sub">AI for better life in ustc</div>
         </div>
       </div>
 
       <nav class="sidebar-nav" aria-label="主导航">
-        <a href="#/home" class="nav-item active" data-view="home">
+        <a href="#/home" class="nav-item active" data-view="home" aria-label="问问 Agent" title="问问 Agent">
           <span class="nav-icon" aria-hidden="true">◆</span>
           <span class="nav-label">问问 Agent</span>
         </a>
-        <a href="#/library" class="nav-item" data-view="library">
+        <a href="#/library" class="nav-item" data-view="library" aria-label="知识库" title="知识库">
           <span class="nav-icon" aria-hidden="true">▤</span>
           <span class="nav-label">知识库</span>
         </a>
-        <a href="#/settings" class="nav-item" data-view="settings">
+        <a href="#/schedule" class="nav-item" data-view="schedule" aria-label="日程表" title="日程表">
+          <span class="nav-icon" aria-hidden="true">▦</span>
+          <span class="nav-label">日程表</span>
+        </a>
+        <a href="#/settings" class="nav-item" data-view="settings" aria-label="个人设置" title="个人设置">
           <span class="nav-icon" aria-hidden="true">⚙</span>
           <span class="nav-label">个人设置</span>
         </a>
@@ -43,13 +58,13 @@
     </div>
 
     <div class="sidebar-bottom">
-      <div class="user-card" id="user-card">
+      <button class="user-card" id="user-card" type="button" aria-label="切换演示身份">
         <div class="user-avatar" id="user-avatar">?</div>
         <div class="user-info">
           <div class="user-name" id="user-name">未选择身份</div>
           <div class="user-status" id="user-status">点击选择演示身份</div>
         </div>
-      </div>
+      </button>
       <button class="logout-button" id="logout-button" type="button">切换身份</button>
     </div>
   </aside>
@@ -65,60 +80,156 @@
   <main class="app-main">
     <!-- 首页 / 问问 Agent -->
     <section id="view-home" class="view view-home">
-      <div class="home-toolbar" id="home-toolbar">
-        <button type="button" class="home-new-chat" id="home-new-chat" title="开启新对话">
-          <span aria-hidden="true">＋</span>
-          <span>开启新对话</span>
-        </button>
-      </div>
-
-      <div class="home-conversation" id="home-conversation">
-        <div class="home-greeting" id="home-greeting">
-          <div class="home-logo">
-            <div class="home-logo-mark">107</div>
-            <div class="home-logo-badge">USTC Course Agent</div>
+      <div class="home-workspace">
+        <div class="home-chat-column">
+          <div class="home-toolbar" id="home-toolbar">
+            <button type="button" class="home-new-chat" id="home-new-chat" title="开启新对话">
+              <span aria-hidden="true">＋</span>
+              <span>开启新对话</span>
+            </button>
           </div>
-        </div>
-      </div>
 
-      <form id="home-query-form" class="home-input-wrap">
-        <div class="home-input-box">
-          <textarea
-            id="home-question"
-            rows="1"
-            maxlength="2000"
-            placeholder="有问题尽管问课程 Agent…"
-          ></textarea>
-          <div id="home-source-selector" class="home-source-selector hidden" aria-label="知识检索资料选择">
-            <div class="source-selector-header">
-              <span>知识检索资料</span>
-              <span id="home-source-count" class="muted">已选 0 份</span>
-            </div>
-            <div class="source-actions">
-              <button class="chip-button" type="button" data-home-source-action="daily">日常学习</button>
-              <button class="chip-button" type="button" data-home-source-action="exam">备考刷题</button>
-              <button class="chip-button" type="button" data-home-source-action="all">全部资料</button>
-              <button class="chip-button chip-button-quiet" type="button" data-home-source-action="clear">清空</button>
-            </div>
-            <div id="home-source-list" class="source-list"></div>
-          </div>
-          <div class="home-input-bar">
-            <div class="home-input-hints">
-              <div class="home-mode-switch" role="group" aria-label="问答模式">
-                <button type="button" class="home-mode-button active" data-home-mode="direct">直接问答</button>
-                <button type="button" class="home-mode-button" data-home-mode="retrieval">知识检索</button>
+          <div class="home-conversation" id="home-conversation">
+            <div class="home-greeting" id="home-greeting">
+              <div class="home-logo">
+                <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="瀚海行agent" width="72" height="72">
+                <div class="home-logo-badge">心游文瀚海，志上理云天</div>
               </div>
-              <span class="mode-pill" id="home-mode-label">直接问答</span>
-            </div>
-            <div class="home-input-actions">
-              <span class="home-current-model" id="home-current-model">当前模型：加载中…</span>
-              <button type="submit" class="send-button" id="home-send-button" aria-label="发送">
-                <span>→</span>
-              </button>
             </div>
           </div>
+
+          <form id="home-query-form" class="home-input-wrap">
+            <div class="home-input-box">
+              <textarea
+                id="home-question"
+                rows="1"
+                maxlength="2000"
+                placeholder="有问题尽管问瀚海行agent…"
+              ></textarea>
+              <div id="home-source-selector" class="home-source-selector hidden" aria-label="知识检索资料选择">
+                <div class="source-selector-header">
+                  <span>知识检索资料</span>
+                  <span id="home-source-count" class="muted">已选 0 份</span>
+                </div>
+                <div class="source-actions">
+                  <button class="chip-button" type="button" data-home-source-action="daily">日常学习</button>
+                  <button class="chip-button" type="button" data-home-source-action="exam">备考刷题</button>
+                  <button class="chip-button" type="button" data-home-source-action="all">全部资料</button>
+                  <button class="chip-button chip-button-quiet" type="button" data-home-source-action="clear">清空</button>
+                </div>
+                <div id="home-source-list" class="source-list"></div>
+              </div>
+              <div class="home-input-bar">
+                <div class="home-input-hints">
+                  <div class="home-mode-switch" role="group" aria-label="问答模式">
+                    <button type="button" class="home-mode-button active" data-home-mode="direct">直接问答</button>
+                    <button type="button" class="home-mode-button" data-home-mode="retrieval">知识检索</button>
+                  </div>
+                  <span class="mode-pill" id="home-mode-label">直接问答</span>
+                </div>
+                <div class="home-input-actions">
+                  <span class="home-current-model" id="home-current-model">当前模型：加载中…</span>
+                  <button type="submit" class="send-button" id="home-send-button" aria-label="发送">
+                    <span>→</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </form>
         </div>
-      </form>
+
+        <aside
+          class="home-agent-avatar-dock feature-preferences-pending"
+          id="home-agent-avatar-dock"
+          aria-label="瀚海行agent 虚拟形象"
+          aria-busy="false"
+        >
+          <div class="home-agent-avatar-speech-zone">
+            <div
+              class="home-agent-avatar-speech"
+              id="home-agent-avatar-speech"
+              data-visible="false"
+              aria-hidden="true"
+            >
+              <p id="home-agent-avatar-speech-text"></p>
+              <button
+                class="home-agent-avatar-speech-dismiss"
+                id="home-agent-avatar-speech-dismiss"
+                type="button"
+                aria-label="关闭虚拟形象回复"
+                title="关闭"
+              >×</button>
+            </div>
+          </div>
+          <div class="home-agent-avatar-stage">
+            <button
+              class="home-agent-avatar-button"
+              id="home-agent-avatar-button"
+              type="button"
+              data-state="idle"
+              aria-label="虚拟形象，点击互动"
+              aria-disabled="false"
+            >
+              <img
+                class="home-agent-avatar-image"
+                id="home-agent-avatar-image"
+                src="/assets/avatar-preview/agent-idle.png"
+                alt=""
+                draggable="false"
+                decoding="async"
+              >
+            </button>
+            <div class="home-agent-avatar-actions" id="home-agent-avatar-actions" role="group" aria-label="虚拟形象快捷功能">
+              <div class="home-agent-avatar-action-group home-agent-avatar-action-group-left" data-avatar-control-boundary>
+                <button type="button" class="home-agent-avatar-action" data-avatar-action="schedule">日程查询</button>
+                <button type="button" class="home-agent-avatar-action" data-avatar-action="literature">文献推荐</button>
+              </div>
+              <div class="home-agent-avatar-action-group home-agent-avatar-action-group-right" data-avatar-control-boundary>
+                <button type="button" class="home-agent-avatar-action" data-avatar-action="weather">天气查询</button>
+                <button type="button" class="home-agent-avatar-action" data-avatar-action="exams">考试信息</button>
+              </div>
+            </div>
+          </div>
+          <div
+            class="home-agent-avatar-scale-control"
+            id="home-agent-avatar-scale-control"
+            data-avatar-control-boundary
+            role="group"
+            aria-label="调整虚拟形象大小"
+          >
+            <button type="button" id="home-agent-avatar-scale-down" aria-label="缩小虚拟形象" title="缩小">−</button>
+            <input
+              id="home-agent-avatar-scale"
+              type="range"
+              min="67"
+              max="133"
+              step="1"
+              value="100"
+              aria-label="虚拟形象大小"
+              aria-valuemin="67"
+              aria-valuemax="133"
+              aria-valuenow="100"
+              aria-valuetext="100%"
+            >
+            <output id="home-agent-avatar-scale-output" for="home-agent-avatar-scale">100%</output>
+            <button type="button" id="home-agent-avatar-scale-up" aria-label="放大虚拟形象" title="放大">＋</button>
+          </div>
+          <span
+            class="visually-hidden"
+            id="home-agent-avatar-state"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >待机</span>
+          <span
+            class="visually-hidden"
+            id="home-agent-avatar-announcer"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></span>
+        </aside>
+      </div>
     </section>
 
     <!-- 知识库 -->
@@ -246,19 +357,108 @@
       </div>
     </section>
 
+    <!-- 日程表 -->
+    <section id="view-schedule" class="view view-schedule hidden">
+      <div class="schedule-page">
+        <header class="schedule-header">
+          <div>
+            <div class="content-subtitle">个人日程</div>
+            <h1>日程表</h1>
+          </div>
+          <div class="schedule-actions">
+            <button class="button button-secondary" id="schedule-import" type="button">教务处导入</button>
+            <button class="button button-primary" id="schedule-add" type="button">
+              <span aria-hidden="true">＋</span>
+              <span>新增计划</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="schedule-toolbar">
+          <div class="schedule-month-nav">
+            <button class="icon-button" id="schedule-prev-month" type="button" aria-label="上个月" title="上个月">‹</button>
+            <h2 id="schedule-month-label" aria-live="polite"></h2>
+            <button class="icon-button" id="schedule-next-month" type="button" aria-label="下个月" title="下个月">›</button>
+          </div>
+          <button class="button button-secondary" id="schedule-today" type="button">今天</button>
+        </div>
+
+        <div class="schedule-layout">
+          <section class="schedule-calendar-panel" role="grid" aria-labelledby="schedule-month-label">
+            <div class="schedule-weekdays" role="row">
+              <span role="columnheader" aria-label="周一">一</span>
+              <span role="columnheader" aria-label="周二">二</span>
+              <span role="columnheader" aria-label="周三">三</span>
+              <span role="columnheader" aria-label="周四">四</span>
+              <span role="columnheader" aria-label="周五">五</span>
+              <span role="columnheader" aria-label="周六">六</span>
+              <span role="columnheader" aria-label="周日">日</span>
+            </div>
+            <div id="schedule-calendar" class="schedule-calendar" role="rowgroup"></div>
+          </section>
+
+          <aside class="schedule-agenda" aria-labelledby="schedule-day-heading">
+            <div class="schedule-agenda-header">
+              <div>
+                <div class="schedule-agenda-kicker">当天安排</div>
+                <h2 id="schedule-day-heading">今天</h2>
+              </div>
+              <button class="icon-button" id="schedule-add-selected" type="button" aria-label="在选中日期新增计划" title="新增计划">＋</button>
+            </div>
+            <div id="schedule-day-count" class="schedule-day-count">0 项计划</div>
+            <div id="schedule-agenda-list" class="schedule-agenda-list"></div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
     <!-- 设置 -->
     <section id="view-settings" class="view view-settings hidden">
       <div class="settings-layout">
         <aside class="settings-sidebar">
           <h2>个人设置</h2>
-          <nav class="settings-nav">
-            <a class="settings-nav-item active" data-settings-tab="llm">模型服务</a>
-            <a class="settings-nav-item" data-settings-tab="about">关于</a>
+          <nav class="settings-nav" role="tablist" aria-label="设置类别" aria-orientation="vertical">
+            <button type="button" id="settings-tab-button-profile" class="settings-nav-item active" role="tab" aria-selected="true" aria-controls="settings-tab-profile" tabindex="0" data-settings-tab="profile">个人信息</button>
+            <button type="button" id="settings-tab-button-llm" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-llm" tabindex="-1" data-settings-tab="llm">模型服务</button>
+            <button type="button" id="settings-tab-button-theme" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-theme" tabindex="-1" data-settings-tab="theme">主题设置</button>
+            <button type="button" id="settings-tab-button-features" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-features" tabindex="-1" data-settings-tab="features">功能管理</button>
+            <button type="button" id="settings-tab-button-about" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-about" tabindex="-1" data-settings-tab="about">关于</button>
           </nav>
         </aside>
 
         <div class="settings-content">
-          <div id="settings-tab-llm" class="settings-tab">
+          <section id="settings-tab-profile" class="settings-tab" role="tabpanel" aria-labelledby="settings-tab-button-profile">
+            <div class="settings-card">
+              <h3>个人信息</h3>
+              <form id="profile-form" class="settings-form" autocomplete="off" novalidate>
+                <div class="profile-editor">
+                  <div class="profile-avatar-preview" id="profile-avatar-preview" role="img" aria-label="头像预览">?</div>
+                  <div class="profile-avatar-actions">
+                    <div class="profile-avatar-buttons">
+                      <button class="button button-secondary upload-button" id="profile-avatar-upload" type="button">
+                        <span aria-hidden="true">↑</span>
+                        <span>上传头像</span>
+                      </button>
+                      <input class="hidden" id="profile-avatar-input" type="file" accept="image/png,image/jpeg,image/webp">
+                      <button class="button button-secondary" id="profile-avatar-reset" type="button">恢复默认</button>
+                    </div>
+                    <span class="field-hint">支持 PNG、JPG 或 WebP</span>
+                  </div>
+                </div>
+                <label class="field">
+                  <span>昵称</span>
+                  <input id="profile-nickname" type="text" maxlength="24" required autocomplete="nickname" aria-describedby="profile-nickname-count profile-nickname-error">
+                  <span class="field-hint profile-nickname-count" id="profile-nickname-count">0 / 24</span>
+                  <span class="field-error hidden" id="profile-nickname-error" role="alert">请输入昵称</span>
+                </label>
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">保存个人资料</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section id="settings-tab-llm" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-llm">
             <div class="settings-card">
               <h3>LLM 服务配置</h3>
               <p class="settings-desc">配置 OpenAI 兼容接口后，即可使用直接问答与资料检索增强功能。</p>
@@ -286,11 +486,114 @@
                 </div>
               </form>
             </div>
-          </div>
+          </section>
 
-          <div id="settings-tab-about" class="settings-tab hidden">
+          <section id="settings-tab-theme" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-theme">
             <div class="settings-card">
-              <h3>关于课程复习 Agent</h3>
+              <h3>主题设置</h3>
+              <fieldset class="theme-field">
+                <legend>界面主题</legend>
+                <div class="segment-control theme-segment">
+                  <label class="segment-option">
+                    <input type="radio" name="theme" value="dark">
+                    <span><span class="theme-swatch theme-swatch-dark" aria-hidden="true"></span>深色</span>
+                  </label>
+                  <label class="segment-option">
+                    <input type="radio" name="theme" value="light">
+                    <span><span class="theme-swatch theme-swatch-light" aria-hidden="true"></span>浅色</span>
+                  </label>
+                </div>
+              </fieldset>
+            </div>
+          </section>
+
+          <section id="settings-tab-features" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-features">
+            <div class="settings-card">
+              <h3>功能管理</h3>
+              <div class="feature-list">
+                <div class="feature-row">
+                  <div class="feature-copy">
+                    <div class="feature-name">日程表</div>
+                    <div class="feature-status" id="feature-schedule-status">已启用</div>
+                  </div>
+                  <label class="switch-control">
+                    <input id="feature-schedule-toggle" type="checkbox" role="switch" aria-label="启用日程表" checked>
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+                <div class="feature-row">
+                  <div class="feature-copy">
+                    <div class="feature-name">虚拟形象</div>
+                    <div class="feature-status" id="feature-avatar-status">已启用</div>
+                  </div>
+                  <label class="switch-control">
+                    <input id="feature-avatar-toggle" type="checkbox" role="switch" aria-label="启用虚拟形象" aria-describedby="feature-avatar-status" aria-controls="feature-avatar-character-options" aria-expanded="true" checked>
+                    <span class="switch-track" aria-hidden="true"></span>
+                  </label>
+                </div>
+                <div class="feature-avatar-character-options" id="feature-avatar-character-options" aria-hidden="false">
+                  <fieldset class="feature-avatar-character-fieldset">
+                    <legend class="feature-avatar-character-label">形象选择</legend>
+                    <div class="segment-control feature-avatar-character-control">
+                      <label class="segment-option">
+                        <input type="radio" name="avatar-character" value="male" checked>
+                        <span>男生</span>
+                      </label>
+                      <label class="segment-option">
+                        <input type="radio" name="avatar-character" value="female">
+                        <span>女生</span>
+                      </label>
+                    </div>
+                  </fieldset>
+                  <fieldset class="feature-avatar-action-settings">
+                    <legend>快捷功能</legend>
+                    <div class="feature-avatar-action-row">
+                      <span>日程查询</span>
+                      <label class="switch-control">
+                        <input id="feature-avatar-action-schedule-toggle" type="checkbox" role="switch" aria-label="启用虚拟形象日程查询" data-avatar-action-toggle="schedule" checked>
+                        <span class="switch-track" aria-hidden="true"></span>
+                      </label>
+                    </div>
+                    <div class="feature-avatar-action-row">
+                      <span>天气查询</span>
+                      <label class="switch-control">
+                        <input id="feature-avatar-action-weather-toggle" type="checkbox" role="switch" aria-label="启用虚拟形象天气查询" data-avatar-action-toggle="weather" checked>
+                        <span class="switch-track" aria-hidden="true"></span>
+                      </label>
+                    </div>
+                    <div class="feature-avatar-action-row">
+                      <span>文献推荐</span>
+                      <label class="switch-control">
+                        <input id="feature-avatar-action-literature-toggle" type="checkbox" role="switch" aria-label="启用虚拟形象文献推荐" data-avatar-action-toggle="literature" checked>
+                        <span class="switch-track" aria-hidden="true"></span>
+                      </label>
+                    </div>
+                    <div class="feature-avatar-action-row">
+                      <span>考试信息</span>
+                      <label class="switch-control">
+                        <input id="feature-avatar-action-exams-toggle" type="checkbox" role="switch" aria-label="启用虚拟形象考试信息" data-avatar-action-toggle="exams" checked>
+                        <span class="switch-track" aria-hidden="true"></span>
+                      </label>
+                    </div>
+                  </fieldset>
+                  <label class="feature-avatar-literature-direction field" for="feature-avatar-literature-direction">
+                    <span>文献方向偏好</span>
+                    <select id="feature-avatar-literature-direction">
+                      <option value="ai">人工智能</option>
+                      <option value="computer-science">计算机科学</option>
+                      <option value="mathematics">数学</option>
+                      <option value="physics">物理</option>
+                      <option value="life-science">生命科学</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="settings-tab-about" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-about">
+            <div class="settings-card">
+              <h3>关于瀚海行agent</h3>
               <p class="settings-desc">中国科学技术大学「一〇七」杯算力与智能体开发大赛参赛项目。</p>
               <div class="about-info">
                 <div class="about-row"><span>版本</span><span id="about-version">-</span></div>
@@ -298,7 +601,7 @@
                 <div class="about-row"><span>模型配置</span><span id="about-model-status">-</span></div>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </div>
     </section>
@@ -316,10 +619,146 @@
     </div>
   </div>
 
+  <!-- 头像裁剪 -->
+  <div id="avatar-crop-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="avatar-crop-title">
+    <div class="modal-backdrop" data-close-modal="avatar-crop"></div>
+    <div class="modal-card avatar-crop-card">
+      <button class="modal-close" id="avatar-crop-close" type="button" aria-label="关闭头像裁剪" title="关闭">×</button>
+      <div class="modal-header modal-header-left avatar-crop-header">
+        <h2 id="avatar-crop-title">裁剪头像</h2>
+      </div>
+
+      <div class="avatar-crop-layout">
+        <div
+          class="avatar-crop-stage"
+          id="avatar-crop-stage"
+          tabindex="0"
+          role="application"
+          aria-label="头像裁剪区域，可拖动图片或使用方向键移动"
+        >
+          <canvas id="avatar-crop-canvas" width="400" height="400" aria-hidden="true"></canvas>
+          <div class="avatar-crop-ring" aria-hidden="true"></div>
+        </div>
+        <div class="avatar-crop-preview-panel">
+          <span>头像预览</span>
+          <canvas id="avatar-crop-preview" width="256" height="256" role="img" aria-label="圆形头像预览"></canvas>
+        </div>
+      </div>
+
+      <div class="avatar-crop-controls">
+        <div class="avatar-crop-zoom">
+          <label for="avatar-crop-zoom">缩放</label>
+          <div class="avatar-crop-zoom-row">
+            <button class="icon-button avatar-crop-zoom-button" id="avatar-crop-zoom-out" type="button" aria-label="缩小头像" title="缩小"><span aria-hidden="true">−</span></button>
+            <input id="avatar-crop-zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="缩放头像" aria-valuetext="100%">
+            <button class="icon-button avatar-crop-zoom-button" id="avatar-crop-zoom-in" type="button" aria-label="放大头像" title="放大"><span aria-hidden="true">＋</span></button>
+            <output id="avatar-crop-zoom-value" for="avatar-crop-zoom">100%</output>
+          </div>
+        </div>
+        <div class="avatar-crop-tool-group" role="group" aria-label="图片调整">
+          <button class="icon-button avatar-crop-tool" id="avatar-crop-rotate-left" type="button" aria-label="向左旋转 90 度" title="向左旋转 90 度"><span aria-hidden="true">↶</span></button>
+          <button class="icon-button avatar-crop-tool" id="avatar-crop-rotate-right" type="button" aria-label="向右旋转 90 度" title="向右旋转 90 度"><span aria-hidden="true">↷</span></button>
+          <button class="icon-button avatar-crop-tool" id="avatar-crop-reset" type="button" aria-label="重置图片调整" title="重置"><span aria-hidden="true">↺</span></button>
+        </div>
+      </div>
+
+      <div class="modal-actions avatar-crop-actions">
+        <span class="modal-actions-spacer"></span>
+        <button class="button button-secondary" id="avatar-crop-cancel" type="button">取消</button>
+        <button class="button button-primary" id="avatar-crop-apply" type="button">应用裁剪</button>
+      </div>
+      <div class="visually-hidden" id="avatar-crop-live-status" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <!-- 新增/编辑计划 -->
+  <div id="plan-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
+    <div class="modal-backdrop" data-close-modal="plan"></div>
+    <div class="modal-card modal-card-wide">
+      <button class="modal-close" id="plan-modal-close" type="button" aria-label="关闭" title="关闭">×</button>
+      <div class="modal-header modal-header-left">
+        <h2 id="plan-modal-title">新增计划</h2>
+        <p id="plan-modal-date-label">添加一项个人日程</p>
+      </div>
+      <form id="plan-form" class="plan-form" autocomplete="off">
+        <label class="field">
+          <span>计划名称</span>
+          <input id="plan-title" type="text" maxlength="80" required placeholder="例如：复习数学分析">
+        </label>
+        <div class="form-grid">
+          <label class="field">
+            <span>日期</span>
+            <input id="plan-date" type="date" required>
+          </label>
+          <label class="field">
+            <span>类型</span>
+            <select id="plan-category">
+              <option value="study">学习计划</option>
+              <option value="exam">考试</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+        </div>
+        <label class="checkbox-field">
+          <input id="plan-all-day" type="checkbox">
+          <span>全天</span>
+        </label>
+        <div class="form-grid" id="plan-time-fields">
+          <label class="field">
+            <span>开始时间</span>
+            <input id="plan-start-time" type="time">
+          </label>
+          <label class="field">
+            <span>结束时间</span>
+            <input id="plan-end-time" type="time">
+          </label>
+        </div>
+        <label class="field">
+          <span>地点</span>
+          <input id="plan-location" type="text" maxlength="100" placeholder="可选">
+        </label>
+        <label class="field">
+          <span>备注</span>
+          <textarea id="plan-notes" rows="3" maxlength="500" placeholder="可选"></textarea>
+        </label>
+        <div class="modal-actions">
+          <button class="button button-danger hidden" id="plan-delete" type="button">删除计划</button>
+          <span class="modal-actions-spacer"></span>
+          <button class="button button-secondary" id="plan-cancel" type="button">取消</button>
+          <button class="button button-primary" type="submit">保存计划</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 教务处导入占位窗口 -->
+  <div id="exam-import-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="exam-import-title">
+    <div class="modal-backdrop" data-close-modal="exam-import"></div>
+    <div class="modal-card modal-card-wide">
+      <button class="modal-close" id="exam-import-close" type="button" aria-label="关闭" title="关闭">×</button>
+      <div class="modal-header modal-header-left">
+        <div class="integration-badge">等待后端接入</div>
+        <h2 id="exam-import-title">从中国科大教务处导入考试日程</h2>
+        <p>通过统一身份认证读取并确认考试安排</p>
+      </div>
+      <ol class="import-steps" aria-label="导入步骤">
+        <li><span>1</span><div><strong>统一身份认证</strong><small>跳转至中国科大认证页面</small></div></li>
+        <li><span>2</span><div><strong>读取考试安排</strong><small>获取课程、时间与考场</small></div></li>
+        <li><span>3</span><div><strong>确认导入</strong><small>写入个人日程表</small></div></li>
+      </ol>
+      <div class="security-note">本应用不会要求或保存你的学号、密码。</div>
+      <div class="modal-actions">
+        <span class="modal-actions-spacer"></span>
+        <button class="button button-secondary" id="exam-import-cancel" type="button">取消</button>
+        <button class="button button-primary" id="exam-import-connect" type="button">连接教务处</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js" defer></script>
+  <script src="/assets/app.js?v=avatar-actions-v2" defer></script>
 </body>
 </html>

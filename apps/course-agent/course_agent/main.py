@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
@@ -31,6 +32,60 @@ from .ingestion import (
 from .llm import LLMAdapter
 from .retrieval import FTS5SearchBackend, SearchResult, accessible_document_ids, search
 from .tokenizer import JiebaTokenizer
+
+
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+USTC_LATITUDE = 31.8206
+USTC_LONGITUDE = 117.2272
+WEATHER_REQUEST_TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+OPEN_METEO_WEATHER_PARAMS: dict[str, str | float | int] = {
+    "latitude": USTC_LATITUDE,
+    "longitude": USTC_LONGITUDE,
+    "current": (
+        "temperature_2m,relative_humidity_2m,apparent_temperature,"
+        "wind_speed_10m,wind_direction_10m"
+    ),
+    "daily": (
+        "weather_code,temperature_2m_max,temperature_2m_min,"
+        "precipitation_probability_max,sunrise,sunset"
+    ),
+    "temperature_unit": "celsius",
+    "wind_speed_unit": "kmh",
+    "precipitation_unit": "mm",
+    "timezone": "Asia/Shanghai",
+    "forecast_days": 1,
+}
+
+_WMO_WEATHER_DESCRIPTIONS = {
+    0: "晴",
+    1: "大部晴朗",
+    2: "局部多云",
+    3: "阴",
+    45: "有雾",
+    48: "雾凇",
+    51: "小毛毛雨",
+    53: "毛毛雨",
+    55: "较强毛毛雨",
+    56: "轻微冻毛毛雨",
+    57: "冻毛毛雨",
+    61: "小雨",
+    63: "中雨",
+    65: "大雨",
+    66: "轻微冻雨",
+    67: "冻雨",
+    71: "小雪",
+    73: "中雪",
+    75: "大雪",
+    77: "米雪",
+    80: "小阵雨",
+    81: "阵雨",
+    82: "强阵雨",
+    85: "小阵雪",
+    86: "强阵雪",
+    95: "雷暴",
+    96: "雷暴伴小冰雹",
+    99: "雷暴伴强冰雹",
+}
 
 
 class SessionRequest(BaseModel):
@@ -121,11 +176,95 @@ def _clean_document_ids(document_ids: list[str]) -> list[str]:
     return cleaned
 
 
+def _weather_number(value: Any, field_name: str) -> int | float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"Open-Meteo 字段 {field_name} 格式无效")
+    return value
+
+
+def _weather_text(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Open-Meteo 字段 {field_name} 格式无效")
+    return value
+
+
+def _daily_weather_value(daily: dict[str, Any], field_name: str) -> Any:
+    values = daily.get(field_name)
+    if not isinstance(values, list) or not values:
+        raise ValueError(f"Open-Meteo 字段 daily.{field_name} 格式无效")
+    return values[0]
+
+
+def _parse_today_weather(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Open-Meteo 响应格式无效")
+    current = payload.get("current")
+    daily = payload.get("daily")
+    if not isinstance(current, dict) or not isinstance(daily, dict):
+        raise ValueError("Open-Meteo 响应缺少今日天气数据")
+
+    weather_code_value = _daily_weather_value(daily, "weather_code")
+    if isinstance(weather_code_value, bool) or not isinstance(weather_code_value, int):
+        raise ValueError("Open-Meteo 字段 daily.weather_code 格式无效")
+    weather_code = weather_code_value
+    description = _WMO_WEATHER_DESCRIPTIONS.get(weather_code, "未知天气")
+    current_temperature = _weather_number(current.get("temperature_2m"), "current.temperature_2m")
+    apparent_temperature = _weather_number(current.get("apparent_temperature"), "current.apparent_temperature")
+    minimum_temperature = _weather_number(
+        _daily_weather_value(daily, "temperature_2m_min"),
+        "daily.temperature_2m_min",
+    )
+    maximum_temperature = _weather_number(
+        _daily_weather_value(daily, "temperature_2m_max"),
+        "daily.temperature_2m_max",
+    )
+
+    return {
+        "location": {
+            "name": "中国科学技术大学",
+            "city": "合肥",
+            "latitude": USTC_LATITUDE,
+            "longitude": USTC_LONGITUDE,
+            "timezone": "Asia/Shanghai",
+        },
+        "date": _weather_text(_daily_weather_value(daily, "time"), "daily.time"),
+        "weather": {"code": weather_code, "description": description},
+        "temperature": {
+            "current_c": current_temperature,
+            "apparent_c": apparent_temperature,
+            "min_c": minimum_temperature,
+            "max_c": maximum_temperature,
+        },
+        "humidity_percent": _weather_number(
+            current.get("relative_humidity_2m"),
+            "current.relative_humidity_2m",
+        ),
+        "precipitation_probability_max_percent": _weather_number(
+            _daily_weather_value(daily, "precipitation_probability_max"),
+            "daily.precipitation_probability_max",
+        ),
+        "wind": {
+            "speed_kmh": _weather_number(current.get("wind_speed_10m"), "current.wind_speed_10m"),
+            "direction_degrees": _weather_number(
+                current.get("wind_direction_10m"),
+                "current.wind_direction_10m",
+            ),
+        },
+        "sunrise": _weather_text(_daily_weather_value(daily, "sunrise"), "daily.sunrise"),
+        "sunset": _weather_text(_daily_weather_value(daily, "sunset"), "daily.sunset"),
+        "updated_at": _weather_text(current.get("time"), "current.time"),
+        "summary": (
+            f"合肥今日{description}，{minimum_temperature}℃～{maximum_temperature}℃，"
+            f"当前{current_temperature}℃"
+        ),
+    }
+
+
 def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None = None) -> FastAPI:
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="USTC Course Agent", version="0.6.0")
+    app = FastAPI(title="瀚海行agent", version="0.6.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
 
@@ -257,6 +396,29 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.delete("/api/session", status_code=204)
     def clear_session(request: Request) -> None:
         request.session.clear()
+
+    @app.get("/api/weather/today")
+    async def today_weather(_user_id: str = Depends(current_user)) -> dict:
+        try:
+            async with httpx.AsyncClient(
+                timeout=WEATHER_REQUEST_TIMEOUT,
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    OPEN_METEO_FORECAST_URL,
+                    params=OPEN_METEO_WEATHER_PARAMS,
+                )
+                response.raise_for_status()
+                return _parse_today_weather(response.json())
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=_error(
+                    "weather_upstream_unavailable",
+                    "天气服务暂时不可用，请稍后重试",
+                    True,
+                ),
+            ) from exc
 
     @app.get("/api/spaces")
     def spaces(user_id: str = Depends(current_user)) -> dict:
