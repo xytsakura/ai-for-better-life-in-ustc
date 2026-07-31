@@ -28,6 +28,8 @@ const state = {
     loading: false,
     error: '',
     mode: 'pdf',
+    pdfZoom: 100,
+    textFontSize: 16,
     returnFocus: null,
   },
   apiKeyTouched: false,
@@ -114,6 +116,10 @@ const SCHEDULE_KEY_PREFIX = 'course-agent:schedule-v1:';
 const PROFILE_KEY_PREFIX = 'course-agent:profile-v1:';
 const FEATURES_KEY_PREFIX = 'course-agent:features-v1:';
 const ASSISTANT_PREFERENCES_KEY_PREFIX = 'course-agent:assistant-preferences-v1:';
+const READER_PDF_ZOOM_KEY = 'course-agent:reader-pdf-zoom-v1';
+const READER_TEXT_SIZE_KEY = 'course-agent:reader-text-size-v1';
+const READER_PDF_ZOOM = Object.freeze({ min: 50, max: 250, step: 25, default: 100 });
+const READER_TEXT_SIZE = Object.freeze({ min: 12, max: 28, step: 2, default: 16 });
 const MAX_CUSTOM_INSTRUCTIONS_LENGTH = 2000;
 const REASONING_OPTIONS = Object.freeze([
   { value: 'low', label: '快速', shortLabel: '快' },
@@ -261,6 +267,26 @@ function applyTheme(value, { persist = false, announce = false } = {}) {
 
 function initTheme() {
   applyTheme(loadTheme());
+}
+
+function clampReaderPreference(value, limits) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return limits.default;
+  return Math.max(limits.min, Math.min(limits.max, parsed));
+}
+
+function loadReaderPreference(key, limits) {
+  try {
+    const stored = localStorage.getItem(key);
+    return stored === null || stored === '' ? limits.default : clampReaderPreference(stored, limits);
+  } catch {
+    return limits.default;
+  }
+}
+
+function initReferenceViewerPreferences() {
+  state.referenceViewer.pdfZoom = loadReaderPreference(READER_PDF_ZOOM_KEY, READER_PDF_ZOOM);
+  state.referenceViewer.textFontSize = loadReaderPreference(READER_TEXT_SIZE_KEY, READER_TEXT_SIZE);
 }
 
 function firstCharacter(value) {
@@ -618,6 +644,8 @@ function closeReferenceViewer() {
     loading: false,
     error: '',
     mode: 'pdf',
+    pdfZoom: state.referenceViewer.pdfZoom,
+    textFontSize: state.referenceViewer.textFontSize,
     returnFocus: null,
   };
   renderReferenceViewer();
@@ -647,6 +675,8 @@ function openReferenceViewer(reference) {
     loading: true,
     error: '',
     mode: 'pdf',
+    pdfZoom: state.referenceViewer.pdfZoom,
+    textFontSize: state.referenceViewer.textFontSize,
     returnFocus: wasOpen ? state.referenceViewer.returnFocus : document.activeElement,
   };
   renderReferenceViewer();
@@ -711,10 +741,15 @@ function renderReferenceViewer() {
   const locator = $('#document-reader-locator');
   const pageText = $('#document-reader-text');
   const frame = $('#document-reader-pdf');
+  const pdfScroll = $('#document-reader-pdf-scroll');
   const loading = $('#document-reader-loading');
   const openPdf = $('#document-reader-external');
   const prev = $('#document-reader-prev');
   const next = $('#document-reader-next');
+  const scaleDown = $('#document-reader-scale-down');
+  const scaleReset = $('#document-reader-scale-reset');
+  const scaleUp = $('#document-reader-scale-up');
+  const scaleGroup = $('#document-reader-scale');
 
   if (!viewer.open) {
     if (title) title.textContent = '资料原文';
@@ -757,7 +792,32 @@ function renderReferenceViewer() {
     tab.setAttribute('aria-selected', String(active));
   });
   frame?.classList.toggle('hidden', viewer.mode !== 'pdf');
+  pdfScroll?.classList.toggle('hidden', viewer.mode !== 'pdf');
   pageText?.classList.toggle('hidden', viewer.mode !== 'text');
+
+  const isPdfMode = viewer.mode === 'pdf';
+  const scale = isPdfMode ? viewer.pdfZoom : viewer.textFontSize;
+  const limits = isPdfMode ? READER_PDF_ZOOM : READER_TEXT_SIZE;
+  if (scaleGroup) scaleGroup.setAttribute('aria-label', isPdfMode ? '页面缩放' : '文本字号');
+  if (pdfScroll) pdfScroll.style.setProperty('--reader-pdf-zoom', `${viewer.pdfZoom}%`);
+  if (pageText) pageText.style.setProperty('--reader-text-size', `${viewer.textFontSize}px`);
+  if (scaleReset) {
+    const label = isPdfMode ? `${scale}%` : `${scale}px`;
+    const action = isPdfMode ? '重置页面缩放' : '重置文本字号';
+    scaleReset.textContent = label;
+    scaleReset.setAttribute('aria-label', `${action}，当前 ${label}`);
+    scaleReset.title = action;
+  }
+  if (scaleDown) {
+    scaleDown.disabled = scale <= limits.min;
+    scaleDown.setAttribute('aria-label', isPdfMode ? '缩小页面' : '减小文本字号');
+    scaleDown.title = isPdfMode ? '缩小页面' : '减小文本字号';
+  }
+  if (scaleUp) {
+    scaleUp.disabled = scale >= limits.max;
+    scaleUp.setAttribute('aria-label', isPdfMode ? '放大页面' : '增大文本字号');
+    scaleUp.title = isPdfMode ? '放大页面' : '增大文本字号';
+  }
 }
 
 function syncReferenceViewerModalState(open = state.referenceViewer.open) {
@@ -776,6 +836,35 @@ function setReferenceViewerMode(mode) {
   if (!['pdf', 'text'].includes(mode) || !state.referenceViewer.open) return;
   state.referenceViewer = { ...state.referenceViewer, mode };
   renderReferenceViewer();
+}
+
+function changeReferenceViewerScale(direction) {
+  if (!state.referenceViewer.open || ![-1, 1].includes(direction)) return;
+  const isPdfMode = state.referenceViewer.mode === 'pdf';
+  const field = isPdfMode ? 'pdfZoom' : 'textFontSize';
+  const key = isPdfMode ? READER_PDF_ZOOM_KEY : READER_TEXT_SIZE_KEY;
+  const limits = isPdfMode ? READER_PDF_ZOOM : READER_TEXT_SIZE;
+  const value = clampReaderPreference(state.referenceViewer[field] + direction * limits.step, limits);
+  state.referenceViewer = { ...state.referenceViewer, [field]: value };
+  try { localStorage.setItem(key, String(value)); } catch {}
+  renderReferenceViewer();
+}
+
+function resetReferenceViewerScale() {
+  if (!state.referenceViewer.open) return;
+  const isPdfMode = state.referenceViewer.mode === 'pdf';
+  const field = isPdfMode ? 'pdfZoom' : 'textFontSize';
+  const key = isPdfMode ? READER_PDF_ZOOM_KEY : READER_TEXT_SIZE_KEY;
+  const limits = isPdfMode ? READER_PDF_ZOOM : READER_TEXT_SIZE;
+  state.referenceViewer = { ...state.referenceViewer, [field]: limits.default };
+  try { localStorage.setItem(key, String(limits.default)); } catch {}
+  renderReferenceViewer();
+}
+
+function handleReferenceViewerWheel(event) {
+  if (!state.referenceViewer.open || !event.ctrlKey) return;
+  event.preventDefault();
+  changeReferenceViewerScale(event.deltaY > 0 ? -1 : 1);
 }
 
 function changeReferenceViewerPage(delta) {
@@ -4261,6 +4350,10 @@ function initEventListeners() {
   $('#document-reader-close').addEventListener('click', closeReferenceViewer);
   $('#document-reader-prev').addEventListener('click', () => changeReferenceViewerPage(-1));
   $('#document-reader-next').addEventListener('click', () => changeReferenceViewerPage(1));
+  $('#document-reader-scale-down').addEventListener('click', () => changeReferenceViewerScale(-1));
+  $('#document-reader-scale-reset').addEventListener('click', resetReferenceViewerScale);
+  $('#document-reader-scale-up').addEventListener('click', () => changeReferenceViewerScale(1));
+  $('#document-reader-body').addEventListener('wheel', handleReferenceViewerWheel, { passive: false });
   $$('[data-reader-mode]').forEach(button => {
     button.addEventListener('click', () => setReferenceViewerMode(button.dataset.readerMode));
   });
@@ -4457,6 +4550,7 @@ function initEventListeners() {
 
 async function init() {
   initTheme();
+  initReferenceViewerPreferences();
   initEventListeners();
   initResizeHandles();
   initRouting();

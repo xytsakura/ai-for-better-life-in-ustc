@@ -1055,6 +1055,11 @@ body.resizing * {
 .document-reader-tabs { display: inline-flex; padding: 2px; border: 1px solid var(--control-border); border-radius: 8px; background: var(--bg-3); }
 .document-reader-tab { min-height: 30px; padding: 4px 10px; border-radius: 6px; color: var(--text-tertiary); font-size: 0.72rem; font-weight: 700; }
 .document-reader-tab.active { color: var(--text-primary); background: var(--bg-5); }
+.document-reader-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.document-reader-scale { display: inline-flex; align-items: center; gap: 2px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.document-reader-scale .icon-button:disabled { opacity: 0.35; cursor: not-allowed; }
+.document-reader-scale-value { min-width: 48px; height: 30px; padding: 0 5px; border-radius: 6px; color: var(--text-secondary); font-size: 0.7rem; font-weight: 700; }
+.document-reader-scale-value:hover { color: var(--text-primary); background: var(--bg-4); }
 .document-reader-pagination { display: flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
 .document-reader-pagination .icon-button:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -1072,8 +1077,9 @@ body.resizing * {
 
 .document-reader-body { position: relative; min-height: 0; flex: 1; overflow: hidden; }
 .document-reader-loading { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; color: var(--text-secondary); background: color-mix(in srgb, var(--bg-1) 88%, transparent); font-size: 0.8rem; }
-.document-reader-pdf { width: 100%; height: 100%; display: block; padding: 12px; border: 0; object-fit: contain; object-position: center top; background: #2a2a2a; }
-.document-reader-text { width: 100%; height: 100%; margin: 0; padding: 24px; overflow: auto; color: var(--text-primary); background: var(--bg-1); font-size: 0.86rem; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.document-reader-pdf-scroll { width: 100%; height: 100%; overflow: auto; padding: 12px; background: #2a2a2a; overscroll-behavior: contain; touch-action: pan-x pan-y; }
+.document-reader-pdf { width: var(--reader-pdf-zoom, 100%); max-width: none; height: auto; display: block; margin: 0 auto; border: 0; background: #fff; }
+.document-reader-text { width: 100%; height: 100%; margin: 0; padding: 24px; overflow: auto; color: var(--text-primary); background: var(--bg-1); font-size: var(--reader-text-size, 16px); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 body.document-reader-open .home-agent-avatar-dock { display: none; }
 body.document-reader-open .home-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 body.document-reader-open .home-chat-column { grid-column: 1; grid-row: 1; }
@@ -2659,6 +2665,8 @@ body.document-reader-open .library-chat { display: none; }
     flex-basis: auto;
   }
   .document-reader-resize { display: none !important; }
+  .document-reader-toolbar { flex-wrap: wrap; gap: 6px 10px; }
+  .document-reader-toolbar-actions { flex: 1 1 auto; }
   .library-layout {
     grid-template-columns:
       var(--library-spaces-width, 200px)
@@ -2682,6 +2690,10 @@ body.document-reader-open .library-chat { display: none; }
 }
 
 @media (max-width: 680px) {
+  .document-reader-toolbar { align-items: stretch; padding: 7px 10px; }
+  .document-reader-toolbar-actions { width: 100%; justify-content: space-between; }
+  .document-reader-pdf-scroll { padding: 8px; }
+  .document-reader-text { padding: 18px; }
   body { flex-direction: column; }
   .app-sidebar {
     width: 100%;

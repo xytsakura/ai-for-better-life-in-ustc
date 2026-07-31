@@ -267,8 +267,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=document-reader-v1' in html
-    assert '/assets/app.js?v=document-reader-v1' in html
+    assert '/assets/styles.css?v=document-reader-zoom-v2' in html
+    assert '/assets/app.js?v=document-reader-zoom-v2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -430,7 +430,12 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert '<span>思考</span>' not in html
     assert 'id="document-reader"' in html
     assert 'id="document-reader-pdf"' in html
+    assert 'id="document-reader-pdf-scroll"' in html
     assert 'id="document-reader-text"' in html
+    assert 'id="document-reader-scale-down"' in html
+    assert 'id="document-reader-scale-reset"' in html
+    assert 'id="document-reader-scale-up"' in html
+    assert 'id="document-reader-scale" aria-label="页面缩放"' in html
     assert 'id="document-reader" role="dialog" aria-modal="false"' in html
     assert 'id="settings-discover-models"' in html
     assert 'id="settings-model-list"' in html
@@ -449,6 +454,11 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert "function openReferenceViewer(reference)" in script
     assert "function decorateCitationMarkers(container)" in script
     assert "function syncReferenceViewerModalState(" in script
+    assert "function changeReferenceViewerScale(" in script
+    assert "function resetReferenceViewerScale(" in script
+    assert "function handleReferenceViewerWheel(" in script
+    assert "const READER_PDF_ZOOM = Object.freeze({ min: 50, max: 250, step: 25, default: 100 });" in script
+    assert "const READER_TEXT_SIZE = Object.freeze({ min: 12, max: 28, step: 2, default: 16 });" in script
     assert "citations });" in script
     assert "data-open-document" in script
 
@@ -457,6 +467,9 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert "conic-gradient" in styles
     assert ".settings-model-list" in styles
     assert ".document-reader" in styles
+    assert ".document-reader-pdf-scroll" in styles
+    assert "width: var(--reader-pdf-zoom, 100%)" in styles
+    assert "font-size: var(--reader-text-size, 16px)" in styles
     assert ".citation-marker" in styles
 
 

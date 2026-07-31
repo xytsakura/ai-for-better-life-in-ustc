@@ -16,7 +16,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=document-reader-v1">
+  <link rel="stylesheet" href="/assets/styles.css?v=document-reader-zoom-v2">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -705,16 +705,25 @@
         <button class="document-reader-tab active" id="document-reader-pdf-tab" type="button" role="tab" aria-selected="true" data-reader-mode="pdf">PDF 原页</button>
         <button class="document-reader-tab" id="document-reader-text-tab" type="button" role="tab" aria-selected="false" data-reader-mode="text">提取文本</button>
       </div>
-      <div class="document-reader-pagination" aria-label="翻页">
-        <button class="icon-button" id="document-reader-prev" type="button" aria-label="上一页" title="上一页">←</button>
-        <span id="document-reader-page-count">1 / 1</span>
-        <button class="icon-button" id="document-reader-next" type="button" aria-label="下一页" title="下一页">→</button>
+      <div class="document-reader-toolbar-actions">
+        <div class="document-reader-scale" id="document-reader-scale" aria-label="页面缩放">
+          <button class="icon-button" id="document-reader-scale-down" type="button" aria-label="缩小页面" title="缩小页面">−</button>
+          <button class="document-reader-scale-value" id="document-reader-scale-reset" type="button" aria-label="重置页面缩放" title="重置页面缩放">100%</button>
+          <button class="icon-button" id="document-reader-scale-up" type="button" aria-label="放大页面" title="放大页面">＋</button>
+        </div>
+        <div class="document-reader-pagination" aria-label="翻页">
+          <button class="icon-button" id="document-reader-prev" type="button" aria-label="上一页" title="上一页">←</button>
+          <span id="document-reader-page-count">1 / 1</span>
+          <button class="icon-button" id="document-reader-next" type="button" aria-label="下一页" title="下一页">→</button>
+        </div>
       </div>
     </div>
     <div class="document-reader-locator hidden" id="document-reader-locator"></div>
-    <div class="document-reader-body">
+    <div class="document-reader-body" id="document-reader-body">
       <div class="document-reader-loading hidden" id="document-reader-loading">正在读取资料…</div>
-      <img class="document-reader-pdf" id="document-reader-pdf" alt="PDF 原始页面" loading="lazy">
+      <div class="document-reader-pdf-scroll" id="document-reader-pdf-scroll" tabindex="0" aria-label="PDF 页面，可滚动查看放大内容">
+        <img class="document-reader-pdf" id="document-reader-pdf" alt="PDF 原始页面" loading="lazy">
+      </div>
       <article class="document-reader-text hidden" id="document-reader-text" tabindex="0"></article>
     </div>
   </aside>
@@ -871,6 +880,6 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js?v=document-reader-v1" defer></script>
+  <script src="/assets/app.js?v=document-reader-zoom-v2" defer></script>
 </body>
 </html>
