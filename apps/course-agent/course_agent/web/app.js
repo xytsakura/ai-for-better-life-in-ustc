@@ -513,6 +513,52 @@ function renderInlineMarkdown(value) {
     .replace(/\\\((.+?)\\\)/g, '<span class="math-inline">$1</span>');
 }
 
+function parseMarkdownTableRow(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+  const cells = [];
+  let cell = '';
+  let escaped = false;
+  for (const character of trimmed.slice(1, -1)) {
+    if (escaped) {
+      cell += character === '|' ? '|' : `\\${character}`;
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === '|') {
+      cells.push(cell.trim());
+      cell = '';
+    } else {
+      cell += character;
+    }
+  }
+  if (escaped) cell += '\\';
+  cells.push(cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function markdownTableAlignment(value) {
+  const marker = String(value ?? '').replace(/\s+/g, '');
+  if (!/^:?-{3,}:?$/.test(marker)) return null;
+  if (marker.startsWith(':') && marker.endsWith(':')) return 'center';
+  if (marker.endsWith(':')) return 'right';
+  return 'left';
+}
+
+function renderMarkdownTable(headers, alignments, rows) {
+  const renderCell = (tag, value, index) => {
+    const alignment = alignments[index] || 'left';
+    const scope = tag === 'th' ? ' scope="col"' : '';
+    return `<${tag}${scope} class="align-${alignment}">${renderInlineMarkdown(value)}</${tag}>`;
+  };
+  const head = headers.map((value, index) => renderCell('th', value, index)).join('');
+  const body = rows.map(row => {
+    const normalized = headers.map((_, index) => row[index] || '');
+    return `<tr>${normalized.map((value, index) => renderCell('td', value, index)).join('')}</tr>`;
+  }).join('');
+  return `<div class="markdown-table-wrap" role="region" aria-label="表格，可横向滚动" tabindex="0"><table class="markdown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
 function renderMarkdown(value) {
   const lines = String(value ?? '').split(/\r?\n/);
   const output = [];
@@ -525,7 +571,8 @@ function renderMarkdown(value) {
     listType = null;
   };
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const trimmed = line.trim();
     const singleLineMath = trimmed.match(/^\\\[(.+)\\\]$/) || trimmed.match(/^\$\$(.+)\$\$$/);
     if (!mathLines && singleLineMath) {
@@ -555,6 +602,29 @@ function renderMarkdown(value) {
     if (!trimmed) {
       closeList();
       continue;
+    }
+
+    const tableHeaders = parseMarkdownTableRow(trimmed);
+    if (tableHeaders) {
+      let separatorIndex = index + 1;
+      while (separatorIndex < lines.length && !lines[separatorIndex].trim()) separatorIndex += 1;
+      const separatorCells = parseMarkdownTableRow(lines[separatorIndex]);
+      const alignments = separatorCells?.map(markdownTableAlignment) || [];
+      if (separatorCells?.length === tableHeaders.length && alignments.every(Boolean)) {
+        closeList();
+        const rows = [];
+        let rowIndex = separatorIndex + 1;
+        while (rowIndex < lines.length) {
+          while (rowIndex < lines.length && !lines[rowIndex].trim()) rowIndex += 1;
+          const row = parseMarkdownTableRow(lines[rowIndex]);
+          if (!row || row.length !== tableHeaders.length) break;
+          rows.push(row);
+          rowIndex += 1;
+        }
+        output.push(renderMarkdownTable(tableHeaders, alignments, rows));
+        index = rowIndex - 1;
+        continue;
+      }
     }
 
     const heading = trimmed.match(/^(#{2,4})\s+(.+)$/);

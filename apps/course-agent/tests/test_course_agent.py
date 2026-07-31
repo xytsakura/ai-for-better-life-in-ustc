@@ -267,8 +267,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=document-reader-zoom-v2' in html
-    assert '/assets/app.js?v=document-reader-zoom-v2' in html
+    assert '/assets/styles.css?v=markdown-table-v3' in html
+    assert '/assets/app.js?v=markdown-table-v3' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -457,6 +457,10 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert "function changeReferenceViewerScale(" in script
     assert "function resetReferenceViewerScale(" in script
     assert "function handleReferenceViewerWheel(" in script
+    assert "function parseMarkdownTableRow(" in script
+    assert "function renderMarkdownTable(" in script
+    assert 'class="markdown-table-wrap"' in script
+    assert "if (!row || row.length !== tableHeaders.length) break;" in script
     assert "const READER_PDF_ZOOM = Object.freeze({ min: 50, max: 250, step: 25, default: 100 });" in script
     assert "const READER_TEXT_SIZE = Object.freeze({ min: 12, max: 28, step: 2, default: 16 });" in script
     assert "citations });" in script
@@ -470,6 +474,8 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert ".document-reader-pdf-scroll" in styles
     assert "width: var(--reader-pdf-zoom, 100%)" in styles
     assert "font-size: var(--reader-text-size, 16px)" in styles
+    assert ".markdown-table-wrap" in styles
+    assert ".markdown-table" in styles
     assert ".citation-marker" in styles
 
 
@@ -615,6 +621,10 @@ def test_direct_prompt_applies_user_preferences_without_overriding_truthfulness(
     assert "瀚海行 Agent" in prompt
     assert "语气务实" in prompt
     assert "尽量简短" in prompt
+    assert "前端输出格式约束" in prompt
+    assert "表头、分隔线和数据行之间不得插入空行" in prompt
+    assert "| --- | --- | --- |" in prompt
+    assert "\\lvert x \\rvert" in prompt
     assert "称呼我为队长，并先给结论。" not in prompt
     assert adapter.last_direct_preference_context == "称呼我为队长，并先给结论。"
 
@@ -759,6 +769,8 @@ def test_auth_upload_retrieval_and_cross_user_isolation(tmp_path: Path):
     assert "先解释直觉，再给严格定义。" not in retrieval_prompt
     assert adapter.last_retrieval_preference_context == "先解释直觉，再给严格定义。"
     assert "知识库真实性" in retrieval_prompt
+    assert "前端输出格式约束" in retrieval_prompt
+    assert "不要使用 HTML、Mermaid、ASCII 字符画" in retrieval_prompt
 
     duplicate = client.post(
         f"/api/spaces/{personal['id']}/documents",

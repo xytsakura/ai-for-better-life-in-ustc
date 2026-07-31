@@ -184,6 +184,21 @@ def _assistant_custom_preference(preferences: AssistantPreferences) -> str | Non
     return custom or None
 
 
+def _frontend_output_prompt() -> str:
+    return (
+        "前端输出格式约束：回答会由受限 Markdown 与 KaTeX 渲染器展示。"
+        "可以使用二至四级标题、普通段落、粗体、引用、有序或无序列表、标准 Markdown 表格和 LaTeX 公式。"
+        "需要表达日程、对比或多列结构时，优先使用标准 Markdown 表格，格式必须严格如下：\n"
+        "| 时间 | 内容 | 目标 |\n"
+        "| --- | --- | --- |\n"
+        "| 第 1 天 | 示例内容 | 示例目标 |\n"
+        "表头、分隔线和数据行之间不得插入空行，每一行的列数必须一致。"
+        "表格单元格内不要直接使用竖线；数学绝对值应写为 LaTeX 的 \\lvert x \\rvert。"
+        "不要使用 HTML、Mermaid、ASCII 字符画或代码块伪造图表。"
+        "若当前前端不支持用户要求的图形，请改用清晰的 Markdown 表格或分点说明。"
+    )
+
+
 def _general_direct_prompt(preferences: AssistantPreferences) -> str:
     return (
         f"{_assistant_identity_prompt()}\n"
@@ -192,7 +207,8 @@ def _general_direct_prompt(preferences: AssistantPreferences) -> str:
         f"\n{_assistant_preference_prompt(preferences)}\n"
         "无论用户偏好如何，都必须保持诚实，不得伪造事实、来源、执行结果或个人经历。"
         "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
-        "不要使用美元符号包裹公式。"
+        "不要使用美元符号包裹公式。\n"
+        f"{_frontend_output_prompt()}"
     )
 
 
@@ -214,7 +230,8 @@ def _space_agent_prompt(
         "用简洁中文 Markdown 回答，并在事实后用 [S1] 形式标注引用编号，"
         "对应顺序与下方「可用资料」一致。"
         "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
-        "不要使用美元符号包裹公式。"
+        "不要使用美元符号包裹公式。\n"
+        f"{_frontend_output_prompt()}"
     )
 
 

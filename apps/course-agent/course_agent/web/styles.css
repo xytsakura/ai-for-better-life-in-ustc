@@ -2268,6 +2268,39 @@ body.document-reader-open .library-chat { display: none; }
 }
 .answer-text strong { color: var(--text-primary); font-weight: 700; }
 
+.markdown-table-wrap {
+  width: 100%;
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+  overscroll-behavior-x: contain;
+}
+.markdown-table {
+  width: 100%;
+  min-width: 480px;
+  border-collapse: collapse;
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+.markdown-table th,
+.markdown-table td {
+  padding: 10px 12px;
+  border-right: 1px solid var(--border-1);
+  border-bottom: 1px solid var(--border-1);
+  vertical-align: top;
+}
+.markdown-table th:last-child,
+.markdown-table td:last-child { border-right: 0; }
+.markdown-table tbody tr:last-child td { border-bottom: 0; }
+.markdown-table th { background: var(--bg-4); font-weight: 700; }
+.markdown-table tbody tr:nth-child(even) { background: var(--bg-3); }
+.markdown-table .align-center { text-align: center; }
+.markdown-table .align-right { text-align: right; }
+.markdown-table .align-left { text-align: left; }
+
 .math-inline { color: var(--accent); }
 .math-block {
   overflow-x: auto;
