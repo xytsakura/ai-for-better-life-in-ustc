@@ -56,13 +56,13 @@ class LLMAdapter:
             "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
             "不要使用美元符号包裹公式。"
         )
-        messages: list[dict] = [{"role": "system", "content": instructions}]
-        messages.extend(self._sanitize_history(history))
-        messages.append({"role": "user", "content": f"用户问题：\n{question}"})
+        input_messages = self._sanitize_history(history)
+        input_messages.append({"role": "user", "content": f"用户问题：\n{question}"})
         payload = {
             "model": self.settings.llm_model,
-            "messages": messages,
-            "max_tokens": 1200,
+            "instructions": instructions,
+            "input": input_messages,
+            "max_output_tokens": 1200,
         }
         text, error_code, error_message = self._response_text(payload)
         if error_code:
@@ -100,9 +100,8 @@ class LLMAdapter:
             "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
             "不要使用美元符号包裹公式。"
         )
-        messages: list[dict] = [{"role": "system", "content": instructions}]
-        messages.extend(self._sanitize_history(history))
-        messages.append(
+        input_messages = self._sanitize_history(history)
+        input_messages.append(
             {
                 "role": "user",
                 "content": f"用户问题：\n{question}\n\n可用资料：\n{source_text}",
@@ -110,8 +109,9 @@ class LLMAdapter:
         )
         payload = {
             "model": self.settings.llm_model,
-            "messages": messages,
-            "max_tokens": 1200,
+            "instructions": instructions,
+            "input": input_messages,
+            "max_output_tokens": 1200,
         }
         text, error_code, error_message = self._response_text(payload)
         if error_code:
@@ -139,7 +139,7 @@ class LLMAdapter:
     def _response_text(self, payload: dict) -> tuple[str | None, str | None, str | None]:
         if not self.settings.llm_configured:
             return None, "llm_not_configured", None
-        url = self.settings.llm_base_url.rstrip("/") + "/chat/completions"
+        url = self.settings.llm_base_url.rstrip("/") + "/responses"
         last_code = "llm_request_failed"
         last_message = None
         for attempt in range(2):
@@ -170,8 +170,7 @@ class LLMAdapter:
                     continue
         return None, last_code, last_message
 
-    @staticmethod
-    def _error_message(response: object) -> str | None:
+    def _error_message(self, response: object) -> str | None:
         if not isinstance(response, httpx.Response):
             return None
         try:
@@ -181,16 +180,37 @@ class LLMAdapter:
         if isinstance(body, dict):
             error = body.get("error")
             if isinstance(error, dict) and isinstance(error.get("message"), str):
-                return error["message"]
+                return self._redact_error_message(error["message"])
             if isinstance(error, str):
-                return error
+                return self._redact_error_message(error)
         text = response.text.strip()
-        return text[:500] if text else None
+        return self._redact_error_message(text) if text else None
+
+    def _redact_error_message(self, message: str) -> str:
+        redacted = re.sub(
+            r"(?i)\bAuthorization\s*:\s*Bearer\s+[^\s,;]+",
+            "Authorization: Bearer [REDACTED]",
+            message,
+        )
+        redacted = re.sub(
+            r"(?i)\bBearer\s+[^\s,;]+",
+            "Bearer [REDACTED]",
+            redacted,
+        )
+        if self.settings.llm_api_key:
+            redacted = redacted.replace(self.settings.llm_api_key, "[REDACTED]")
+        return redacted[:500]
 
     @staticmethod
-    def _extract_text(data: dict) -> str:
+    def _extract_text(data: object) -> str:
+        if not isinstance(data, dict):
+            return ""
         for choice in data.get("choices", []) or []:
+            if not isinstance(choice, dict):
+                continue
             message = choice.get("message") or {}
+            if not isinstance(message, dict):
+                continue
             if isinstance(message.get("content"), str):
                 text = message["content"].strip()
                 if text:
@@ -205,6 +225,8 @@ class LLMAdapter:
             return data["output_text"]
         parts: list[str] = []
         for item in data.get("output", []) or []:
+            if not isinstance(item, dict):
+                continue
             for content in item.get("content", []) or []:
                 if isinstance(content, dict) and isinstance(content.get("text"), str):
                     parts.append(content["text"])
