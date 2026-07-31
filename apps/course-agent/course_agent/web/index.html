@@ -16,7 +16,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=avatar-actions-v2">
+  <link rel="stylesheet" href="/assets/styles.css?v=assistant-preferences-v1">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -419,6 +419,7 @@
           <h2>个人设置</h2>
           <nav class="settings-nav" role="tablist" aria-label="设置类别" aria-orientation="vertical">
             <button type="button" id="settings-tab-button-profile" class="settings-nav-item active" role="tab" aria-selected="true" aria-controls="settings-tab-profile" tabindex="0" data-settings-tab="profile">个人信息</button>
+            <button type="button" id="settings-tab-button-assistant" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-assistant" tabindex="-1" data-settings-tab="assistant">回答偏好</button>
             <button type="button" id="settings-tab-button-llm" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-llm" tabindex="-1" data-settings-tab="llm">模型服务</button>
             <button type="button" id="settings-tab-button-theme" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-theme" tabindex="-1" data-settings-tab="theme">主题设置</button>
             <button type="button" id="settings-tab-button-features" class="settings-nav-item" role="tab" aria-selected="false" aria-controls="settings-tab-features" tabindex="-1" data-settings-tab="features">功能管理</button>
@@ -453,6 +454,55 @@
                 </label>
                 <div class="settings-actions">
                   <button class="button button-primary" type="submit">保存个人资料</button>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section id="settings-tab-assistant" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-assistant">
+            <div class="settings-card">
+              <h3>回答偏好</h3>
+              <form id="assistant-preferences-form" class="settings-form" autocomplete="off">
+                <fieldset class="assistant-preference-field">
+                  <legend>语气</legend>
+                  <div class="segment-control assistant-preference-segment assistant-tone-segment">
+                    <label class="segment-option">
+                      <input type="radio" name="assistant-tone" value="friendly" checked>
+                      <span>亲和</span>
+                    </label>
+                    <label class="segment-option">
+                      <input type="radio" name="assistant-tone" value="pragmatic">
+                      <span>务实</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="assistant-preference-field">
+                  <legend>回答详略</legend>
+                  <div class="segment-control assistant-preference-segment assistant-detail-segment">
+                    <label class="segment-option">
+                      <input type="radio" name="assistant-detail" value="concise">
+                      <span>简洁</span>
+                    </label>
+                    <label class="segment-option">
+                      <input type="radio" name="assistant-detail" value="balanced" checked>
+                      <span>均衡</span>
+                    </label>
+                    <label class="segment-option">
+                      <input type="radio" name="assistant-detail" value="detailed">
+                      <span>详细</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <label class="field assistant-custom-instructions-field">
+                  <span>自定义指令</span>
+                  <textarea id="assistant-custom-instructions" maxlength="2000" rows="6" placeholder="例如：回答数学问题时先讲直觉，再给公式。" aria-describedby="assistant-custom-instructions-count"></textarea>
+                  <span class="field-hint assistant-custom-count" id="assistant-custom-instructions-count">0 / 2000</span>
+                </label>
+
+                <div class="settings-actions">
+                  <button class="button button-primary" type="submit">保存回答偏好</button>
                 </div>
               </form>
             </div>
@@ -759,6 +809,6 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js?v=avatar-actions-v2" defer></script>
+  <script src="/assets/app.js?v=assistant-preferences-v1" defer></script>
 </body>
 </html>

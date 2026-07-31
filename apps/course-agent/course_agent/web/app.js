@@ -23,6 +23,7 @@ const state = {
   editingScheduleId: null,
   modalReturnFocus: null,
   userProfile: { nickname: '', avatar: '' },
+  assistantPreferences: { tone: 'friendly', detail: 'balanced', customInstructions: '' },
   profileDraftAvatar: '',
   avatarOperationId: 0,
   avatarCrop: {
@@ -89,6 +90,8 @@ const THEME_KEY = 'course-agent:theme';
 const SCHEDULE_KEY_PREFIX = 'course-agent:schedule-v1:';
 const PROFILE_KEY_PREFIX = 'course-agent:profile-v1:';
 const FEATURES_KEY_PREFIX = 'course-agent:features-v1:';
+const ASSISTANT_PREFERENCES_KEY_PREFIX = 'course-agent:assistant-preferences-v1:';
+const MAX_CUSTOM_INSTRUCTIONS_LENGTH = 2000;
 const AVATAR_FILE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_AVATAR_DATA_URL_LENGTH = 400000;
 const MAX_AVATAR_DIMENSION = 8192;
@@ -280,6 +283,18 @@ function normalizeFeaturePreferences(value = {}) {
   };
 }
 
+function normalizeAssistantPreferences(value = {}) {
+  const preferences = value && typeof value === 'object' ? value : {};
+  const customInstructions = typeof preferences.customInstructions === 'string'
+    ? preferences.customInstructions.slice(0, MAX_CUSTOM_INSTRUCTIONS_LENGTH)
+    : '';
+  return {
+    tone: ['friendly', 'pragmatic'].includes(preferences.tone) ? preferences.tone : 'friendly',
+    detail: ['concise', 'balanced', 'detailed'].includes(preferences.detail) ? preferences.detail : 'balanced',
+    customInstructions,
+  };
+}
+
 function readUserProfile(user) {
   const fallback = { nickname: user?.display_name || '', avatar: '' };
   if (!user?.id) return fallback;
@@ -306,6 +321,17 @@ function readFeaturePreferences(user) {
   }
 }
 
+function readAssistantPreferences(user) {
+  if (!user?.id) return normalizeAssistantPreferences();
+  try {
+    const raw = localStorage.getItem(`${ASSISTANT_PREFERENCES_KEY_PREFIX}${user.id}`);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return normalizeAssistantPreferences(parsed);
+  } catch {
+    return normalizeAssistantPreferences();
+  }
+}
+
 function effectiveDisplayName(user = state.user, profile = state.userProfile) {
   return normalizeNickname(profile?.nickname, user?.display_name || '未选择身份');
 }
@@ -328,12 +354,14 @@ function loadUserPreferences() {
   state.avatarOperationId += 1;
   closeAvatarCropModal({ restoreFocus: false });
   state.features = readFeaturePreferences(state.user);
+  state.assistantPreferences = readAssistantPreferences(state.user);
   resetHomeAgentAvatar({ resetQuotes: true });
   state.userProfile = readUserProfile(state.user);
   state.profileDraftAvatar = state.userProfile.avatar;
   syncFeatureAvailability();
   $('#home-agent-avatar-dock')?.classList.remove('feature-preferences-pending');
   renderProfileSettings();
+  renderAssistantPreferences();
   renderFeatureSettings();
 }
 
@@ -1412,6 +1440,7 @@ async function logout() {
   state.scheduleItems = [];
   state.selectedScheduleDate = localDateKey(new Date());
   state.userProfile = { nickname: '', avatar: '' };
+  state.assistantPreferences = normalizeAssistantPreferences();
   state.profileDraftAvatar = '';
   state.features = normalizeFeaturePreferences();
   resetHomeConversation();
@@ -1897,8 +1926,14 @@ async function query(question, mode, prefix) {
     const messages = isHome
       ? state.homeConversation.slice(0, -1).map(({ role, content }) => ({ role, content }))
       : [];
+    const assistantPreferences = normalizeAssistantPreferences(state.assistantPreferences);
+    const assistant_preferences = {
+      tone: assistantPreferences.tone,
+      detail: assistantPreferences.detail,
+      custom_instructions: assistantPreferences.customInstructions.trim(),
+    };
     const payload = mode === 'direct'
-      ? { question, mode: 'direct', scope: 'general', messages }
+      ? { question, mode: 'direct', scope: 'general', messages, assistant_preferences }
       : {
           question,
           mode: 'retrieval',
@@ -1907,6 +1942,7 @@ async function query(question, mode, prefix) {
           document_ids: documentIds,
           top_k: 5,
           messages,
+          assistant_preferences,
         };
     const result = await api('/api/query', {
       method: 'POST',
@@ -3253,6 +3289,54 @@ function saveUserProfile(event) {
   toast('个人资料已保存', 'success');
 }
 
+function updateAssistantCustomInstructionsCount() {
+  const input = $('#assistant-custom-instructions');
+  const count = $('#assistant-custom-instructions-count');
+  if (!input || !count) return;
+  count.textContent = `${input.value.length} / ${MAX_CUSTOM_INSTRUCTIONS_LENGTH}`;
+}
+
+function renderAssistantPreferences() {
+  const preferences = normalizeAssistantPreferences(state.assistantPreferences);
+  $$('input[name="assistant-tone"]').forEach(input => {
+    input.checked = input.value === preferences.tone;
+    input.disabled = !state.user;
+  });
+  $$('input[name="assistant-detail"]').forEach(input => {
+    input.checked = input.value === preferences.detail;
+    input.disabled = !state.user;
+  });
+  const customInstructions = $('#assistant-custom-instructions');
+  if (customInstructions) {
+    customInstructions.value = preferences.customInstructions;
+    customInstructions.disabled = !state.user;
+  }
+  const saveButton = $('#assistant-preferences-form button[type="submit"]');
+  if (saveButton) saveButton.disabled = !state.user;
+  updateAssistantCustomInstructionsCount();
+}
+
+function saveAssistantPreferences(event) {
+  event.preventDefault();
+  if (!state.user) return;
+  const tone = $('input[name="assistant-tone"]:checked')?.value;
+  const detail = $('input[name="assistant-detail"]:checked')?.value;
+  const customInstructions = $('#assistant-custom-instructions')?.value || '';
+  const nextPreferences = normalizeAssistantPreferences({ tone, detail, customInstructions });
+  try {
+    localStorage.setItem(
+      `${ASSISTANT_PREFERENCES_KEY_PREFIX}${state.user.id}`,
+      JSON.stringify(nextPreferences),
+    );
+  } catch {
+    toast('回答偏好未能保存到浏览器', 'error');
+    return;
+  }
+  state.assistantPreferences = nextPreferences;
+  renderAssistantPreferences();
+  toast('回答偏好已保存', 'success');
+}
+
 function renderFeatureSettings() {
   const scheduleToggle = $('#feature-schedule-toggle');
   const scheduleStatus = $('#feature-schedule-status');
@@ -3614,6 +3698,8 @@ function initEventListeners() {
     });
   });
   $('#profile-form').addEventListener('submit', saveUserProfile);
+  $('#assistant-preferences-form').addEventListener('submit', saveAssistantPreferences);
+  $('#assistant-custom-instructions').addEventListener('input', updateAssistantCustomInstructionsCount);
   $('#profile-avatar-upload').addEventListener('click', () => $('#profile-avatar-input').click());
   $('#profile-avatar-input').addEventListener('change', handleProfileAvatarFile);
   const avatarCropStage = $('#avatar-crop-stage');

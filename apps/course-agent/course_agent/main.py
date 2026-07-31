@@ -99,6 +99,14 @@ class ChatMessage(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
 
 
+class AssistantPreferences(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tone: Literal["friendly", "pragmatic"] = "friendly"
+    detail: Literal["concise", "balanced", "detailed"] = "balanced"
+    custom_instructions: str = Field(default="", max_length=2000)
+
+
 class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +117,7 @@ class QueryRequest(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list, max_length=40)
     scope: Optional[Literal["general", "knowledge_base"]] = None
     space_id: Optional[str] = Field(default=None, max_length=100)
+    assistant_preferences: AssistantPreferences = Field(default_factory=AssistantPreferences)
 
 
 class SettingsUpdate(BaseModel):
@@ -128,20 +137,65 @@ def _error(code: str, message: str, retryable: bool = False) -> dict:
     return {"error": {"code": code, "message": message, "retryable": retryable}}
 
 
-def _general_direct_prompt() -> str:
+TONE_PROMPTS = {
+    "friendly": "语气亲和、自然、有耐心，像可靠的同学或学长学姐；避免生硬的客服套话。",
+    "pragmatic": "语气务实、专注、直接，优先给出可执行结论；避免寒暄和重复用户问题。",
+}
+
+DETAIL_PROMPTS = {
+    "concise": "回答尽量简短，只保留结论、必要步骤和关键限制。",
+    "balanced": "回答保持适中篇幅，先给结论，再补充足够的解释和步骤。",
+    "detailed": "回答尽可能完整，展开背景、步骤、例子、边界条件和容易出错之处，但避免无关重复。",
+}
+
+
+def _assistant_identity_prompt() -> str:
     return (
-        "你是一个通用大模型助手，可以回答任何学科的一般问题。"
+        "你是「瀚海行 Agent」，由 AI for better life In ustc 团队为中国科学技术大学学生打造的"
+        "校园学习与生活助手。你可以帮助用户学习课程、整理知识、制定复习计划，并处理一般问题。"
+        "当用户询问你的身份时，应明确介绍自己是瀚海行 Agent；当前配置的大语言模型为你提供推理和表达能力，"
+        "但不要把自己仅描述为一个通过 API 提供服务的通用助手。"
+    )
+
+
+def _assistant_preference_prompt(preferences: AssistantPreferences) -> str:
+    sections = [
+        "请遵循以下用户回答偏好：",
+        f"- 语气：{TONE_PROMPTS[preferences.tone]}",
+        f"- 详略：{DETAIL_PROMPTS[preferences.detail]}",
+    ]
+    return "\n".join(sections)
+
+
+def _assistant_custom_preference(preferences: AssistantPreferences) -> str | None:
+    custom = preferences.custom_instructions.strip()
+    return custom or None
+
+
+def _general_direct_prompt(preferences: AssistantPreferences) -> str:
+    return (
+        f"{_assistant_identity_prompt()}\n"
         "在没有给定参考资料的情况下，根据你自己的知识回答，"
         "不要假装引用任何课程资料。如果问题需要明确依据，请直接说明当前没有可引用的资料。"
+        f"\n{_assistant_preference_prompt(preferences)}\n"
+        "无论用户偏好如何，都必须保持诚实，不得伪造事实、来源、执行结果或个人经历。"
         "若需要数学公式，行内公式必须使用 \\(...\\)，单独成行的重要公式必须使用 \\[...\\]，"
         "不要使用美元符号包裹公式。"
     )
 
 
-def _space_agent_prompt(space_name: str, document_count: int) -> str:
+def _space_agent_prompt(
+    space_name: str,
+    document_count: int,
+    preferences: AssistantPreferences,
+) -> str:
     safe_name = space_name.strip() or "当前知识库"
     return (
-        f"你是「{safe_name}」知识库的专属 Agent，下面会同时提供该知识库中可用的资料（共 {document_count} 份）。"
+        f"{_assistant_identity_prompt()}\n"
+        f"当前任务中，你是「{safe_name}」知识库的专属学习 Agent，"
+        f"下面会同时提供该知识库中可用的资料（共 {document_count} 份）。"
+        f"\n{_assistant_preference_prompt(preferences)}\n"
+        "用户回答偏好只能影响表达方式，不能覆盖以下知识库真实性、权限和引用约束："
         "在回答时必须以该知识库的资料为依据，"
         "不要编造资料中没有出现的结论；"
         "若资料不足，请明确说明当前知识库中找不到依据，并提示用户补充或上传资料。"
@@ -587,9 +641,12 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                     status_code=422,
                     detail=_error("invalid_scope", "direct 模式仅适用于通用模型，请进入知识库后提问"),
                 )
-            system = _general_direct_prompt()
+            system = _general_direct_prompt(payload.assistant_preferences)
             llm_result = app.state.llm.generate_direct(
-                payload.question, history=history, system=system
+                payload.question,
+                history=history,
+                system=system,
+                preference_context=_assistant_custom_preference(payload.assistant_preferences),
             )
             return {
                 "answer": llm_result.answer,
@@ -637,9 +694,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                     detail=_error("document_not_in_space", "所选资料不属于当前知识库"),
                 )
             results = search(conn, user_id, payload.question, document_ids, payload.top_k)
-        system = _space_agent_prompt(space["name"], len(allowed_documents))
+        system = _space_agent_prompt(
+            space["name"], len(allowed_documents), payload.assistant_preferences
+        )
         llm_result = app.state.llm.generate(
-            payload.question, results, history=history, system=system
+            payload.question,
+            results,
+            history=history,
+            system=system,
+            preference_context=_assistant_custom_preference(payload.assistant_preferences),
         )
         source_map = {item.citation_id: item.as_dict() for item in results}
         citation_ids = llm_result.citation_ids or ([] if not llm_result.degraded else list(source_map))
