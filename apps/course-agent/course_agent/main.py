@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import tempfile
 import uuid
+from collections import OrderedDict
 from contextlib import contextmanager
 from pathlib import Path
+from threading import BoundedSemaphore, Lock
 from typing import Any, Iterator, Literal, Optional
 
+import fitz
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.sessions import SessionMiddleware
@@ -331,6 +334,9 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
+    page_image_cache: OrderedDict[tuple[str, int, int, int], bytes] = OrderedDict()
+    page_image_cache_lock = Lock()
+    page_image_render_slots = BoundedSemaphore(value=2)
 
     # ---- Pluggable components (swap via Settings in the future) ---------
     app.state.search_backend = FTS5SearchBackend()
@@ -629,7 +635,80 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             ).fetchone()
         if not page:
             raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
-        return dict(page)
+        result = dict(page)
+        result["page_count"] = int(row["page_count"] or 0)
+        return result
+
+    @app.get("/api/documents/{document_id}/file")
+    def document_file(document_id: str, user_id: str = Depends(current_user)) -> FileResponse:
+        with get_db() as conn:
+            row = require_document(conn, user_id, document_id)
+        file_path = Path(row["file_path"])
+        if not file_path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=_error("document_file_not_found", "资料文件不存在"),
+            )
+        title = str(row["title"]).strip() or document_id
+        suffix = file_path.suffix or ".pdf"
+        filename = title if title.lower().endswith(suffix.lower()) else f"{title}{suffix}"
+        return FileResponse(
+            file_path,
+            media_type="application/pdf",
+            filename=filename,
+            content_disposition_type="inline",
+            headers={"Cache-Control": "private, no-store"},
+        )
+
+    @app.get("/api/documents/{document_id}/pages/{page_number}/image")
+    def document_page_image(
+        document_id: str,
+        page_number: int,
+        user_id: str = Depends(current_user),
+    ) -> Response:
+        if page_number < 1:
+            raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
+        with get_db() as conn:
+            row = require_document(conn, user_id, document_id)
+        file_path = Path(row["file_path"])
+        if not file_path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=_error("document_file_not_found", "资料文件不存在"),
+            )
+        file_stat = file_path.stat()
+        cache_key = (str(file_path), file_stat.st_mtime_ns, file_stat.st_size, page_number)
+        with page_image_cache_lock:
+            image = page_image_cache.get(cache_key)
+            if image is not None:
+                page_image_cache.move_to_end(cache_key)
+        if image is None:
+            if not page_image_render_slots.acquire(timeout=2.0):
+                raise HTTPException(
+                    status_code=429,
+                    detail=_error("page_render_busy", "原始页面渲染繁忙，请稍后重试"),
+                )
+            try:
+                with fitz.open(file_path) as document:
+                    if page_number > document.page_count:
+                        raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
+                    page = document.load_page(page_number - 1)
+                    max_dimension = max(float(page.rect.width), float(page.rect.height), 1.0)
+                    scale = min(1.5, 1800.0 / max_dimension)
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+                    image = pixmap.tobytes("png")
+            finally:
+                page_image_render_slots.release()
+            with page_image_cache_lock:
+                page_image_cache[cache_key] = image
+                page_image_cache.move_to_end(cache_key)
+                while len(page_image_cache) > 8:
+                    page_image_cache.popitem(last=False)
+        return Response(
+            content=image,
+            media_type="image/png",
+            headers={"Cache-Control": "private, no-store"},
+        )
 
     @app.get("/api/settings")
     def get_settings(user_id: str = Depends(current_user)) -> dict:

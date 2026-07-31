@@ -16,7 +16,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=model-context-controls-v4">
+  <link rel="stylesheet" href="/assets/styles.css?v=document-reader-v1">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -125,15 +125,14 @@
                     <button type="button" class="home-mode-button active" data-home-mode="direct">直接问答</button>
                     <button type="button" class="home-mode-button" data-home-mode="retrieval">知识检索</button>
                   </div>
-                  <span class="mode-pill" id="home-mode-label">直接问答</span>
                 </div>
                 <div class="home-input-actions">
                   <label class="compact-field home-model-field" for="home-model-select">
-                    <span>模型</span>
+                    <span class="visually-hidden">模型</span>
                     <select id="home-model-select" aria-label="当前对话模型"></select>
                   </label>
                   <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
-                    <span>思考</span>
+                    <span class="visually-hidden">思考强度</span>
                     <select id="home-reasoning-effort" aria-label="当前对话思考强度"></select>
                   </label>
                   <button
@@ -681,6 +680,45 @@
     </section>
   </main>
 
+  <div
+    class="resize-handle resize-vertical document-reader-resize hidden"
+    id="document-reader-resize"
+    data-resize="documentReader"
+    role="separator"
+    aria-orientation="vertical"
+    aria-label="拖动调整资料阅读器宽度"
+    tabindex="0"
+  ></div>
+  <aside class="document-reader hidden" id="document-reader" role="dialog" aria-modal="false" aria-label="资料阅读器" aria-hidden="true" tabindex="-1">
+    <header class="document-reader-header">
+      <div class="document-reader-title-wrap">
+        <strong id="document-reader-title">资料原文</strong>
+        <span id="document-reader-page-label">第 1 页</span>
+      </div>
+      <div class="document-reader-header-actions">
+        <a class="icon-button document-reader-external" id="document-reader-external" href="#" target="_blank" rel="noopener" aria-label="在新标签页打开 PDF" title="在新标签页打开">↗</a>
+        <button class="icon-button" id="document-reader-close" type="button" aria-label="关闭资料阅读器" title="关闭">×</button>
+      </div>
+    </header>
+    <div class="document-reader-toolbar">
+      <div class="document-reader-tabs" role="tablist" aria-label="阅读方式">
+        <button class="document-reader-tab active" id="document-reader-pdf-tab" type="button" role="tab" aria-selected="true" data-reader-mode="pdf">PDF 原页</button>
+        <button class="document-reader-tab" id="document-reader-text-tab" type="button" role="tab" aria-selected="false" data-reader-mode="text">提取文本</button>
+      </div>
+      <div class="document-reader-pagination" aria-label="翻页">
+        <button class="icon-button" id="document-reader-prev" type="button" aria-label="上一页" title="上一页">←</button>
+        <span id="document-reader-page-count">1 / 1</span>
+        <button class="icon-button" id="document-reader-next" type="button" aria-label="下一页" title="下一页">→</button>
+      </div>
+    </div>
+    <div class="document-reader-locator hidden" id="document-reader-locator"></div>
+    <div class="document-reader-body">
+      <div class="document-reader-loading hidden" id="document-reader-loading">正在读取资料…</div>
+      <img class="document-reader-pdf" id="document-reader-pdf" alt="PDF 原始页面" loading="lazy">
+      <article class="document-reader-text hidden" id="document-reader-text" tabindex="0"></article>
+    </div>
+  </aside>
+
   <!-- 身份选择弹窗 -->
   <div id="login-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="login-title">
     <div class="modal-backdrop"></div>
@@ -833,6 +871,6 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js?v=model-context-controls-v4" defer></script>
+  <script src="/assets/app.js?v=document-reader-v1" defer></script>
 </body>
 </html>

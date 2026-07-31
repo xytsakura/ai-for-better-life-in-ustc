@@ -12,6 +12,24 @@ const state = {
   currentReasoningEffort: null,
   currentUsage: null,
   usagePending: false,
+  referenceViewer: {
+    open: false,
+    requestId: 0,
+    documentId: '',
+    pageNumber: 1,
+    title: '',
+    citationId: '',
+    excerpt: '',
+    pageCount: null,
+    fileUrl: '',
+    pageUrl: '',
+    pageContent: '',
+    pageStatus: '',
+    loading: false,
+    error: '',
+    mode: 'pdf',
+    returnFocus: null,
+  },
   apiKeyTouched: false,
   isLoggingIn: false,
   authGeneration: 0,
@@ -563,6 +581,266 @@ function renderMath(container) {
       element.textContent = source;
       element.classList.add('math-render-error');
     }
+  });
+}
+
+function documentById(documentId) {
+  return state.documents.find(doc => doc.id === documentId) || null;
+}
+
+function referenceViewerDocumentUrl(documentId) {
+  return `/api/documents/${encodeURIComponent(documentId)}/file`;
+}
+
+function referenceViewerPageUrl(documentId, pageNumber) {
+  return `/api/documents/${encodeURIComponent(documentId)}/pages/${pageNumber}`;
+}
+
+function referenceViewerPageImageUrl(documentId, pageNumber) {
+  return `/api/documents/${encodeURIComponent(documentId)}/pages/${pageNumber}/image`;
+}
+
+function closeReferenceViewer() {
+  const returnFocus = state.referenceViewer.returnFocus;
+  state.referenceViewer = {
+    open: false,
+    requestId: state.referenceViewer.requestId,
+    documentId: '',
+    pageNumber: 1,
+    title: '',
+    citationId: '',
+    excerpt: '',
+    pageCount: null,
+    fileUrl: '',
+    pageUrl: '',
+    pageContent: '',
+    pageStatus: '',
+    loading: false,
+    error: '',
+    mode: 'pdf',
+    returnFocus: null,
+  };
+  renderReferenceViewer();
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+}
+
+function openReferenceViewer(reference) {
+  const documentId = String(reference?.document_id || '').trim();
+  if (!documentId) return;
+  const pageNumber = Math.max(1, Number(reference?.page) || 1);
+  const doc = documentById(documentId);
+  const wasOpen = state.referenceViewer.open;
+  const nextRequestId = state.referenceViewer.requestId + 1;
+  state.referenceViewer = {
+    open: true,
+    requestId: nextRequestId,
+    documentId,
+    pageNumber,
+    title: String(reference?.document_title || doc?.title || documentId),
+    citationId: String(reference?.id || ''),
+    excerpt: String(reference?.excerpt || ''),
+    pageCount: doc?.page_count ?? null,
+    fileUrl: referenceViewerDocumentUrl(documentId),
+    pageUrl: referenceViewerPageUrl(documentId, pageNumber),
+    pageContent: '',
+    pageStatus: '',
+    loading: true,
+    error: '',
+    mode: 'pdf',
+    returnFocus: wasOpen ? state.referenceViewer.returnFocus : document.activeElement,
+  };
+  renderReferenceViewer();
+  if (!wasOpen) $('#document-reader')?.focus({ preventScroll: true });
+  void loadReferenceViewerPage(nextRequestId);
+}
+
+function openDocumentPreview(documentId, pageNumber = 1) {
+  const doc = documentById(documentId);
+  if (!doc) return;
+  openReferenceViewer({
+    document_id: doc.id,
+    document_title: doc.title,
+    page: pageNumber,
+    id: doc.id,
+    excerpt: `打开 ${doc.title} 的第 ${pageNumber} 页原文`,
+  });
+}
+
+async function loadReferenceViewerPage(requestId) {
+  const viewer = state.referenceViewer;
+  if (!viewer.open || !viewer.documentId) return;
+  try {
+    const authContext = captureAuthContext();
+    const page = await api(viewer.pageUrl);
+    if (!authContextMatches(authContext) || state.referenceViewer.requestId !== requestId) return;
+    state.referenceViewer = {
+      ...state.referenceViewer,
+      loading: false,
+      pageContent: String(page.content || ''),
+      pageStatus: String(page.status || ''),
+      pageCount: Number(page.page_count) || state.referenceViewer.pageCount || 1,
+      title: String(page.title || state.referenceViewer.title || viewer.documentId),
+      error: '',
+    };
+    renderReferenceViewer();
+  } catch (error) {
+    if (state.referenceViewer.requestId !== requestId) return;
+    state.referenceViewer = {
+      ...state.referenceViewer,
+      loading: false,
+      error: error.message,
+    };
+    renderReferenceViewer();
+  }
+}
+
+function renderReferenceViewer() {
+  const drawer = $('#document-reader');
+  const resize = $('#document-reader-resize');
+  if (!drawer) return;
+  const viewer = state.referenceViewer;
+  drawer.classList.toggle('hidden', !viewer.open);
+  drawer.setAttribute('aria-hidden', String(!viewer.open));
+  resize?.classList.toggle('hidden', !viewer.open);
+  document.body.classList.toggle('document-reader-open', viewer.open);
+  syncReferenceViewerModalState(viewer.open);
+
+  const title = $('#document-reader-title');
+  const pageLabel = $('#document-reader-page-label');
+  const pageCountLabel = $('#document-reader-page-count');
+  const locator = $('#document-reader-locator');
+  const pageText = $('#document-reader-text');
+  const frame = $('#document-reader-pdf');
+  const loading = $('#document-reader-loading');
+  const openPdf = $('#document-reader-external');
+  const prev = $('#document-reader-prev');
+  const next = $('#document-reader-next');
+
+  if (!viewer.open) {
+    if (title) title.textContent = '资料原文';
+    if (pageLabel) pageLabel.textContent = '第 1 页';
+    if (pageCountLabel) pageCountLabel.textContent = '1 / 1';
+    if (locator) locator.classList.add('hidden');
+    if (pageText) pageText.textContent = '';
+    if (frame) frame.removeAttribute('src');
+    if (openPdf) openPdf.href = '#';
+    return;
+  }
+
+  if (title) title.textContent = viewer.title || '引用原文';
+  const pageCount = Math.max(1, Number(viewer.pageCount) || 1);
+  if (pageLabel) pageLabel.textContent = `第 ${viewer.pageNumber} 页`;
+  if (pageCountLabel) pageCountLabel.textContent = `${viewer.pageNumber} / ${pageCount}`;
+  if (locator) {
+    locator.textContent = viewer.excerpt ? `${viewer.citationId ? `[${viewer.citationId}] ` : ''}${viewer.excerpt}` : '';
+    locator.classList.toggle('hidden', !viewer.excerpt);
+  }
+  const pdfUrl = viewer.fileUrl ? `${viewer.fileUrl}#page=${viewer.pageNumber}&view=FitH` : 'about:blank';
+  if (openPdf) openPdf.href = pdfUrl;
+  const pageImageUrl = referenceViewerPageImageUrl(viewer.documentId, viewer.pageNumber);
+  if (frame && frame.getAttribute('src') !== pageImageUrl) frame.src = pageImageUrl;
+  if (loading) loading.classList.toggle('hidden', !viewer.loading);
+  if (pageText) {
+    if (viewer.error) {
+      pageText.textContent = `加载失败：${viewer.error}`;
+    } else if (viewer.pageContent.trim()) {
+      pageText.textContent = viewer.pageContent;
+    } else {
+      pageText.textContent = '该页没有可提取的文本内容。';
+    }
+  }
+  if (prev) prev.disabled = viewer.pageNumber <= 1 || viewer.loading;
+  if (next) next.disabled = viewer.pageNumber >= pageCount || viewer.loading;
+  $$('.document-reader-tab').forEach(tab => {
+    const active = tab.dataset.readerMode === viewer.mode;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  });
+  frame?.classList.toggle('hidden', viewer.mode !== 'pdf');
+  pageText?.classList.toggle('hidden', viewer.mode !== 'text');
+}
+
+function syncReferenceViewerModalState(open = state.referenceViewer.open) {
+  const modal = Boolean(open && window.matchMedia('(max-width: 900px)').matches);
+  const drawer = $('#document-reader');
+  if (drawer) drawer.setAttribute('aria-modal', String(modal));
+  for (const element of [$('.app-sidebar'), $('.app-main')]) {
+    if (!element) continue;
+    element.inert = modal;
+    if (modal) element.setAttribute('aria-hidden', 'true');
+    else element.removeAttribute('aria-hidden');
+  }
+}
+
+function setReferenceViewerMode(mode) {
+  if (!['pdf', 'text'].includes(mode) || !state.referenceViewer.open) return;
+  state.referenceViewer = { ...state.referenceViewer, mode };
+  renderReferenceViewer();
+}
+
+function changeReferenceViewerPage(delta) {
+  if (!state.referenceViewer.open || state.referenceViewer.loading) return;
+  const pageCount = Math.max(1, Number(state.referenceViewer.pageCount) || 1);
+  const pageNumber = Math.max(1, Math.min(pageCount, state.referenceViewer.pageNumber + delta));
+  if (pageNumber === state.referenceViewer.pageNumber) return;
+  const requestId = state.referenceViewer.requestId + 1;
+  state.referenceViewer = {
+    ...state.referenceViewer,
+    requestId,
+    pageNumber,
+    pageUrl: referenceViewerPageUrl(state.referenceViewer.documentId, pageNumber),
+    pageContent: '',
+    pageStatus: '',
+    loading: true,
+    error: '',
+    excerpt: '',
+    citationId: '',
+  };
+  renderReferenceViewer();
+  void loadReferenceViewerPage(requestId);
+}
+
+function citeButtonDataset(source) {
+  return `data-citation-id="${escapeHtml(source.id)}"`;
+}
+
+function decorateCitationMarkers(container) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    const parent = node.parentElement;
+    if (!node.nodeValue || !/\[S\d+\]/i.test(node.nodeValue)) continue;
+    if (parent && parent.closest('a, button, code, pre, .katex, .math-block')) continue;
+    nodes.push(node);
+  }
+  for (const node of nodes) {
+    const text = node.nodeValue || '';
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+    text.replace(/\[(S\d+)\]/gi, (match, citationId, offset) => {
+      if (offset > lastIndex) fragment.append(text.slice(lastIndex, offset));
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'citation-marker';
+      button.dataset.citationId = citationId.toUpperCase();
+      button.textContent = `[${citationId.toUpperCase()}]`;
+      fragment.append(button);
+      lastIndex = offset + match.length;
+      return match;
+    });
+    if (lastIndex < text.length) fragment.append(text.slice(lastIndex));
+    node.parentNode?.replaceChild(fragment, node);
+  }
+}
+
+function wireCitationButtons(container, citations = []) {
+  const citationMap = new Map(citations.map(source => [String(source.id || '').toUpperCase(), source]));
+  container.querySelectorAll('[data-citation-id]').forEach(button => {
+    button.addEventListener('click', () => {
+      const source = citationMap.get(String(button.dataset.citationId || '').toUpperCase());
+      if (source) openReferenceViewer(source);
+    });
   });
 }
 
@@ -1337,6 +1615,7 @@ function showView(viewName) {
   if (resolvedView === 'settings') loadSettings();
   if (resolvedView === 'library' && state.currentSpace && !state.documents.length) loadDocuments();
   if (resolvedView === 'schedule') renderSchedule();
+  if (!['home', 'library'].includes(resolvedView) && state.referenceViewer.open) closeReferenceViewer();
   syncHomeAgentAvatarAvailability();
 }
 
@@ -1482,6 +1761,7 @@ async function login(userId) {
     state.currentReasoningEffort = null;
     state.currentUsage = null;
     state.usagePending = false;
+    closeReferenceViewer();
     renderSpaces();
     renderDocuments();
     renderSourceSelector();
@@ -1532,6 +1812,7 @@ async function logout() {
   state.currentReasoningEffort = null;
   state.currentUsage = null;
   state.usagePending = false;
+  closeReferenceViewer();
   state.scheduleItems = [];
   state.selectedScheduleDate = localDateKey(new Date());
   state.userProfile = { nickname: '', avatar: '' };
@@ -1659,7 +1940,7 @@ function renderDocuments() {
     const warning = doc.needs_ocr_pages || doc.needs_review_pages || doc.failed_pages;
     return `
       <div class="document-row">
-        <div>
+        <button class="document-open" data-open-document="${escapeHtml(doc.id)}" type="button" aria-label="打开 ${escapeHtml(doc.title)}">
           <div class="document-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</div>
           <div class="document-meta">
             <span>${escapeHtml(doc.material_type)}</span>
@@ -1667,7 +1948,7 @@ function renderDocuments() {
             <span>${doc.searchable_pages} 页可检索</span>
           </div>
           <span class="parse-badge ${warning ? 'warn' : ''}">${warning ? `需关注 ${doc.needs_ocr_pages + doc.needs_review_pages + doc.failed_pages} 页` : '解析完成'}</span>
-        </div>
+        </button>
         <div class="doc-actions">
           ${writeable ? `<button class="icon-text" data-reparse="${doc.id}" type="button">重解析</button><button class="icon-text" data-delete="${doc.id}" type="button">删除</button>` : ''}
         </div>
@@ -1682,6 +1963,9 @@ function renderDocuments() {
 
   $$('[data-delete]').forEach(btn => btn.addEventListener('click', () => removeDocument(btn.dataset.delete)));
   $$('[data-reparse]').forEach(btn => btn.addEventListener('click', () => reparse(btn.dataset.reparse)));
+  $$('[data-open-document]').forEach(row => {
+    row.addEventListener('click', () => openDocumentPreview(row.dataset.openDocument));
+  });
 }
 
 async function removeDocument(documentId) {
@@ -1690,6 +1974,7 @@ async function removeDocument(documentId) {
     const authContext = captureAuthContext();
     await api(`/api/documents/${documentId}`, { method: 'DELETE' });
     if (!authContextMatches(authContext)) return;
+    if (state.referenceViewer.documentId === documentId) closeReferenceViewer();
     toast('资料已删除，索引已失效', 'success');
     await loadSpaces();
   } catch (error) {
@@ -1928,18 +2213,21 @@ function renderHomeAnswer(result, mode, ctx) {
   renderMath(ctx.textEl);
 
   const citations = result.citations || [];
+  decorateCitationMarkers(ctx.textEl);
+  wireCitationButtons(ctx.textEl, citations);
   const showCitations = mode !== 'direct' && citations.length > 0;
   if (ctx.citationSection) ctx.citationSection.classList.toggle('hidden', !showCitations);
   if (ctx.citationList) {
     ctx.citationList.innerHTML = citations.length ? citations.map(source => `
-      <div class="citation-item">
-        <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong>
+      <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
+        <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
         <div class="citation-excerpt">${escapeHtml(source.excerpt)}</div>
-      </div>
+      </button>
     `).join('') : '';
+    wireCitationButtons(ctx.citationList, citations);
   }
   const answerText = String(result.answer || '').trim();
-  if (answerText) state.homeConversation.push({ role: 'assistant', content: answerText, mode });
+  if (answerText) state.homeConversation.push({ role: 'assistant', content: answerText, mode, citations });
   scrollHomeToBottom();
 }
 
@@ -1960,14 +2248,17 @@ function renderAnswer(result, mode, prefix) {
   renderMath(textEl);
 
   const citations = result.citations || [];
+  decorateCitationMarkers(textEl);
+  wireCitationButtons(textEl, citations);
   if (citationSection) citationSection.classList.toggle('hidden', mode === 'direct');
   if (citationList) {
     citationList.innerHTML = citations.length ? citations.map(source => `
-      <div class="citation-item">
-        <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${source.page} 页</strong>
+      <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
+        <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
         <div class="citation-excerpt">${escapeHtml(source.excerpt)}</div>
-      </div>
+      </button>
     `).join('') : '<div class="muted" style="font-size:.78rem">本次回答没有可验证引用</div>';
+    wireCitationButtons(citationList, citations);
   }
 }
 
@@ -2093,8 +2384,6 @@ async function query(question, mode, prefix) {
 
 // ---------- Home ----------
 function updateHomeModeLabel() {
-  const label = $('#home-mode-label');
-  if (label) label.textContent = state.homeMode === 'retrieval' ? '知识检索' : '直接问答';
   $$('.home-mode-button').forEach(button => {
     button.classList.toggle('active', button.dataset.homeMode === state.homeMode);
     button.setAttribute('aria-pressed', button.dataset.homeMode === state.homeMode ? 'true' : 'false');
@@ -2487,8 +2776,26 @@ function appendHomeMessageBubble(entry) {
     bubble.className = 'chat-bubble-assistant';
     bubble.innerHTML = renderMarkdown(entry.content || '');
     renderMath(bubble);
+    const citations = Array.isArray(entry.citations) ? entry.citations : [];
+    decorateCitationMarkers(bubble);
+    wireCitationButtons(bubble, citations);
     row.appendChild(meta);
     row.appendChild(bubble);
+    if (citations.length) {
+      const section = document.createElement('div');
+      section.className = 'chat-citation citation-section';
+      section.innerHTML = `
+        <div class="citation-heading">引用来源</div>
+        <div class="citation-list">${citations.map(source => `
+          <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
+            <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
+            <span class="citation-excerpt">${escapeHtml(source.excerpt)}</span>
+          </button>
+        `).join('')}</div>
+      `;
+      wireCitationButtons(section, citations);
+      row.appendChild(section);
+    }
     convo.appendChild(row);
   }
 }
@@ -3920,6 +4227,7 @@ function updateAbout(health) {
 function initEventListeners() {
   syncSettingsTabOrientation();
   window.addEventListener('resize', syncSettingsTabOrientation);
+  window.addEventListener('resize', () => syncReferenceViewerModalState());
   // Navigation
   $$('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -3950,6 +4258,12 @@ function initEventListeners() {
   });
   $('#home-model-select').addEventListener('change', event => setCurrentModel(event.currentTarget.value));
   $('#home-reasoning-effort').addEventListener('change', event => setCurrentReasoningEffort(event.currentTarget.value || null));
+  $('#document-reader-close').addEventListener('click', closeReferenceViewer);
+  $('#document-reader-prev').addEventListener('click', () => changeReferenceViewerPage(-1));
+  $('#document-reader-next').addEventListener('click', () => changeReferenceViewerPage(1));
+  $$('[data-reader-mode]').forEach(button => {
+    button.addEventListener('click', () => setReferenceViewerMode(button.dataset.readerMode));
+  });
   $('#home-new-chat').addEventListener('click', () => {
     if (state.isQuerying) {
       toast('请等待当前回答完成', '');
@@ -4132,6 +4446,7 @@ function initEventListeners() {
       if (!$('#avatar-crop-modal').classList.contains('hidden')) closeAvatarCropModal();
       else if (!$('#plan-modal').classList.contains('hidden')) closePlanModal();
       else if (!$('#exam-import-modal').classList.contains('hidden')) closeExamImportModal();
+      else if (state.referenceViewer.open) closeReferenceViewer();
     }
   });
   window.addEventListener('pagehide', () => {
@@ -4156,18 +4471,21 @@ const PANEL_LIMITS = {
   sidebar:       { min: 200, max: 400, default: 260 },
   librarySpaces: { min: 200, max: 380, default: 260 },
   libraryChat:   { min: 320, max: 720, default: 420 },
+  documentReader:{ min: 360, max: 760, default: 520 },
 };
 
 const PANEL_SELECTORS = {
   sidebar:       '.app-sidebar',
   librarySpaces: '.library-spaces',
   libraryChat:   '.library-chat',
+  documentReader:'.document-reader',
 };
 
 const PANEL_CSS_VARS = {
   sidebar:       '--sidebar-width',
   librarySpaces: '--library-spaces-width',
   libraryChat:   '--library-chat-width',
+  documentReader:'--document-reader-width',
 };
 
 function clamp(value, min, max) {
@@ -4218,9 +4536,10 @@ function initResizeHandles() {
       handle.focus({ preventScroll: true });
       const startX = event.clientX;
       const startWidth = getPanelWidth(name);
+      const direction = name === 'documentReader' ? -1 : 1;
 
       const onMove = (moveEvent) => {
-        const next = clamp(startWidth + (moveEvent.clientX - startX), limits.min, limits.max);
+        const next = clamp(startWidth + direction * (moveEvent.clientX - startX), limits.min, limits.max);
         applyPanelWidth(name, next);
       };
       const onUp = () => {
@@ -4249,7 +4568,8 @@ function initResizeHandles() {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();
       const step = event.shiftKey ? 24 : 8;
-      const delta = event.key === 'ArrowRight' ? step : -step;
+      const direction = name === 'documentReader' ? -1 : 1;
+      const delta = (event.key === 'ArrowRight' ? step : -step) * direction;
       const next = clamp(getPanelWidth(name) + delta, limits.min, limits.max);
       applyPanelWidth(name, next);
       savePanelWidth(name, next);

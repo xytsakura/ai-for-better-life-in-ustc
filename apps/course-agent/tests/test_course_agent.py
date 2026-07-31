@@ -267,8 +267,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=model-context-controls-v4' in html
-    assert '/assets/app.js?v=model-context-controls-v4' in html
+    assert '/assets/styles.css?v=document-reader-v1' in html
+    assert '/assets/app.js?v=document-reader-v1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -425,6 +425,13 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert 'id="home-model-select"' in html
     assert 'id="home-reasoning-effort"' in html
     assert 'id="home-context-meter"' in html
+    assert 'id="home-mode-label"' not in html
+    assert '<span>模型</span>' not in html
+    assert '<span>思考</span>' not in html
+    assert 'id="document-reader"' in html
+    assert 'id="document-reader-pdf"' in html
+    assert 'id="document-reader-text"' in html
+    assert 'id="document-reader" role="dialog" aria-modal="false"' in html
     assert 'id="settings-discover-models"' in html
     assert 'id="settings-model-list"' in html
 
@@ -439,11 +446,59 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert "function renderContextMeter()" in script
     assert "percent > 0 && percent < 1 ? '<1%'" in script
     assert "function discoverModels()" in script
+    assert "function openReferenceViewer(reference)" in script
+    assert "function decorateCitationMarkers(container)" in script
+    assert "function syncReferenceViewerModalState(" in script
+    assert "citations });" in script
+    assert "data-open-document" in script
 
     styles = client.get("/assets/styles.css").text
     assert ".context-meter" in styles
     assert "conic-gradient" in styles
     assert ".settings-model-list" in styles
+    assert ".document-reader" in styles
+    assert ".citation-marker" in styles
+
+
+def test_document_reader_file_and_page_are_permission_checked(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    assert client.get("/api/documents/missing/file").status_code == 401
+
+    login(client, "demo-a")
+    personal = personal_space(client)
+    document_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "reader.pdf",
+        "Reader endpoint content for a private course note.",
+    )
+
+    file_response = client.get(f"/api/documents/{document_id}/file")
+    assert file_response.status_code == 200
+    assert file_response.headers["content-type"].startswith("application/pdf")
+    assert file_response.headers["content-disposition"].startswith("inline")
+    assert file_response.headers["cache-control"] == "private, no-store"
+    assert file_response.content.startswith(b"%PDF")
+
+    image_response = client.get(f"/api/documents/{document_id}/pages/1/image")
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"].startswith("image/png")
+    assert image_response.headers["cache-control"] == "private, no-store"
+    assert image_response.content.startswith(b"\x89PNG")
+    cached_image_response = client.get(f"/api/documents/{document_id}/pages/1/image")
+    assert cached_image_response.status_code == 200
+    assert cached_image_response.content == image_response.content
+
+    page_response = client.get(f"/api/documents/{document_id}/pages/1")
+    assert page_response.status_code == 200
+    assert page_response.json()["page_count"] == 1
+    assert "Reader endpoint content" in page_response.json()["content"]
+
+    login(client, "demo-b")
+    assert client.get(f"/api/documents/{document_id}/file").status_code == 404
+    assert client.get(f"/api/documents/{document_id}/pages/1/image").status_code == 404
+    assert client.get(f"/api/documents/{document_id}/pages/1").status_code == 404
 
 
 def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):

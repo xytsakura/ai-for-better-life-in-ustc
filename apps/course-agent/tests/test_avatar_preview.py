@@ -179,8 +179,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=model-context-controls-v4' in html
-    assert '/assets/app.js?v=model-context-controls-v4' in html
+    assert '/assets/styles.css?v=document-reader-v1' in html
+    assert '/assets/app.js?v=document-reader-v1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles
