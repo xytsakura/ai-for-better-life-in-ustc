@@ -16,7 +16,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=assistant-preferences-v1">
+  <link rel="stylesheet" href="/assets/styles.css?v=model-context-controls-v4">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -128,7 +128,23 @@
                   <span class="mode-pill" id="home-mode-label">直接问答</span>
                 </div>
                 <div class="home-input-actions">
-                  <span class="home-current-model" id="home-current-model">当前模型：加载中…</span>
+                  <label class="compact-field home-model-field" for="home-model-select">
+                    <span>模型</span>
+                    <select id="home-model-select" aria-label="当前对话模型"></select>
+                  </label>
+                  <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
+                    <span>思考</span>
+                    <select id="home-reasoning-effort" aria-label="当前对话思考强度"></select>
+                  </label>
+                  <button
+                    type="button"
+                    class="context-meter"
+                    id="home-context-meter"
+                    aria-label="上下文用量"
+                    title="尚无用量"
+                  >
+                    <span id="home-context-meter-value">—</span>
+                  </button>
                   <button type="submit" class="send-button" id="home-send-button" aria-label="发送">
                     <span>→</span>
                   </button>
@@ -523,9 +539,17 @@
                   <span class="field-hint">留空表示保持现有密钥不变</span>
                 </label>
                 <label class="field">
-                  <span>模型名称</span>
-                  <input type="text" id="setting-model" placeholder="gpt-5.6-sol">
+                  <span>新对话默认模型</span>
+                  <select id="setting-model"></select>
+                  <span class="field-hint">只影响新对话；已有会话保留各自模型。</span>
                 </label>
+                <div class="settings-model-catalog">
+                  <div class="settings-model-catalog-actions">
+                    <button type="button" class="button button-secondary" id="settings-discover-models">发现模型</button>
+                    <span class="field-hint" id="settings-model-catalog-status">尚未发现模型</span>
+                  </div>
+                  <div class="settings-model-list" id="settings-model-list" aria-live="polite"></div>
+                </div>
                 <label class="field">
                   <span>超时时间（秒）</span>
                   <input type="number" id="setting-timeout" min="5" max="300" step="1">
@@ -809,6 +833,6 @@
   <div id="toast" class="toast hidden" role="status"></div>
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js?v=assistant-preferences-v1" defer></script>
+  <script src="/assets/app.js?v=model-context-controls-v4" defer></script>
 </body>
 </html>

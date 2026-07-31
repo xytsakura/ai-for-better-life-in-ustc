@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import httpx
 
 from .config import Settings
+from .model_catalog import UsageSummary, normalize_usage
 from .retrieval import SearchResult
 
 
@@ -15,6 +16,7 @@ class LLMResult:
     citation_ids: list[str]
     degraded: bool
     model: str
+    usage: UsageSummary | None = None
     error_code: str | None = None
     error_message: str | None = None
 
@@ -49,7 +51,10 @@ class LLMAdapter:
         history: list[dict] | None = None,
         system: str | None = None,
         preference_context: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResult:
+        selected_model = (model or self.settings.llm_model).strip()
         instructions = system or (
             "你是「瀚海行 Agent」，由 AI for better life In ustc 团队为中国科学技术大学学生打造的"
             "校园学习与生活助手，可以回答任何学科的一般问题。"
@@ -63,19 +68,22 @@ class LLMAdapter:
             input_messages.append(self._preference_message(preference_context))
         input_messages.append({"role": "user", "content": f"用户问题：\n{question}"})
         payload = {
-            "model": self.settings.llm_model,
+            "model": selected_model,
             "instructions": instructions,
             "input": input_messages,
             "max_output_tokens": 1200,
         }
-        text, error_code, error_message = self._response_text(payload)
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._direct_degraded(error_code, error_message)
+            return self._direct_degraded(error_code, error_message, selected_model)
         return LLMResult(
             answer=text or "",
             citation_ids=[],
             degraded=False,
-            model=self.settings.llm_model,
+            model=selected_model,
+            usage=usage,
         )
 
     def generate(
@@ -85,13 +93,16 @@ class LLMAdapter:
         history: list[dict] | None = None,
         system: str | None = None,
         preference_context: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResult:
+        selected_model = (model or self.settings.llm_model).strip()
         if not sources:
             return LLMResult(
                 answer="当前可访问的知识库资料中没有找到足够依据，请补充或上传更多资料。",
                 citation_ids=[],
                 degraded=False,
-                model=self.settings.llm_model,
+                model=selected_model,
             )
         source_text = "\n\n".join(
             f'<source id="{source.citation_id}" document="{source.document_title}" page="{source.page}">\n'
@@ -115,14 +126,16 @@ class LLMAdapter:
             }
         )
         payload = {
-            "model": self.settings.llm_model,
+            "model": selected_model,
             "instructions": instructions,
             "input": input_messages,
             "max_output_tokens": 1200,
         }
-        text, error_code, error_message = self._response_text(payload)
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._degraded(sources, error_code, error_message)
+            return self._degraded(sources, error_code, error_message, selected_model)
         valid = {source.citation_id for source in sources}
         citation_ids: list[str] = []
 
@@ -135,12 +148,13 @@ class LLMAdapter:
 
         answer = re.sub(r"\[S(\d+)\]", keep, text or "")
         if not citation_ids:
-            return self._degraded(sources, "llm_missing_citations")
+            return self._degraded(sources, "llm_missing_citations", model=selected_model)
         return LLMResult(
             answer=answer,
             citation_ids=list(dict.fromkeys(citation_ids)),
             degraded=False,
-            model=self.settings.llm_model,
+            model=selected_model,
+            usage=usage,
         )
 
     @staticmethod
@@ -155,9 +169,9 @@ class LLMAdapter:
             ),
         }
 
-    def _response_text(self, payload: dict) -> tuple[str | None, str | None, str | None]:
+    def _response_text(self, payload: dict) -> tuple[str | None, UsageSummary | None, str | None, str | None]:
         if not self.settings.llm_configured:
-            return None, "llm_not_configured", None
+            return None, None, "llm_not_configured", None
         url = self.settings.llm_base_url.rstrip("/") + "/responses"
         last_code = "llm_request_failed"
         last_message = None
@@ -181,13 +195,14 @@ class LLMAdapter:
                 data = response.json()
                 text = self._extract_text(data).strip()
                 if not text:
-                    return None, "llm_empty_response", None
-                return text, None, None
+                    return None, None, "llm_empty_response", None
+                usage = normalize_usage(data.get("usage"), str(payload.get("model") or ""))
+                return text, usage, None, None
             except (httpx.HTTPError, ValueError):
                 last_code = "llm_network_or_parse_error"
                 if attempt == 0:
                     continue
-        return None, last_code, last_message
+        return None, None, last_code, last_message
 
     def _error_message(self, response: object) -> str | None:
         if not isinstance(response, httpx.Response):
@@ -253,7 +268,13 @@ class LLMAdapter:
             parts.append(data["text"])
         return "\n".join(parts).strip()
 
-    def _degraded(self, sources: list[SearchResult], error_code: str, error_message: str | None = None) -> LLMResult:
+    def _degraded(
+        self,
+        sources: list[SearchResult],
+        error_code: str,
+        error_message: str | None = None,
+        model: str | None = None,
+    ) -> LLMResult:
         citations = [source.citation_id for source in sources]
         lines = ["模型暂时不可用，以下是检索到的相关资料："]
         for source in sources:
@@ -262,17 +283,22 @@ class LLMAdapter:
             answer="\n".join(lines),
             citation_ids=citations,
             degraded=True,
-            model=self.settings.llm_model,
+            model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
         )
 
-    def _direct_degraded(self, error_code: str, error_message: str | None = None) -> LLMResult:
+    def _direct_degraded(
+        self,
+        error_code: str,
+        error_message: str | None = None,
+        model: str | None = None,
+    ) -> LLMResult:
         return LLMResult(
             answer="模型暂时不可用，请检查模型配置后重试。",
             citation_ids=[],
             degraded=True,
-            model=self.settings.llm_model,
+            model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
         )
@@ -288,6 +314,10 @@ class FakeLLMAdapter(LLMAdapter):
         self.last_retrieval_system: str | None = None
         self.last_direct_preference_context: str | None = None
         self.last_retrieval_preference_context: str | None = None
+        self.last_direct_model: str | None = None
+        self.last_retrieval_model: str | None = None
+        self.last_direct_reasoning_effort: str | None = None
+        self.last_retrieval_reasoning_effort: str | None = None
 
     def generate_direct(
         self,
@@ -295,15 +325,19 @@ class FakeLLMAdapter(LLMAdapter):
         history: list[dict] | None = None,
         system: str | None = None,
         preference_context: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResult:
         self.direct_calls += 1
         self.last_direct_system = system
         self.last_direct_preference_context = preference_context
+        self.last_direct_model = model
+        self.last_direct_reasoning_effort = reasoning_effort
         return LLMResult(
             answer=self.answer or f"[通用模型] {question}",
             citation_ids=[],
             degraded=False,
-            model="fake-test-model",
+            model=model or "fake-test-model",
         )
 
     def generate(
@@ -313,21 +347,25 @@ class FakeLLMAdapter(LLMAdapter):
         history: list[dict] | None = None,
         system: str | None = None,
         preference_context: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
     ) -> LLMResult:
         self.retrieval_calls += 1
         self.last_retrieval_system = system
         self.last_retrieval_preference_context = preference_context
+        self.last_retrieval_model = model
+        self.last_retrieval_reasoning_effort = reasoning_effort
         if not sources:
             return LLMResult(
                 answer="当前可访问的知识库资料中没有找到足够依据。",
                 citation_ids=[],
                 degraded=False,
-                model="fake-test-model",
+                model=model or "fake-test-model",
             )
         answer = self.answer or f"[{system or '知识库 Agent'}] {question} [{sources[0].citation_id}]"
         return LLMResult(
             answer=answer,
             citation_ids=[sources[0].citation_id],
             degraded=False,
-            model="fake-test-model",
+            model=model or "fake-test-model",
         )

@@ -30,6 +30,13 @@ from .ingestion import (
     reparse_document,
 )
 from .llm import LLMAdapter
+from .model_catalog import (
+    ModelCatalog,
+    ModelCatalogError,
+    SUPPORTED_REASONING_EFFORTS,
+    invalidate_model_catalog,
+    validate_base_url_for_saved_config,
+)
 from .retrieval import FTS5SearchBackend, SearchResult, accessible_document_ids, search
 from .tokenizer import JiebaTokenizer
 
@@ -111,6 +118,8 @@ class QueryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=2000)
+    model: Optional[str] = Field(default=None, max_length=200)
+    reasoning_effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
     mode: Literal["direct", "retrieval"] = "direct"
     document_ids: list[str] = Field(default_factory=list, max_length=100)
     top_k: int = Field(default=5, ge=1, le=8)
@@ -321,6 +330,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     app = FastAPI(title="瀚海行agent", version="0.6.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
+    app.state.model_catalog = ModelCatalog(settings)
 
     # ---- Pluggable components (swap via Settings in the future) ---------
     app.state.search_backend = FTS5SearchBackend()
@@ -367,7 +377,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         # traceback) so the frontend can surface a readable message.
         return JSONResponse(
             status_code=500,
-            content=_error("internal_error", str(exc) or exc.__class__.__name__, False),
+            content=_error("internal_error", "服务器内部错误，请稍后重试", False),
         )
 
     @contextmanager
@@ -380,6 +390,31 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         if not user_id:
             raise HTTPException(status_code=401, detail=_error("not_authenticated", "请先选择演示身份"))
         return str(user_id)
+
+    def require_admin(user_id: str) -> None:
+        if user_id not in (app.state.settings.admin_user_ids or set()):
+            raise HTTPException(status_code=403, detail=_error("admin_required", "需要管理员权限"))
+
+    def catalog_error(exc: ModelCatalogError, status_code: int = 422) -> HTTPException:
+        return HTTPException(
+            status_code=status_code,
+            detail=_error(exc.code, exc.message, exc.retryable),
+        )
+
+    def validate_query_model(payload: QueryRequest) -> tuple[str, str | None]:
+        selected = (payload.model or app.state.settings.llm_model or "").strip()
+        try:
+            model_info = app.state.model_catalog.model_for_query(selected)
+            app.state.model_catalog.validate_reasoning(model_info, payload.reasoning_effort)
+        except ModelCatalogError as exc:
+            raise catalog_error(exc, 422) from exc
+        return model_info.id, payload.reasoning_effort
+
+    def settings_response(user_id: str) -> dict:
+        return {
+            **app.state.settings.to_safe_dict(),
+            "is_admin": user_id in (app.state.settings.admin_user_ids or set()),
+        }
 
     def require_space(conn: Any, user_id: str, space_id: str) -> Any:
         row = conn.execute(
@@ -598,12 +633,33 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.get("/api/settings")
     def get_settings(user_id: str = Depends(current_user)) -> dict:
-        return app.state.settings.to_safe_dict()
+        return settings_response(user_id)
 
     @app.post("/api/settings")
     def update_settings(payload: SettingsUpdate, user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
+        incoming = payload.model_dump(exclude_unset=True)
+        old_base_url = app.state.settings.llm_base_url
+        new_base_url = str(incoming.get("llm_base_url", old_base_url) or "").strip()
+        base_changed = bool(new_base_url) and new_base_url.rstrip("/") != old_base_url.rstrip("/")
+        if base_changed and not incoming.get("llm_api_key"):
+            raise HTTPException(
+                status_code=422,
+                detail=_error(
+                    "llm_api_key_required_for_base_url_change",
+                    "Base URL 变化时必须同时提供该服务的新 API key",
+                ),
+            )
+        if "llm_base_url" in incoming and new_base_url:
+            try:
+                incoming["llm_base_url"] = validate_base_url_for_saved_config(
+                    app.state.settings,
+                    new_base_url,
+                )
+            except ModelCatalogError as exc:
+                raise catalog_error(exc, 422) from exc
         try:
-            app.state.settings.update_from_dict(payload.model_dump(exclude_unset=True))
+            app.state.settings.update_from_dict(incoming)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=_error("bad_settings", str(exc)))
         try:
@@ -613,11 +669,39 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 status_code=500,
                 detail=_error("settings_save_failed", f"无法写入配置文件：{exc}"),
             )
+        app.state.settings.llm_config_generation += 1
+        invalidate_model_catalog()
         app.state.llm = LLMAdapter(app.state.settings)
-        return app.state.settings.to_safe_dict()
+        app.state.model_catalog = ModelCatalog(app.state.settings)
+        return settings_response(user_id)
+
+    @app.get("/api/models")
+    def get_models(user_id: str = Depends(current_user)) -> dict:
+        cached = app.state.model_catalog.get_cached()
+        if cached:
+            return cached.as_dict()
+        try:
+            default_info = app.state.model_catalog.model_for_query(app.state.settings.llm_model)
+        except ModelCatalogError as exc:
+            raise catalog_error(exc, 422) from exc
+        return {
+            "models": [default_info.as_dict()],
+            "discovery_source": None,
+            "cached": False,
+            "reasoning_efforts": list(SUPPORTED_REASONING_EFFORTS),
+        }
+
+    @app.post("/api/models/discover")
+    def discover_models(user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
+        try:
+            return app.state.model_catalog.discover(force=True).as_dict()
+        except ModelCatalogError as exc:
+            raise catalog_error(exc, 502 if exc.retryable else 422) from exc
 
     @app.post("/api/settings/test")
     def test_settings(user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
         adapter = LLMAdapter(app.state.settings)
         result = adapter.generate_direct("你好，请回复“配置测试成功”即可。")
         return {
@@ -634,6 +718,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.post("/api/query")
     def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
         history = [m.model_dump() for m in payload.messages]
+        selected_model, selected_reasoning = validate_query_model(payload)
         scope = payload.scope or ("knowledge_base" if payload.mode == "retrieval" else "general")
         if payload.mode == "direct":
             if scope != "general":
@@ -647,6 +732,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 history=history,
                 system=system,
                 preference_context=_assistant_custom_preference(payload.assistant_preferences),
+                model=selected_model,
+                reasoning_effort=selected_reasoning,
             )
             return {
                 "answer": llm_result.answer,
@@ -654,6 +741,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "scope": "general",
                 "degraded": llm_result.degraded,
                 "model": llm_result.model,
+                "usage": llm_result.usage.as_dict() if llm_result.usage else None,
                 "retrieval_count": 0,
                 "citations": [],
                 "model_error": (
@@ -703,6 +791,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             history=history,
             system=system,
             preference_context=_assistant_custom_preference(payload.assistant_preferences),
+            model=selected_model,
+            reasoning_effort=selected_reasoning,
         )
         source_map = {item.citation_id: item.as_dict() for item in results}
         citation_ids = llm_result.citation_ids or ([] if not llm_result.degraded else list(source_map))
@@ -714,6 +804,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "space_id": payload.space_id,
             "degraded": llm_result.degraded,
             "model": llm_result.model,
+            "usage": llm_result.usage.as_dict() if llm_result.usage else None,
             "retrieval_count": len(results),
             "citations": citations,
             "model_error": (

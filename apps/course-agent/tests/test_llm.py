@@ -15,6 +15,26 @@ class _Response:
         return {"output_text": "这是一个没有引用的模型回答。"}
 
 
+class _UsageResponse:
+    status_code = 200
+
+    @staticmethod
+    def json() -> dict:
+        return {
+            "output_text": "带 usage 的回答。",
+            "usage": {
+                "input_tokens": 4388,
+                "output_tokens": 13,
+                "total_tokens": 4401,
+                "input_tokens_details": {
+                    "cached_tokens": 3840,
+                    "cache_write_tokens": 0,
+                },
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+        }
+
+
 class _CitationResponse:
     status_code = 200
 
@@ -78,6 +98,12 @@ class _MalformedClient(_Client):
     @staticmethod
     def post(*_: object, **__: object) -> _MalformedResponse:
         return _MalformedResponse()
+
+
+class _UsageClient(_CapturingClient):
+    def post(self, *args: object, **kwargs: object) -> _UsageResponse:
+        super().post(*args, **kwargs)
+        return _UsageResponse()
 
 
 class _HttpErrorClient:
@@ -311,3 +337,38 @@ def test_malformed_success_response_degrades_instead_of_raising(monkeypatch, tmp
 
     assert result.degraded is True
     assert result.error_code == "llm_empty_response"
+
+
+def test_direct_mode_forwards_model_reasoning_and_normalizes_usage(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://example.invalid",
+        llm_model="gpt-5.6-sol",
+    )
+    _UsageClient.last_payload = None
+    monkeypatch.setattr("course_agent.llm.httpx.Client", _UsageClient)
+
+    result = LLMAdapter(settings).generate_direct(
+        "解释一致连续。",
+        model="gpt-5.6-terra",
+        reasoning_effort="medium",
+    )
+
+    payload = _UsageClient.last_payload
+    assert payload is not None
+    assert payload["model"] == "gpt-5.6-terra"
+    assert payload["reasoning"] == {"effort": "medium"}
+    assert result.model == "gpt-5.6-terra"
+    assert result.usage is not None
+    assert result.usage.as_dict() == {
+        "input_tokens": 4388,
+        "output_tokens": 13,
+        "reasoning_tokens": 0,
+        "cached_tokens": 3840,
+        "cache_write_tokens": 0,
+        "total_tokens": 4401,
+        "context_window_tokens": 272000,
+        "context_usage_percent": 1.61,
+        "context_window_source": "registry",
+    }

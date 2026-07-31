@@ -7,6 +7,11 @@ const state = {
   selectedDocumentIds: new Set(),
   settings: {},
   modelName: '',
+  modelCatalog: { models: [], discoverySource: null, cached: false },
+  currentModel: '',
+  currentReasoningEffort: null,
+  currentUsage: null,
+  usagePending: false,
   apiKeyTouched: false,
   isLoggingIn: false,
   authGeneration: 0,
@@ -92,6 +97,13 @@ const PROFILE_KEY_PREFIX = 'course-agent:profile-v1:';
 const FEATURES_KEY_PREFIX = 'course-agent:features-v1:';
 const ASSISTANT_PREFERENCES_KEY_PREFIX = 'course-agent:assistant-preferences-v1:';
 const MAX_CUSTOM_INSTRUCTIONS_LENGTH = 2000;
+const REASONING_OPTIONS = Object.freeze([
+  { value: 'low', label: '快速', shortLabel: '快' },
+  { value: 'medium', label: '均衡', shortLabel: '均' },
+  { value: 'high', label: '深度', shortLabel: '深' },
+  { value: 'xhigh', label: '极深', shortLabel: '极' },
+  { value: 'max', label: '最高（高级）', shortLabel: '高' },
+]);
 const AVATAR_FILE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_AVATAR_DATA_URL_LENGTH = 400000;
 const MAX_AVATAR_DIMENSION = 8192;
@@ -292,6 +304,76 @@ function normalizeAssistantPreferences(value = {}) {
     tone: ['friendly', 'pragmatic'].includes(preferences.tone) ? preferences.tone : 'friendly',
     detail: ['concise', 'balanced', 'detailed'].includes(preferences.detail) ? preferences.detail : 'balanced',
     customInstructions,
+  };
+}
+
+function normalizeModelInfo(value) {
+  if (!value || typeof value !== 'object') return null;
+  const id = String(value.id || '').trim();
+  if (!id) return null;
+  const efforts = Array.isArray(value.supported_reasoning_efforts)
+    ? value.supported_reasoning_efforts.filter(item => REASONING_OPTIONS.some(option => option.value === item))
+    : [];
+  return {
+    id,
+    display_name: String(value.display_name || id),
+    chat_eligible: value.chat_eligible !== false,
+    supported_reasoning_efforts: efforts,
+    disabled_reason: value.disabled_reason || null,
+    context_window_tokens: Number.isFinite(Number(value.context_window_tokens)) ? Number(value.context_window_tokens) : null,
+    context_window_source: value.context_window_source || null,
+  };
+}
+
+function normalizeModelCatalog(payload = {}) {
+  const models = Array.isArray(payload.models)
+    ? payload.models.map(normalizeModelInfo).filter(Boolean)
+    : [];
+  return {
+    models,
+    discoverySource: payload.discovery_source || null,
+    cached: Boolean(payload.cached),
+  };
+}
+
+function chatEligibleModels() {
+  return state.modelCatalog.models.filter(model => model.chat_eligible);
+}
+
+function isCurrentUserAdmin() {
+  return state.settings.is_admin === true;
+}
+
+function findModelInfo(modelId = state.currentModel) {
+  const id = String(modelId || '').trim();
+  return state.modelCatalog.models.find(model => model.id === id) || null;
+}
+
+function supportedReasoningEfforts(modelId = state.currentModel) {
+  return findModelInfo(modelId)?.supported_reasoning_efforts || [];
+}
+
+function defaultReasoningForModel(modelId = state.currentModel) {
+  const efforts = supportedReasoningEfforts(modelId);
+  return efforts.includes('medium') ? 'medium' : null;
+}
+
+function normalizeUsage(value) {
+  if (!value || typeof value !== 'object') return null;
+  const numberOrNull = (item) => {
+    if (item === null || item === undefined || item === '') return null;
+    return Number.isFinite(Number(item)) ? Number(item) : null;
+  };
+  return {
+    input_tokens: numberOrNull(value.input_tokens),
+    output_tokens: numberOrNull(value.output_tokens),
+    reasoning_tokens: numberOrNull(value.reasoning_tokens),
+    cached_tokens: numberOrNull(value.cached_tokens),
+    cache_write_tokens: numberOrNull(value.cache_write_tokens),
+    total_tokens: numberOrNull(value.total_tokens),
+    context_window_tokens: numberOrNull(value.context_window_tokens),
+    context_usage_percent: numberOrNull(value.context_usage_percent),
+    context_window_source: value.context_window_source || null,
   };
 }
 
@@ -1231,6 +1313,7 @@ function setLoading(isLoading) {
   if (isLoading && state.features.avatar !== false) startHomeAgentAvatarThinking();
   else stopHomeAgentAvatarThinking();
   syncHomeAgentAvatarActionControls();
+  renderModelControls();
   renderSpaces();
   renderSourceSelector();
   renderHistory();
@@ -1318,6 +1401,7 @@ async function loadBase() {
     loadSchedule();
     await loadSpaces();
     await loadSettings();
+    await loadModelCatalog();
     renderLoginUsers();
   } else {
     state.scheduleItems = [];
@@ -1393,6 +1477,11 @@ async function login(userId) {
     state.selectedDocumentIds.clear();
     state.settings = {};
     state.modelName = '';
+    state.modelCatalog = { models: [], discoverySource: null, cached: false };
+    state.currentModel = '';
+    state.currentReasoningEffort = null;
+    state.currentUsage = null;
+    state.usagePending = false;
     renderSpaces();
     renderDocuments();
     renderSourceSelector();
@@ -1408,6 +1497,7 @@ async function login(userId) {
     closeLoginModal();
     await loadSpaces();
     await loadSettings();
+    await loadModelCatalog();
     toast(`已以 ${effectiveDisplayName()} 身份登录`, 'success');
   } catch (error) {
     toast(error.message, 'error');
@@ -1437,6 +1527,11 @@ async function logout() {
   state.selectedDocumentIds.clear();
   state.settings = {};
   state.modelName = '';
+  state.modelCatalog = { models: [], discoverySource: null, cached: false };
+  state.currentModel = '';
+  state.currentReasoningEffort = null;
+  state.currentUsage = null;
+  state.usagePending = false;
   state.scheduleItems = [];
   state.selectedScheduleDate = localDateKey(new Date());
   state.userProfile = { nickname: '', avatar: '' };
@@ -1752,6 +1847,10 @@ function hideHomeGreeting() {
 function resetHomeConversation() {
   state.homeConversation = [];
   state.activeHistoryId = null;
+  state.currentModel = state.settings.llm_model || state.currentModel || '';
+  state.currentReasoningEffort = defaultReasoningForModel();
+  state.currentUsage = null;
+  state.usagePending = false;
   const convo = $('#home-conversation');
   if (convo) {
     convo.querySelectorAll('.chat-row').forEach(el => el.remove());
@@ -1759,6 +1858,8 @@ function resetHomeConversation() {
     if (greeting) greeting.style.display = '';
   }
   renderHistoryActive();
+  renderModelControls();
+  renderContextMeter();
   scrollHomeToBottom();
 }
 
@@ -1933,7 +2034,15 @@ async function query(question, mode, prefix) {
       custom_instructions: assistantPreferences.customInstructions.trim(),
     };
     const payload = mode === 'direct'
-      ? { question, mode: 'direct', scope: 'general', messages, assistant_preferences }
+      ? {
+          question,
+          mode: 'direct',
+          scope: 'general',
+          messages,
+          assistant_preferences,
+          model: state.currentModel || null,
+          reasoning_effort: state.currentReasoningEffort || null,
+        }
       : {
           question,
           mode: 'retrieval',
@@ -1943,6 +2052,8 @@ async function query(question, mode, prefix) {
           top_k: 5,
           messages,
           assistant_preferences,
+          model: state.currentModel || null,
+          reasoning_effort: state.currentReasoningEffort || null,
         };
     const result = await api('/api/query', {
       method: 'POST',
@@ -1951,8 +2062,14 @@ async function query(question, mode, prefix) {
     });
     if (requestId !== state.queryRequestId) return;
     if (result.model) {
+      state.currentModel = result.model;
       state.modelName = result.model;
       updateHomeModelLabel();
+    }
+    if (result.usage) {
+      state.currentUsage = normalizeUsage(result.usage);
+      state.usagePending = false;
+      renderContextMeter();
     }
     if (isHome) {
       renderHomeAnswer(result, mode, ctx);
@@ -1987,8 +2104,200 @@ function updateHomeModeLabel() {
 }
 
 function updateHomeModelLabel() {
-  const label = $('#home-current-model');
-  if (label) label.textContent = `当前模型：${state.modelName || '未配置'}`;
+  state.modelName = state.currentModel || state.settings.llm_model || state.modelName || '';
+  renderModelControls();
+  renderContextMeter();
+}
+
+function modelSelectOptions(selectedModel) {
+  const eligible = chatEligibleModels();
+  const models = eligible.length
+    ? eligible
+    : [normalizeModelInfo({ id: selectedModel || state.settings.llm_model || 'gpt-5.6-sol', chat_eligible: true })].filter(Boolean);
+  if (selectedModel && !models.some(model => model.id === selectedModel)) {
+    models.unshift(normalizeModelInfo({ id: selectedModel, chat_eligible: true }));
+  }
+  return models.map(model => (
+    `<option value="${escapeHtml(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.display_name)}</option>`
+  )).join('');
+}
+
+function renderModelControls() {
+  const selectedModel = state.currentModel || state.settings.llm_model || '';
+  const homeModel = $('#home-model-select');
+  const settingModel = $('#setting-model');
+  const options = modelSelectOptions(selectedModel);
+  if (homeModel) {
+    homeModel.innerHTML = options;
+    homeModel.value = selectedModel;
+    homeModel.disabled = state.isQuerying || !selectedModel;
+    homeModel.title = selectedModel || '未配置模型';
+  }
+  if (settingModel) {
+    const defaultModel = state.settings.llm_model || selectedModel;
+    settingModel.innerHTML = modelSelectOptions(defaultModel);
+    settingModel.value = defaultModel;
+    settingModel.disabled = !isCurrentUserAdmin();
+  }
+  renderReasoningControl();
+  renderModelCatalogList();
+}
+
+function renderReasoningControl() {
+  const select = $('#home-reasoning-effort');
+  if (!select) return;
+  const efforts = supportedReasoningEfforts();
+  select.replaceChildren();
+  if (!efforts.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '不可用';
+    select.appendChild(option);
+    select.disabled = true;
+    select.title = '当前模型未确认支持思考强度';
+    state.currentReasoningEffort = null;
+    return;
+  }
+  for (const item of REASONING_OPTIONS) {
+    if (!efforts.includes(item.value)) continue;
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = item.label;
+    option.dataset.shortLabel = item.shortLabel;
+    select.appendChild(option);
+  }
+  if (!efforts.includes(state.currentReasoningEffort)) {
+    state.currentReasoningEffort = defaultReasoningForModel();
+  }
+  select.value = state.currentReasoningEffort || '';
+  select.disabled = state.isQuerying;
+  select.title = '只影响当前对话';
+}
+
+function renderContextMeter() {
+  const meter = $('#home-context-meter');
+  const value = $('#home-context-meter-value');
+  if (!meter || !value) return;
+  meter.className = 'context-meter';
+  if (state.usagePending) {
+    value.textContent = '待';
+    meter.classList.add('pending');
+    meter.title = '模型已切换，发送下一条消息后重新计算上下文用量';
+    meter.setAttribute('aria-label', '上下文用量待重新计算');
+    return;
+  }
+  const usage = normalizeUsage(state.currentUsage);
+  if (!usage) {
+    value.textContent = '—';
+    meter.title = '尚无用量';
+    meter.setAttribute('aria-label', '尚无上下文用量');
+    return;
+  }
+  if (usage.context_usage_percent !== null) {
+    const percent = Math.max(0, Math.min(100, usage.context_usage_percent));
+    value.textContent = percent > 0 && percent < 1 ? '<1%' : `${Math.round(percent)}%`;
+    meter.style.setProperty('--context-percent', `${percent}%`);
+    meter.classList.add(percent >= 80 ? 'high' : percent >= 50 ? 'medium' : 'low');
+    meter.title = `输入 ${usage.input_tokens ?? '未知'} tokens / 窗口 ${usage.context_window_tokens}；输出 ${usage.output_tokens ?? '未知'}，推理 ${usage.reasoning_tokens ?? '未知'}，缓存命中 ${usage.cached_tokens ?? '未知'}`;
+    meter.setAttribute('aria-label', `上下文用量 ${percent}%`);
+    return;
+  }
+  value.textContent = usage.input_tokens !== null ? `${usage.input_tokens}` : 'tokens';
+  meter.classList.add('unknown');
+  meter.title = `输入 ${usage.input_tokens ?? '未知'} tokens；当前模型窗口未知，不显示百分比`;
+  meter.setAttribute('aria-label', `输入上下文 ${usage.input_tokens ?? '未知'} tokens，窗口未知`);
+}
+
+function renderModelCatalogList() {
+  const list = $('#settings-model-list');
+  const status = $('#settings-model-catalog-status');
+  if (status) {
+    const count = state.modelCatalog.models.length;
+    status.textContent = count
+      ? `${count} 个模型${state.modelCatalog.cached ? '（缓存）' : ''}`
+      : '尚未发现模型';
+  }
+  if (!list) return;
+  if (!state.modelCatalog.models.length) {
+    list.innerHTML = '<div class="muted">保存模型服务配置后，可点击“发现模型”。</div>';
+    return;
+  }
+  list.innerHTML = state.modelCatalog.models.map(model => `
+    <div class="settings-model-item${model.chat_eligible ? '' : ' disabled'}">
+      <span class="settings-model-name">${escapeHtml(model.display_name)}</span>
+      <span class="settings-model-meta">${
+        model.chat_eligible
+          ? `文本对话 · 思考：${model.supported_reasoning_efforts.length ? model.supported_reasoning_efforts.join('/') : '未确认'}`
+          : `不可用：${escapeHtml(model.disabled_reason || 'unknown')}`
+      }</span>
+    </div>
+  `).join('');
+}
+
+function applyModelCatalog(payload) {
+  state.modelCatalog = normalizeModelCatalog(payload);
+  if (!state.currentModel) {
+    state.currentModel = state.settings.llm_model || chatEligibleModels()[0]?.id || '';
+  }
+  if (!findModelInfo(state.currentModel) && chatEligibleModels().length) {
+    state.currentModel = state.settings.llm_model || chatEligibleModels()[0].id;
+  }
+  if (!state.currentReasoningEffort) {
+    state.currentReasoningEffort = defaultReasoningForModel();
+  }
+  renderModelControls();
+}
+
+async function loadModelCatalog() {
+  if (!state.user) return;
+  try {
+    const payload = await api('/api/models');
+    applyModelCatalog(payload);
+  } catch (error) {
+    renderModelControls();
+    toast(`模型目录加载失败：${error.message}`, 'error');
+  }
+}
+
+async function discoverModels() {
+  const btn = $('#settings-discover-models');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '发现中…';
+  }
+  try {
+    const payload = await api('/api/models/discover', { method: 'POST' }, 20000);
+    applyModelCatalog(payload);
+    toast('模型发现完成', 'success');
+  } catch (error) {
+    toast(`模型发现失败：${error.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '发现模型';
+    }
+  }
+}
+
+function setCurrentModel(modelId, { fromHistory = false } = {}) {
+  const next = String(modelId || '').trim();
+  if (!next || next === state.currentModel) return;
+  state.currentModel = next;
+  state.modelName = next;
+  state.currentReasoningEffort = defaultReasoningForModel(next);
+  if (!fromHistory) {
+    state.usagePending = true;
+  }
+  renderModelControls();
+  renderContextMeter();
+  if (!fromHistory) updateActiveHistoryModelState();
+}
+
+function setCurrentReasoningEffort(effort) {
+  const next = effort || null;
+  if (next === state.currentReasoningEffort) return;
+  state.currentReasoningEffort = next;
+  updateActiveHistoryModelState();
 }
 
 function setHomeMode(mode) {
@@ -2057,6 +2366,10 @@ function loadHistory() {
         time: Number(item.time) || Date.now() - index,
         pinned: Boolean(item.pinned),
         conversation: Array.isArray(item.conversation) ? item.conversation : [],
+        model: String(item.model || state.settings.llm_model || state.currentModel || '').trim(),
+        reasoningEffort: item.reasoningEffort || null,
+        usage: normalizeUsage(item.usage),
+        usagePending: Boolean(item.usagePending),
       })) : [];
     sortHistory();
   } catch {
@@ -2086,6 +2399,10 @@ function addHistory(question, answer) {
     time: Date.now(),
     pinned: false,
     mode: state.homeMode,
+    model: state.currentModel || state.settings.llm_model || '',
+    reasoningEffort: state.currentReasoningEffort,
+    usage: normalizeUsage(state.currentUsage),
+    usagePending: Boolean(state.usagePending),
     conversation: state.homeConversation.slice(),
   });
   state.activeHistoryId = state.history[0].time;
@@ -2099,7 +2416,27 @@ function updateActiveHistoryPreview(answer, mode) {
   const answerText = String(answer || '');
   item.preview = answerText.replace(/\s+/g, ' ').slice(0, 60) + (answerText.length > 60 ? '…' : '');
   item.mode = mode === 'retrieval' ? 'retrieval' : 'direct';
+  item.model = state.currentModel || state.settings.llm_model || '';
+  item.reasoningEffort = state.currentReasoningEffort;
+  item.usage = normalizeUsage(state.currentUsage);
+  item.usagePending = Boolean(state.usagePending);
   item.conversation = state.homeConversation.slice();
+  const storageKey = historyStorageKey();
+  if (storageKey) {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(state.history.slice(0, 30)));
+    } catch {}
+  }
+}
+
+function updateActiveHistoryModelState() {
+  if (state.activeHistoryId === null) return;
+  const item = state.history.find(entry => entry.time === state.activeHistoryId);
+  if (!item) return;
+  item.model = state.currentModel || state.settings.llm_model || '';
+  item.reasoningEffort = state.currentReasoningEffort;
+  item.usage = normalizeUsage(state.currentUsage);
+  item.usagePending = Boolean(state.usagePending);
   const storageKey = historyStorageKey();
   if (storageKey) {
     try {
@@ -2117,6 +2454,11 @@ function openHistory(index) {
   updateHomeModeLabel();
   state.activeHistoryId = item.time;
   state.homeConversation = Array.isArray(item.conversation) ? item.conversation.slice() : [];
+  state.currentModel = item.model || state.settings.llm_model || state.currentModel || '';
+  state.currentReasoningEffort = item.reasoningEffort || defaultReasoningForModel(state.currentModel);
+  state.currentUsage = normalizeUsage(item.usage);
+  state.usagePending = Boolean(item.usagePending);
+  updateHomeModelLabel();
   renderHomeConversation();
   showView('home');
 }
@@ -3474,7 +3816,11 @@ async function loadSettings() {
     const settings = await api('/api/settings');
     if (!authContextMatches(authContext)) return;
     state.settings = settings;
-    state.modelName = state.settings.llm_model || '';
+    state.modelName = state.currentModel || state.settings.llm_model || '';
+    if (!state.currentModel) {
+      state.currentModel = state.settings.llm_model || '';
+      state.currentReasoningEffort = defaultReasoningForModel();
+    }
     updateHomeModelLabel();
     renderSettings();
   } catch (error) {
@@ -3483,12 +3829,18 @@ async function loadSettings() {
 }
 
 function renderSettings() {
+  const admin = isCurrentUserAdmin();
   $('#setting-base-url').value = state.settings.llm_base_url || '';
   $('#setting-api-key').value = '';
   $('#setting-api-key').placeholder = state.settings.llm_configured ? '已配置，留空表示保持不变' : 'sk-...';
   state.apiKeyTouched = false;
-  $('#setting-model').value = state.settings.llm_model || '';
+  renderModelControls();
   $('#setting-timeout').value = state.settings.llm_timeout_seconds || 45;
+  ['#setting-base-url', '#setting-api-key', '#setting-model', '#setting-timeout', '#settings-test', '#settings-discover-models', '#settings-form button[type="submit"]']
+    .forEach(selector => {
+      const element = $(selector);
+      if (element) element.disabled = !admin;
+    });
   const versionEl = $('#about-version');
   if (versionEl && state.settings?.version) versionEl.textContent = `v${state.settings.version}`;
   $('#about-model-status').textContent = state.settings.llm_configured ? '已配置' : '未配置';
@@ -3498,11 +3850,14 @@ function renderSettings() {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const baseUrl = $('#setting-base-url').value.trim();
   const payload = {
-    llm_base_url: $('#setting-base-url').value.trim() || null,
     llm_model: $('#setting-model').value.trim() || null,
     llm_timeout_seconds: Number($('#setting-timeout').value) || 45,
   };
+  if (baseUrl !== (state.settings.llm_base_url || '').trim()) {
+    payload.llm_base_url = baseUrl || null;
+  }
   // 仅当用户真正改过密钥字段时才发送，避免把空值/掩码误存为真实 key。
   if (state.apiKeyTouched) {
     payload.llm_api_key = $('#setting-api-key').value.trim();
@@ -3514,6 +3869,11 @@ async function saveSettings(event) {
       body: JSON.stringify(payload),
     });
     state.modelName = state.settings.llm_model || '';
+    if (!state.homeConversation.length) {
+      state.currentModel = state.settings.llm_model || state.currentModel;
+      state.currentReasoningEffort = defaultReasoningForModel();
+    }
+    await loadModelCatalog();
     updateHomeModelLabel();
     renderSettings();
     toast('设置已保存', 'success');
@@ -3588,6 +3948,8 @@ function initEventListeners() {
       handleHomeSubmit(e);
     }
   });
+  $('#home-model-select').addEventListener('change', event => setCurrentModel(event.currentTarget.value));
+  $('#home-reasoning-effort').addEventListener('change', event => setCurrentReasoningEffort(event.currentTarget.value || null));
   $('#home-new-chat').addEventListener('click', () => {
     if (state.isQuerying) {
       toast('请等待当前回答完成', '');
@@ -3748,6 +4110,7 @@ function initEventListeners() {
   });
   $('#settings-form').addEventListener('submit', saveSettings);
   $('#settings-test').addEventListener('click', testSettings);
+  $('#settings-discover-models').addEventListener('click', discoverModels);
   $('#setting-api-key').addEventListener('input', () => { state.apiKeyTouched = true; });
   $$('input[name="theme"]').forEach(input => {
     input.addEventListener('change', () => {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -17,6 +18,12 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _csv_set(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    return {item.strip() for item in value.split(",") if item.strip()}
 
 
 def _runtime_dir() -> Path:
@@ -43,6 +50,11 @@ class Settings:
     llm_timeout_seconds: float = float(
         os.getenv("COURSE_AGENT_LLM_TIMEOUT_SECONDS", "45")
     )
+    admin_user_ids: set[str] | None = None
+    llm_allow_local_base_urls: bool = _as_bool(
+        os.getenv("COURSE_AGENT_ALLOW_LOCAL_LLM_BASE_URLS"), False
+    )
+    llm_config_generation: int = 0
     max_upload_bytes: int = 50 * 1024 * 1024
 
     # ---- Pluggable backend selection (reserved for future upgrades) -----
@@ -57,6 +69,13 @@ class Settings:
     tokenizer_backend: str = os.getenv("COURSE_AGENT_TOKENIZER_BACKEND", "jieba")
 
     _env_file: Path = APP_DIR / ".env"
+
+    def __post_init__(self) -> None:
+        if self.admin_user_ids is None:
+            configured = _csv_set(os.getenv("COURSE_AGENT_ADMIN_USER_IDS"))
+            if not configured and self.demo_mode:
+                configured = {"demo-a"}
+            self.admin_user_ids = configured
 
     def to_safe_dict(self) -> dict[str, Any]:
         """Return settings suitable for the frontend.

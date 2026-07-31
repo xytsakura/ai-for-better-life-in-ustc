@@ -267,8 +267,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=assistant-preferences-v1' in html
-    assert '/assets/app.js?v=assistant-preferences-v1' in html
+    assert '/assets/styles.css?v=model-context-controls-v4' in html
+    assert '/assets/app.js?v=model-context-controls-v4' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -389,6 +389,11 @@ def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
         "state.selectedDocumentIds.clear();",
         "state.settings = {};",
         "state.modelName = '';",
+        "state.modelCatalog = { models: [], discoverySource: null, cached: false };",
+        "state.currentModel = '';",
+        "state.currentReasoningEffort = null;",
+        "state.currentUsage = null;",
+        "state.usagePending = false;",
         "renderSpaces();",
         "renderDocuments();",
         "renderSourceSelector();",
@@ -398,6 +403,7 @@ def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
         "renderSettings();",
     ):
         assert login_script.index(statement) < close_login
+    assert login_script.index("await loadSettings();") < login_script.index("await loadModelCatalog();")
 
     logout_script = section("async function logout(", "// ---------- Spaces ----------")
     delete_session = logout_script.index("await api('/api/session', { method: 'DELETE' });")
@@ -410,6 +416,34 @@ def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
     no_space_return = render_documents.index("return;", no_space)
     clear_document_list = render_documents.index("if (list) list.replaceChildren();", no_space)
     assert clear_document_list < no_space_return
+
+
+def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+
+    html = client.get("/").text
+    assert 'id="home-model-select"' in html
+    assert 'id="home-reasoning-effort"' in html
+    assert 'id="home-context-meter"' in html
+    assert 'id="settings-discover-models"' in html
+    assert 'id="settings-model-list"' in html
+
+    script = client.get("/assets/app.js").text
+    assert "const REASONING_OPTIONS = Object.freeze([" in script
+    assert "return state.settings.is_admin === true;" in script
+    assert "if (item === null || item === undefined || item === '') return null;" in script
+    assert "model: state.currentModel || null" in script
+    assert "reasoning_effort: state.currentReasoningEffort || null" in script
+    assert "state.usagePending = true;" in script
+    assert "renderModelControls();\n  renderContextMeter();" in script
+    assert "function renderContextMeter()" in script
+    assert "percent > 0 && percent < 1 ? '<1%'" in script
+    assert "function discoverModels()" in script
+
+    styles = client.get("/assets/styles.css").text
+    assert ".context-meter" in styles
+    assert "conic-gradient" in styles
+    assert ".settings-model-list" in styles
 
 
 def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
@@ -437,6 +471,59 @@ def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
     assert "瀚海行 Agent" in (adapter.last_direct_system or "")
     assert "语气亲和" in (adapter.last_direct_system or "")
     assert "适中篇幅" in (adapter.last_direct_system or "")
+
+
+def test_chat_model_controls_reach_direct_and_retrieval_queries(tmp_path: Path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        session_secret="test-secret",
+        llm_model="gpt-5.6-sol",
+    )
+    adapter = FakeLLMAdapter(settings)
+    client = TestClient(create_app(settings, adapter))
+    login(client, "demo-a")
+
+    direct = client.post(
+        "/api/query",
+        json={
+            "question": "Explain uniform continuity.",
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "high",
+        },
+    )
+
+    assert direct.status_code == 200
+    assert direct.json()["model"] == "gpt-5.6-sol"
+    assert direct.json()["usage"] is None
+    assert adapter.last_direct_model == "gpt-5.6-sol"
+    assert adapter.last_direct_reasoning_effort == "high"
+
+    personal = personal_space(client)
+    document_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "controls.pdf",
+        "Uniform continuity uses one delta for every point in the domain.",
+    )
+    retrieval = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
+            "question": "What does uniform continuity require?",
+            "document_ids": [document_id],
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "xhigh",
+        },
+    )
+
+    assert retrieval.status_code == 200
+    assert retrieval.json()["model"] == "gpt-5.6-sol"
+    assert retrieval.json()["usage"] is None
+    assert adapter.last_retrieval_model == "gpt-5.6-sol"
+    assert adapter.last_retrieval_reasoning_effort == "xhigh"
 
 
 def test_direct_prompt_applies_user_preferences_without_overriding_truthfulness(tmp_path: Path):
