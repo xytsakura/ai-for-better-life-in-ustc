@@ -34,7 +34,7 @@
 - 当前 Base URL 的 `/models` 返回网页 HTML，不能作为模型列表；
 - 当前 Base URL 的 `/v1/models` 返回标准模型集合，共发现 20 个模型；
 - 当前 `/responses` 返回 `usage.input_tokens`、`output_tokens`、`total_tokens`、缓存 token 和推理 token；
-- `gpt-5.6-sol` 已实测接受 `reasoning.effort: low` 并在响应中回显有效配置；
+- OpenAI 官方 GPT-5.6 指南声明该模型族支持 `none`、`low`、`medium`、`high`、`xhigh` 和 `max`；当前代理上的 `gpt-5.6-sol` 已实测接受 `low` 并在响应中回显有效配置；
 - 模型列表没有提供上下文窗口上限，因此不能只靠模型发现响应计算百分比。
 
 ## 4. 状态与所有权
@@ -261,7 +261,7 @@ p
 - Responses usage 完整、部分缺失和完全缺失；
 - 上下文百分比与未知窗口降级；
 - 会话 A/B 的模型、思考强度和 usage 相互隔离；
-- 新对话继承默认模型但思考强度初始化为均衡；
+- 新对话继承默认模型；默认模型支持 `medium` 时初始化为均衡，否则 reasoning 为空且控件禁用；
 - API key 与上游原始错误不会出现在响应和日志中。
 
 ### 8.2 浏览器验收
