@@ -311,8 +311,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
 
 def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
     client, _ = make_client(tmp_path)
-    script = client.get("/assets/app.js").text
-    styles = client.get("/assets/styles.css").text
+    script = client.get("/assets/app.js").text.replace("\r\n", "\n")
+    styles = client.get("/assets/styles.css").text.replace("\r\n", "\n")
     assert '.space-tree-item[aria-disabled="true"]' in styles
 
     def section(start_marker: str, end_marker: str) -> str:
