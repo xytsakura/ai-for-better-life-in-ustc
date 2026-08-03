@@ -36,7 +36,7 @@
 - MVP 采用最小 `platform-chat-v1`，AG-UI 适配器和 MCP 模板只作为条件增强；
 - 数学分析 B1 Demo v0.1 已可运行，代码位于 `apps/course-agent`；完整插件平台仍是后续阶段。
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
-- 当前演示语料导入结果为 25 份唯一 PDF、510 页、493 个可检索分块；扫描/低文本页会标记为 `needs_ocr` 或 `needs_review`，不伪装成已完成解析。
+- 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
 
 ## 知识库与课程 Agent 约定
 
@@ -46,7 +46,8 @@
 - 所有检索结果至少保留知识空间、文档版本、定位信息和访问范围。
 - 删除资料后，全文索引、向量索引和关联缓存必须失效。
 - MVP 优先支持文本型 PDF、PPTX 基础文本、Markdown/TXT 和一种简单图片 OCR。
-- 首轮只需跑通一个课程、三类知识空间和少量格式，复杂 OCR、公式、表格和音视频后置。
+- PDF 使用相邻 `<原文件名>.ocr.md` 作为 RAG 文本；原 PDF 保留为引用和页面预览来源。Markdown/TXT 属于原生文本，后续接入时不走 OCR。
+- OCR sidecar 必须校验源 PDF SHA-256、页数和连续页集合；校验失败时回退 PyMuPDF，不允许部分 sidecar 进入索引。
 - 首个演示课程已冻结为数学分析 B1，共享知识库采用邀请制学习小组；第三方订阅来源在后续平台阶段再冻结。
 
 ## 平台与 Contract 约定

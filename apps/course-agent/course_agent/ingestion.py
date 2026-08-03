@@ -34,6 +34,7 @@ from pathlib import Path
 import fitz
 
 from .config import Settings
+from .ocr import read_ocr_sidecar
 from .tokenizer import normalize_text, tokenize_for_search
 from .types import (
     ChunkRecord,
@@ -135,12 +136,12 @@ def chunk_page(text: str, max_chars: int = 1800, overlap: int = 180) -> list[str
 # ---- PDF parser -------------------------------------------------------
 
 class PyMuPDFParser:
-    """Default PDF parser using PyMuPDF.
+    """PDF parser using a validated OCR sidecar or PyMuPDF as fallback.
 
     Satisfies DocumentParserProto.
     """
 
-    PARSER_VERSION = "pymupdf-pages-v1"
+    PARSER_VERSION = "ocr-markdown-sidecar-or-pymupdf-v2"
 
     @property
     def version(self) -> str:
@@ -163,13 +164,20 @@ class PyMuPDFParser:
         pages: list[PageRecord] = []
         chunks: list[ChunkRecord] = []
         counts = ParseCounts()
+        sidecar = read_ocr_sidecar(path)
         pdf = fitz.open(path)
         for page_index in range(len(pdf)):
             page_number = page_index + 1
             page_id = str(uuid.uuid4())
             try:
-                text = pdf[page_index].get_text("text")
-                status = classify_page(text)
+                if sidecar is not None:
+                    text = sidecar.pages[page_number]
+                    # A completed OCR pass may legitimately produce a short page.
+                    # Only blank OCR pages are kept out of the search index.
+                    status = "text_ok" if normalize_text(text) else "needs_ocr"
+                else:
+                    text = pdf[page_index].get_text("text")
+                    status = classify_page(text)
             except Exception:
                 text = ""
                 status = "failed"
