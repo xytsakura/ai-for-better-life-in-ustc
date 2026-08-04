@@ -117,12 +117,13 @@ COURSE_AGENT_RUNTIME_DIR=../../var/course-agent
 COURSE_AGENT_LLM_API_KEY=本机模型密钥
 COURSE_AGENT_LLM_BASE_URL=兼容Responses API的基础地址
 COURSE_AGENT_LLM_MODEL=gpt-5.6-sol
+COURSE_AGENT_BRANCH_LLM_MODEL=gpt-5.6-sol
 COURSE_AGENT_LLM_TIMEOUT_SECONDS=45
 COURSE_AGENT_ADMIN_USER_IDS=demo-a
 COURSE_AGENT_ALLOW_LOCAL_LLM_BASE_URLS=false
 ```
 
-`COURSE_AGENT_LLM_BASE_URL` 应填写基础地址，例如服务商要求的地址通常以 `/v1` 结尾。应用会自行追加 `/responses`，不要把 `/responses` 重复写入基础地址。`COURSE_AGENT_ADMIN_USER_IDS` 指定可以保存模型配置和执行模型发现的演示身份，多个 ID 用英文逗号分隔。外部服务默认必须使用 HTTPS；只有明确测试本机模型服务时才把 `COURSE_AGENT_ALLOW_LOCAL_LLM_BASE_URLS` 改为 `true`。
+`COURSE_AGENT_LLM_BASE_URL` 应填写基础地址，例如服务商要求的地址通常以 `/v1` 结尾。应用会自行追加 `/responses`，不要把 `/responses` 重复写入基础地址。`COURSE_AGENT_BRANCH_LLM_MODEL` 固定“单独问 GPT-5.6”解释分支使用的服务端模型，浏览器不能覆盖该值。`COURSE_AGENT_ADMIN_USER_IDS` 指定可以保存模型配置和执行模型发现的演示身份，多个 ID 用英文逗号分隔。外部服务默认必须使用 HTTPS；只有明确测试本机模型服务时才把 `COURSE_AGENT_ALLOW_LOCAL_LLM_BASE_URLS` 改为 `true`。
 
 首次启动后，以管理员身份进入“个人设置 → 模型服务”，点击“发现模型”。应用会使用服务端已保存的 Base URL 和 API Key 探测模型目录，不会把密钥发送到浏览器；发现结果可用于设置新会话默认模型和当前会话模型。
 

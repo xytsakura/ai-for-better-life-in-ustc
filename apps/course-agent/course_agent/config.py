@@ -47,6 +47,9 @@ class Settings:
     llm_api_key: str = os.getenv("COURSE_AGENT_LLM_API_KEY", "")
     llm_base_url: str = os.getenv("COURSE_AGENT_LLM_BASE_URL", "")
     llm_model: str = os.getenv("COURSE_AGENT_LLM_MODEL", "gpt-5.6-sol")
+    branch_llm_model: str = os.getenv(
+        "COURSE_AGENT_BRANCH_LLM_MODEL", "gpt-5.6-sol"
+    )
     llm_timeout_seconds: float = float(
         os.getenv("COURSE_AGENT_LLM_TIMEOUT_SECONDS", "45")
     )

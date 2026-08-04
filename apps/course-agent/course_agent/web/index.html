@@ -100,6 +100,7 @@
 
           <form id="home-query-form" class="home-input-wrap">
             <div class="home-input-box">
+              <div id="home-reference-basket" class="home-reference-basket hidden" aria-label="已加入的引用"></div>
               <textarea
                 id="home-question"
                 rows="1"
@@ -879,7 +880,12 @@
   <!-- Toast -->
   <div id="toast" class="toast hidden" role="status"></div>
 
+  <div id="quote-selection-toolbar" class="quote-selection-toolbar hidden" role="toolbar" aria-label="引用选中文字">
+    <button type="button" data-quote-action="add">加入引用</button>
+    <button type="button" data-quote-action="branch">单独问 GPT-5.6</button>
+  </div>
+
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
-  <script src="/assets/app.js?v=markdown-table-v3" defer></script>
+  <script src="/assets/app.js?v=quote-branches-v1" defer></script>
 </body>
 </html>

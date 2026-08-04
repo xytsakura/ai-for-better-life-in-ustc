@@ -974,6 +974,56 @@ body.resizing * {
 
 #home-question::placeholder { color: var(--text-tertiary); }
 
+.home-reference-basket {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 126px;
+  overflow-y: auto;
+  padding: 10px 12px 0;
+}
+
+.home-reference-chip {
+  min-width: 0;
+  max-width: 100%;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 5px 3px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--bg-4);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.home-reference-index {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.home-reference-text {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-reference-actions { display: inline-flex; align-items: center; gap: 1px; }
+.home-reference-actions button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+.home-reference-actions button:hover:not(:disabled) { background: var(--bg-active); color: var(--text-primary); }
+.home-reference-actions button:disabled { opacity: 0.28; cursor: default; }
+
 .home-input-bar {
   display: flex;
   align-items: center;
@@ -1283,6 +1333,170 @@ body.document-reader-open .library-chat { display: none; }
 
 .chat-bubble-assistant > *:first-child { margin-top: 0; }
 .chat-bubble-assistant > *:last-child { margin-bottom: 0; }
+
+.chat-bubble-assistant ::selection,
+.branch-answer-markdown ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.quote-selection-toolbar {
+  position: fixed;
+  z-index: 4000;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border-3);
+  border-radius: 8px;
+  background: var(--bg-5);
+  box-shadow: var(--shadow-lg);
+}
+
+.quote-selection-toolbar button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.quote-selection-toolbar button:hover { color: var(--text-primary); background: var(--bg-active); }
+.quote-selection-toolbar button:last-child { color: var(--accent); }
+
+.chat-user-references {
+  max-width: 75%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0 2px 5px;
+}
+
+.chat-user-references span {
+  max-width: 220px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-user-references strong { color: var(--accent); }
+
+.chat-branch-host {
+  width: 100%;
+  margin-top: 10px;
+  padding-left: 14px;
+  border-left: 2px solid var(--border-2);
+}
+
+.chat-branch + .chat-branch { margin-top: 8px; }
+.chat-branch {
+  overflow: hidden;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+}
+
+.chat-branch-toggle {
+  width: 100%;
+  min-height: 38px;
+  display: grid;
+  grid-template-columns: 18px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--text-secondary);
+}
+.chat-branch-toggle:hover { background: var(--bg-hover); }
+.chat-branch-chevron { color: var(--accent); font-size: 1rem; }
+.chat-branch-title { font-size: 0.75rem; font-weight: 700; white-space: nowrap; }
+.chat-branch-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+}
+
+.chat-branch-body {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--border-1);
+}
+
+.branch-fragments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 9px 0;
+}
+.branch-fragment {
+  max-width: min(100%, 300px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 4px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  font-size: 0.68rem;
+}
+.branch-fragment strong { margin-right: 5px; color: var(--accent); }
+
+.branch-messages { display: flex; flex-direction: column; gap: 8px; }
+.branch-message { font-size: 0.84rem; line-height: 1.65; }
+.branch-message-user {
+  max-width: 84%;
+  align-self: flex-end;
+  padding: 7px 10px;
+  border-radius: 8px 8px 3px 8px;
+  background: var(--bg-4);
+  white-space: pre-wrap;
+}
+.branch-message-assistant { position: relative; padding: 4px 2px 26px; }
+.branch-answer-markdown > *:first-child { margin-top: 0; }
+.branch-answer-markdown > *:last-child { margin-bottom: 0; }
+.branch-quote-main {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: var(--text-tertiary);
+  font-size: 0.68rem;
+}
+.branch-quote-main:hover { color: var(--accent); background: var(--accent-dim); }
+.branch-status { padding: 7px 2px; font-size: 0.74rem; }
+.branch-error { color: var(--danger); }
+
+.branch-query-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: end;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--bg-3);
+}
+.branch-query-form:focus-within { border-color: var(--border-3); }
+.branch-query-form textarea { min-height: 30px; max-height: 120px; padding: 5px 0; line-height: 1.45; font-size: 0.8rem; }
+.branch-query-form button {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+.branch-query-form button:disabled { background: var(--bg-4); color: var(--text-disabled); cursor: default; }
 
 .chat-citation {
   width: 100%;
@@ -2723,6 +2937,14 @@ body.document-reader-open .library-chat { display: none; }
 }
 
 @media (max-width: 680px) {
+  .quote-selection-toolbar { max-width: calc(100vw - 16px); }
+  .quote-selection-toolbar button { min-height: 38px; padding-inline: 9px; }
+  .home-reference-text { max-width: 150px; }
+  .chat-user-references { max-width: 92%; }
+  .chat-branch-host { padding-left: 8px; }
+  .chat-branch-toggle { grid-template-columns: 16px minmax(0, 1fr); }
+  .chat-branch-summary { grid-column: 2; }
+  .branch-fragment { max-width: 100%; }
   .document-reader-toolbar { align-items: stretch; padding: 7px 10px; }
   .document-reader-toolbar-actions { width: 100%; justify-content: space-between; }
   .document-reader-pdf-scroll { padding: 8px; }
