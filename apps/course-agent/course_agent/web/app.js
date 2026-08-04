@@ -37,12 +37,14 @@ const state = {
   authGeneration: 0,
   isQuerying: false,
   queryRequestId: 0,
+  activeQueryController: null,
   currentView: 'home',
   homeMode: 'direct',
   homeConversation: [],
   referenceBasket: [],
   quoteSelection: null,
   branchRequests: new Set(),
+  branchControllers: new Map(),
   history: [],
   activeHistoryId: null,
   scheduleItems: [],
@@ -1093,6 +1095,81 @@ async function api(path, options = {}, timeoutMs = 150000) {
   }
 }
 
+function streamApi(path, options = {}) {
+  const client = window.CourseAgentStreaming;
+  if (!client?.streamApi) {
+    throw new Error('当前页面未加载流式请求模块');
+  }
+  return client.streamApi(path, options);
+}
+
+function isStreamAbort(error) {
+  return Boolean(window.CourseAgentStreaming?.isAbortError?.(error))
+    || error?.name === 'AbortError';
+}
+
+function makeStreamErrorMessage(error) {
+  const message = String(error?.message || '回答中断，可重试');
+  return error?.partial ? `回答中断：${message}` : `请求失败：${message}`;
+}
+
+function cancelActiveStreams(reason = 'cancel') {
+  if (state.activeQueryController) {
+    try { state.activeQueryController.abort(reason); } catch {}
+    state.activeQueryController = null;
+  }
+  for (const [requestKey, controller] of state.branchControllers.entries()) {
+    try { controller.abort(reason); } catch {}
+    state.branchControllers.delete(requestKey);
+    state.branchRequests.delete(requestKey);
+    const [messageId] = requestKey.split(':');
+    if (messageId) renderAssistantBranches(messageId);
+  }
+  if (state.isQuerying) setLoading(false);
+}
+
+function applyUsageFromResult(result) {
+  if (result?.model) {
+    state.currentModel = result.model;
+    state.modelName = result.model;
+    updateHomeModelLabel();
+  }
+  state.currentUsage = result?.usage ? normalizeUsage(result.usage) : null;
+  state.usagePending = false;
+  renderContextMeter();
+}
+
+function createIncrementalRenderer(element, { onRender = null } = {}) {
+  let pendingText = '';
+  let timerId = null;
+  const flush = () => {
+    if (timerId !== null) {
+      window.clearTimeout(timerId);
+      timerId = null;
+    }
+    element.innerHTML = renderMarkdown(pendingText);
+    if (typeof onRender === 'function') onRender();
+  };
+  return {
+    update(text, { immediate = false } = {}) {
+      pendingText = String(text || '');
+      if (immediate) {
+        flush();
+        return;
+      }
+      if (timerId !== null) return;
+      timerId = window.setTimeout(flush, 48);
+    },
+    clear() {
+      pendingText = '';
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+        timerId = null;
+      }
+    },
+  };
+}
+
 function toast(message, type = '') {
   const el = $('#toast');
   el.textContent = message;
@@ -1961,6 +2038,7 @@ function renderLoginUsers() {
 async function login(userId) {
   if (state.isLoggingIn) return;
   state.isLoggingIn = true;
+  cancelActiveStreams('login');
   renderLoginUsers();
   try {
     const result = await api('/api/session', {
@@ -2014,6 +2092,7 @@ async function login(userId) {
 
 async function logout() {
   if (state.isLoggingIn) return;
+  cancelActiveStreams('logout');
   try {
     await api('/api/session', { method: 'DELETE' });
   } catch (error) {
@@ -3145,6 +3224,7 @@ function updateQueryStatus() {
 
 // ---------- Query ----------
 function clearAnswer(prefix) {
+  cancelActiveStreams('clear-answer');
   state.queryRequestId += 1;
   if (state.isQuerying) setLoading(false);
   $(`#${prefix}-answer-area`).classList.add('hidden');
@@ -3166,6 +3246,7 @@ function hideHomeGreeting() {
 }
 
 function resetHomeConversation() {
+  cancelActiveStreams('reset-home-conversation');
   state.homeConversation = [];
   state.referenceBasket = [];
   state.branchRequests.clear();
@@ -3218,7 +3299,11 @@ function normalizeBranch(branch) {
     messages: Array.isArray(branch.messages)
       ? branch.messages
         .filter(message => message && ['user', 'assistant'].includes(message.role))
-        .map(message => ({ role: message.role, content: String(message.content || '') }))
+        .map(message => ({
+          role: message.role,
+          content: String(message.content || ''),
+          requestFailed: Boolean(message.requestFailed),
+        }))
       : [],
     collapsed: Boolean(branch.collapsed),
     error: String(branch.error || '').slice(0, 300),
@@ -3352,7 +3437,7 @@ function showQuoteSelectionToolbar() {
   const selectedText = selection.toString().replace(/\s+/g, ' ').trim();
   const sourceMessageId = anchorBubble.closest('.chat-row-assistant')?.dataset.messageId || '';
   const sourceEntry = state.homeConversation.find(entry => entry.role === 'assistant' && entry.messageId === sourceMessageId);
-  if (!selectedText || !sourceEntry) {
+  if (!selectedText || !sourceEntry || sourceEntry.requestFailed) {
     clearQuoteSelection();
     return;
   }
@@ -3497,12 +3582,15 @@ function renderBranchPanels(row, entry) {
     const fragments = branch.selected_fragments.map((fragment, index) => `
       <span class="branch-fragment" title="${escapeHtml(fragment)}"><strong>${index + 1}</strong>${escapeHtml(fragment)}</span>
     `).join('');
-    const messages = branch.messages.map((message, index) => message.role === 'user'
-      ? `<div class="branch-message branch-message-user">${escapeHtml(message.content)}</div>`
-      : `<div class="branch-message branch-message-assistant" data-branch-answer-index="${index}">
+    const messages = branch.messages.map((message, index) => {
+      if (message.role === 'user') return `<div class="branch-message branch-message-user">${escapeHtml(message.content)}</div>`;
+      const failed = Boolean(message.requestFailed);
+      return `<div class="branch-message branch-message-assistant${failed ? ' branch-message-incomplete' : ''}" data-branch-answer-index="${index}">
           <div class="branch-answer-markdown">${renderMarkdown(message.content)}</div>
-          <button class="branch-quote-main" type="button" data-branch-action="quote" data-branch-id="${escapeHtml(branch.id)}" data-message-index="${index}">加入主对话引用</button>
-        </div>`).join('');
+          ${failed ? '<div class="branch-status branch-error">该回答未完成，不会作为后续上下文使用。</div>' : ''}
+          ${failed ? '' : `<button class="branch-quote-main" type="button" data-branch-action="quote" data-branch-id="${escapeHtml(branch.id)}" data-message-index="${index}">加入主对话引用</button>`}
+        </div>`;
+    }).join('');
     const summary = branch.messages.find(message => message.role === 'user')?.content || branch.selected_fragments[0] || '独立解答';
     return `
       <section class="chat-branch" data-branch-id="${escapeHtml(branch.id)}">
@@ -3566,34 +3654,95 @@ async function submitBranchQuestion(messageId, branchId, question) {
   const trimmedQuestion = String(question || '').trim();
   if (!entry || !branch || !trimmedQuestion) return;
   const requestKey = `${messageId}:${branchId}`;
-  if (state.branchRequests.has(requestKey)) return;
+  if (state.branchRequests.has(requestKey)) {
+    state.branchControllers.get(requestKey)?.abort('new-branch-query');
+  }
   const authContext = captureAuthContext();
-  const priorMessages = branch.messages.map(({ role, content }) => ({ role, content }));
-  branch.messages.push({ role: 'user', content: trimmedQuestion });
+  const controller = new AbortController();
+  const priorMessages = branch.messages
+    .filter(message => !message.requestFailed)
+    .map(({ role, content }) => ({ role, content }));
+  const userMessage = { role: 'user', content: trimmedQuestion };
+  const assistantMessage = { role: 'assistant', content: '' };
+  const isCurrentBranchRequest = () => authContextMatches(authContext)
+    && state.branchControllers.get(requestKey) === controller
+    && findAssistantEntry(messageId)?.branches?.some(item => item.id === branchId);
+  let receivedDelta = false;
+  let renderTimer = 0;
+  const scheduleBranchRender = ({ immediate = false } = {}) => {
+    if (!isCurrentBranchRequest()) return;
+    if (immediate) {
+      window.clearTimeout(renderTimer);
+      renderTimer = 0;
+      renderAssistantBranches(messageId);
+      scrollHomeToBottom();
+      return;
+    }
+    if (renderTimer) return;
+    renderTimer = window.setTimeout(() => {
+      renderTimer = 0;
+      if (!isCurrentBranchRequest()) return;
+      renderAssistantBranches(messageId);
+      scrollHomeToBottom();
+    }, 48);
+  };
+  branch.messages.push(userMessage);
+  branch.messages.push(assistantMessage);
   branch.error = '';
   branch.collapsed = false;
   state.branchRequests.add(requestKey);
+  state.branchControllers.set(requestKey, controller);
   persistActiveConversation();
   renderAssistantBranches(messageId);
   try {
-    const result = await api('/api/branch-query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const result = await streamApi('/api/branch-query/stream', {
+      signal: controller.signal,
+      payload: {
         source_message_id: messageId,
         source_answer: String(entry.content || '').slice(0, MAX_QUOTE_SOURCE_CHARS),
         selected_fragments: branch.selected_fragments,
         question: trimmedQuestion,
         messages: priorMessages,
-      }),
+      },
+      onEvent(event) {
+        if (!isCurrentBranchRequest() || event.type !== 'delta') return;
+        const delta = String(event.data?.text || '');
+        if (!delta) return;
+        receivedDelta = true;
+        assistantMessage.content += delta;
+        scheduleBranchRender();
+      },
     });
-    if (!authContextMatches(authContext)) return;
-    branch.messages.push({ role: 'assistant', content: String(result.answer || '') });
+    if (!isCurrentBranchRequest()) return;
+    assistantMessage.content = String(result.answer || '');
+    assistantMessage.requestFailed = false;
+    branch.error = '';
   } catch (error) {
+    if (isStreamAbort(error)) {
+      if (authContextMatches(authContext)) {
+        const assistantIndex = branch.messages.indexOf(assistantMessage);
+        if (assistantIndex >= 0) branch.messages.splice(assistantIndex, 1);
+        const userIndex = branch.messages.indexOf(userMessage);
+        if (userIndex >= 0) branch.messages.splice(userIndex, 1);
+        branch.error = '';
+      }
+      return;
+    }
     if (!authContextMatches(authContext)) return;
-    branch.error = `请求失败：${String(error.message || '未知错误').slice(0, 300)}`;
+    const message = makeStreamErrorMessage(error).slice(0, 300);
+    if (receivedDelta || assistantMessage.content.trim()) {
+      assistantMessage.requestFailed = true;
+      branch.error = `${message}；上方回答未完成。`;
+    } else {
+      branch.messages = branch.messages.filter(messageEntry => messageEntry !== assistantMessage);
+      branch.error = message;
+    }
   } finally {
-    state.branchRequests.delete(requestKey);
+    window.clearTimeout(renderTimer);
+    if (state.branchControllers.get(requestKey) === controller) {
+      state.branchControllers.delete(requestKey);
+      state.branchRequests.delete(requestKey);
+    }
     if (authContextMatches(authContext)) {
       persistActiveConversation();
       renderAssistantBranches(messageId);
@@ -3699,7 +3848,8 @@ function conversationMessageForApi(entry) {
 }
 
 async function query(question, mode, prefix) {
-  if (state.isQuerying || !question.trim()) return;
+  if (!question.trim()) return;
+  if (state.isQuerying) cancelActiveStreams('new-query');
   if (!state.user) {
     toast('请先选择身份', 'error');
     return;
@@ -3726,6 +3876,12 @@ async function query(question, mode, prefix) {
   setLoading(true);
   const isFirstHomeQuestion = isHome && state.homeConversation.length === 0;
   const requestId = ++state.queryRequestId;
+  const authContext = captureAuthContext();
+  const controller = new AbortController();
+  state.activeQueryController = controller;
+  const isCurrentRequest = () => requestId === state.queryRequestId
+    && authContextMatches(authContext)
+    && state.activeQueryController === controller;
 
   let ctx;
   const contextReferences = isHome
@@ -3747,10 +3903,15 @@ async function query(question, mode, prefix) {
     $(`#${prefix}-answer-area`).classList.remove('hidden');
   }
   const textEl = ctx.textEl;
+  let streamedText = '';
+  let receivedDelta = false;
+  const incrementalRenderer = createIncrementalRenderer(textEl, {
+    onRender: () => { if (isHome) scrollHomeToBottom(); },
+  });
 
   let waitingMessageTimer = null;
   waitingMessageTimer = setTimeout(() => {
-    if (requestId === state.queryRequestId && textEl.innerHTML.includes('思考中')) {
+    if (isCurrentRequest() && textEl.innerHTML.includes('思考中')) {
       textEl.innerHTML = '<p class="muted">仍在思考，请稍候…</p>';
     }
   }, 8000);
@@ -3789,22 +3950,28 @@ async function query(question, mode, prefix) {
           model: state.currentModel || null,
           reasoning_effort: state.currentReasoningEffort || null,
         };
-    const result = await api('/api/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+    const result = await streamApi('/api/query/stream', {
+      payload,
+      signal: controller.signal,
+      onEvent(event) {
+        if (!isCurrentRequest()) return;
+        if (event.type === 'start') {
+          if (ctx.modeEl) {
+            ctx.modeEl.textContent = mode === 'retrieval' ? '检索完成，正在生成' : '正在生成';
+          }
+          return;
+        }
+        if (event.type !== 'delta') return;
+        const delta = String(event.data?.text || '');
+        if (!delta) return;
+        receivedDelta = true;
+        streamedText += delta;
+        clearTimeout(waitingMessageTimer);
+        incrementalRenderer.update(streamedText);
+      },
     });
-    if (requestId !== state.queryRequestId) return;
-    if (result.model) {
-      state.currentModel = result.model;
-      state.modelName = result.model;
-      updateHomeModelLabel();
-    }
-    if (result.usage) {
-      state.currentUsage = normalizeUsage(result.usage);
-      state.usagePending = false;
-      renderContextMeter();
-    }
+    if (!isCurrentRequest()) return;
+    applyUsageFromResult(result);
     if (isHome) {
       renderHomeAnswer(result, mode, ctx);
       if (state.activeHistoryId === null) addHistory(question, result.answer);
@@ -3813,17 +3980,25 @@ async function query(question, mode, prefix) {
       renderAnswer(result, mode, prefix);
     }
   } catch (error) {
-    if (requestId !== state.queryRequestId) return;
-    textEl.innerHTML = `<p class="math-render-error">请求失败：${escapeHtml(error.message)}</p>`;
+    if (isStreamAbort(error) || !isCurrentRequest()) return;
+    const message = makeStreamErrorMessage(error);
+    const partialText = streamedText.trim();
+    if (partialText) {
+      incrementalRenderer.update(partialText, { immediate: true });
+      textEl.insertAdjacentHTML('beforeend', `<p class="math-render-error">${escapeHtml(message)}；已保留上方未完成内容。</p>`);
+      renderMath(textEl);
+    } else {
+      textEl.innerHTML = `<p class="math-render-error">${escapeHtml(message)}</p>`;
+    }
     if (isHome) {
-      restoreReferencesToBasket(contextReferences);
+      if (!receivedDelta) restoreReferencesToBasket(contextReferences);
       const failedUserEntry = state.homeConversation[state.homeConversation.length - 1];
       if (failedUserEntry?.role === 'user') failedUserEntry.requestFailed = true;
       const errorText = String(error.message || '未知错误').slice(0, 200);
       state.homeConversation.push({
         role: 'assistant',
         messageId: ctx.messageId,
-        content: `(请求失败：${errorText})`,
+        content: partialText || `(请求失败：${errorText})`,
         mode,
         citations: [],
         branches: [],
@@ -3833,6 +4008,8 @@ async function query(question, mode, prefix) {
     }
   } finally {
     clearTimeout(waitingMessageTimer);
+    incrementalRenderer.clear();
+    if (state.activeQueryController === controller) state.activeQueryController = null;
     if (requestId === state.queryRequestId) setLoading(false);
   }
 }
@@ -4224,21 +4401,30 @@ function appendHomeMessageBubble(entry) {
     return;
   }
   if (entry.role === 'assistant') {
+    const failed = Boolean(entry.requestFailed);
     const row = document.createElement('div');
-    row.className = 'chat-row chat-row-assistant';
+    row.className = `chat-row chat-row-assistant${failed ? ' chat-row-incomplete' : ''}`;
     row.dataset.messageId = entry.messageId || createClientId('message');
     const meta = document.createElement('div');
-    meta.className = 'chat-meta';
-    meta.textContent = entry.mode === 'retrieval' ? '资料回答' : '直接回答';
+    meta.className = `chat-meta${failed ? ' warn' : ''}`;
+    meta.textContent = failed ? '回答未完成' : (entry.mode === 'retrieval' ? '资料回答' : '直接回答');
     const bubble = document.createElement('div');
-    bubble.className = 'chat-bubble-assistant';
+    bubble.className = `chat-bubble-assistant${failed ? ' chat-bubble-incomplete' : ''}`;
     bubble.innerHTML = renderMarkdown(entry.content || '');
     renderMath(bubble);
-    const citations = Array.isArray(entry.citations) ? entry.citations : [];
-    decorateCitationMarkers(bubble);
-    wireCitationButtons(bubble, citations);
+    const citations = failed ? [] : (Array.isArray(entry.citations) ? entry.citations : []);
+    if (!failed) {
+      decorateCitationMarkers(bubble);
+      wireCitationButtons(bubble, citations);
+    }
     row.appendChild(meta);
     row.appendChild(bubble);
+    if (failed) {
+      const status = document.createElement('div');
+      status.className = 'chat-answer-status math-render-error';
+      status.textContent = '该回答未完成，不会作为后续上下文使用，也不能被引用或开启独立分支。';
+      row.appendChild(status);
+    }
     if (citations.length) {
       const section = document.createElement('div');
       section.className = 'chat-citation citation-section';
@@ -4254,7 +4440,7 @@ function appendHomeMessageBubble(entry) {
       wireCitationButtons(section, citations);
       row.appendChild(section);
     }
-    renderBranchPanels(row, entry);
+    if (!failed) renderBranchPanels(row, entry);
     convo.appendChild(row);
   }
 }
@@ -5982,6 +6168,7 @@ function initEventListeners() {
     }
   });
   window.addEventListener('pagehide', () => {
+    cancelActiveStreams('pagehide');
     closeAvatarCropModal({ restoreFocus: false });
     resetHomeAgentAvatar();
   });

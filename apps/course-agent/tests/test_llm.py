@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 import httpx
 
 from course_agent.config import Settings
-from course_agent.llm import LLMAdapter
+from course_agent.llm import LLMAdapter, LLMStreamComplete, LLMStreamDelta, LLMStreamError
 from course_agent.retrieval import SearchResult
 
 
@@ -400,3 +403,192 @@ def test_direct_mode_forwards_model_reasoning_and_normalizes_usage(monkeypatch, 
         "context_usage_percent": 1.61,
         "context_window_source": "registry",
     }
+
+
+def _stream_response(payloads: list[dict]) -> bytes:
+    chunks: list[bytes] = []
+    for payload in payloads:
+        chunks.append(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode())
+    return b"".join(chunks)
+
+
+def test_stream_direct_parses_responses_sse_deltas_and_completed(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://example.invalid",
+        llm_model="test-model",
+    )
+    original_async_client = httpx.AsyncClient
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://example.invalid/responses"
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        return httpx.Response(
+            200,
+            content=_stream_response(
+                [
+                    {"type": "response.output_text.delta", "delta": "第一段"},
+                    {"type": "response.output_text.delta", "delta": "第二段"},
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "model": "test-model",
+                            "output_text": "第一段第二段",
+                            "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+                        },
+                    },
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.llm.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(_collect_stream(LLMAdapter(settings).stream_direct("测试流式")))
+
+    assert [event.text for event in events if isinstance(event, LLMStreamDelta)] == ["第一段", "第二段"]
+    complete = next(event for event in events if isinstance(event, LLMStreamComplete))
+    assert complete.result.answer == "第一段第二段"
+    assert complete.result.degraded is False
+
+
+def test_stream_http_error_reads_body_and_redacts_credentials(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-secret-key",
+        llm_base_url="https://example.invalid",
+        llm_model="test-model",
+    )
+    original_async_client = httpx.AsyncClient
+
+    def upstream(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={"error": {"message": "temporary failure; Bearer test-secret-key"}},
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.llm.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(_collect_stream(LLMAdapter(settings).stream_direct("测试错误")))
+
+    complete = next(event for event in events if isinstance(event, LLMStreamComplete))
+    assert complete.result.degraded is True
+    assert complete.result.error_code == "llm_http_503"
+    assert complete.result.error_message == "temporary failure; Bearer [REDACTED]"
+
+
+def test_stream_network_error_does_not_expose_model_endpoint(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://private-model.example.invalid",
+        llm_model="test-model",
+    )
+    original_async_client = httpx.AsyncClient
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            "failed to connect to private-model.example.invalid",
+            request=request,
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.llm.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(_collect_stream(LLMAdapter(settings).stream_direct("测试网络错误")))
+
+    complete = next(event for event in events if isinstance(event, LLMStreamComplete))
+    assert complete.result.degraded is True
+    assert complete.result.error_code == "llm_network_error"
+    assert complete.result.error_message == "模型服务请求失败。"
+    assert "private-model.example.invalid" not in repr(complete.result)
+
+
+def test_stream_top_level_error_event_uses_official_code_and_message(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-secret-key",
+        llm_base_url="https://example.invalid",
+        llm_model="test-model",
+    )
+    original_async_client = httpx.AsyncClient
+
+    def upstream(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_stream_response(
+                [
+                    {
+                        "type": "error",
+                        "code": "rate-limit.exceeded",
+                        "message": "slow down; Bearer test-secret-key",
+                    }
+                ]
+            ),
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.llm.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(_collect_stream(LLMAdapter(settings).stream_direct("测试顶层错误")))
+
+    complete = next(event for event in events if isinstance(event, LLMStreamComplete))
+    assert complete.result.degraded is True
+    assert complete.result.error_code == "rate_limit_exceeded"
+    assert complete.result.error_message == "slow down; Bearer [REDACTED]"
+
+
+def test_stream_unexpected_eof_after_delta_returns_partial_error(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://example.invalid",
+        llm_model="test-model",
+    )
+    original_async_client = httpx.AsyncClient
+
+    def upstream(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=_stream_response(
+                [{"type": "response.output_text.delta", "delta": "partial text"}]
+            ),
+        )
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.llm.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(_collect_stream(LLMAdapter(settings).stream_direct("测试 EOF")))
+
+    assert isinstance(events[0], LLMStreamDelta)
+    assert events[0].text == "partial text"
+    assert isinstance(events[1], LLMStreamError)
+    assert events[1].code == "llm_stream_incomplete"
+    assert events[1].partial is True
+
+
+async def _collect_stream(stream):
+    return [event async for event in stream]

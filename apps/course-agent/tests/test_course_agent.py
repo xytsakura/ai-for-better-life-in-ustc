@@ -35,6 +35,21 @@ def login(client: TestClient, user_id: str) -> None:
     assert response.status_code == 200
 
 
+def parse_sse_events(text: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    for block in text.replace("\r\n", "\n").strip().split("\n\n"):
+        event_name = "message"
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event_name = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].strip())
+        if data_lines:
+            events.append((event_name, json.loads("\n".join(data_lines))))
+    return events
+
+
 def upload_pdf(client: TestClient, tmp_path: Path, space_id: str, name: str, text: str) -> str:
     source = tmp_path / name
     make_pdf(source, text)
@@ -272,7 +287,7 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
     assert '/assets/styles.css?v=markdown-table-v3' in html
-    assert '/assets/app.js?v=quote-branches-v1' in html
+    assert '/assets/app.js?v=course-streaming-v1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -502,10 +517,14 @@ def test_quote_basket_and_branch_frontend_guards_are_packaged(tmp_path: Path):
     assert ".map(conversationMessageForApi).filter(Boolean)" in script
     assert "context_references: contextReferences" in script
     assert "const authContext = captureAuthContext();" in script
+    assert "!sourceEntry || sourceEntry.requestFailed" in script
+    assert "该回答未完成，不会作为后续上下文使用" in script
+    assert "if (!failed) renderBranchPanels(row, entry);" in script
+    assert "state.currentUsage = result?.usage ? normalizeUsage(result.usage) : null;" in script
     branch_submit = script.split("async function submitBranchQuestion(", 1)[1].split(
         "function handleConversationBranchClick(", 1
     )[0]
-    assert branch_submit.count("authContextMatches(authContext)") == 3
+    assert branch_submit.count("authContextMatches(authContext)") >= 3
     assert "persistActiveConversation();" in branch_submit
     assert ".quote-selection-toolbar" in styles
     assert ".home-reference-chip" in styles
@@ -578,6 +597,35 @@ def test_direct_mode_is_default_and_skips_search(monkeypatch, tmp_path: Path):
     assert "瀚海行 Agent" in (adapter.last_direct_system or "")
     assert "语气亲和" in (adapter.last_direct_system or "")
     assert "适中篇幅" in (adapter.last_direct_system or "")
+
+
+def test_direct_query_stream_returns_start_delta_and_complete(monkeypatch, tmp_path: Path):
+    client, adapter = make_client(tmp_path)
+    adapter.stream_chunks = ["第一", "第二"]
+    login(client, "demo-a")
+
+    def fail_search(*_: object, **__: object) -> None:
+        raise AssertionError("direct stream must not call search")
+
+    monkeypatch.setattr("course_agent.main.search", fail_search)
+    response = client.post(
+        "/api/query/stream",
+        json={"question": "Explain uniform convergence."},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = parse_sse_events(response.text)
+    assert [event for event, _ in events] == ["start", "delta", "delta", "complete"]
+    assert events[0][1] == {"mode": "direct", "scope": "general", "retrieval_count": 0}
+    assert [data["text"] for event, data in events if event == "delta"] == ["第一", "第二"]
+    complete = events[-1][1]
+    assert complete["mode"] == "direct"
+    assert complete["scope"] == "general"
+    assert complete["answer"]
+    assert complete["citations"] == []
+    assert adapter.direct_calls == 1
+    assert adapter.retrieval_calls == 0
 
 
 def test_direct_query_forwards_structured_references_as_untrusted_context(tmp_path: Path):
@@ -723,6 +771,36 @@ def test_retrieval_query_keeps_chat_references_separate_from_knowledge_evidence(
     assert "不得作为事实依据" in (adapter.last_retrieval_system or "")
 
 
+def test_retrieval_query_stream_checks_space_permission_before_model_call(tmp_path: Path):
+    client, adapter = make_client(tmp_path)
+    login(client, "demo-a")
+    personal = personal_space(client)
+    document_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "private-stream.pdf",
+        "Private stream permission marker.",
+    )
+
+    login(client, "demo-b")
+    response = client.post(
+        "/api/query/stream",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": personal["id"],
+            "question": "Should not reach the model",
+            "document_ids": [document_id],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert adapter.direct_calls == 0
+    assert adapter.retrieval_calls == 0
+
+
 def test_branch_query_is_direct_uses_fixed_server_model_and_never_searches(
     monkeypatch, tmp_path: Path
 ):
@@ -774,6 +852,43 @@ def test_branch_query_is_direct_uses_fixed_server_model_and_never_searches(
     assert context["selected_fragments"] == ["第一处", "第二处"]
 
 
+def test_branch_query_stream_uses_fixed_server_model_and_sse_events(tmp_path: Path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        session_secret="test-secret",
+        llm_model="less-expensive-main-model",
+        branch_llm_model="gpt-5.6-sol",
+    )
+    adapter = FakeLLMAdapter(settings)
+    adapter.stream_chunks = ["分支", "回答"]
+    client = TestClient(create_app(settings, adapter))
+    login(client, "demo-a")
+
+    response = client.post(
+        "/api/branch-query/stream",
+        json={
+            "source_message_id": "message-1",
+            "source_answer": "原回答完整内容。",
+            "selected_fragments": ["第一处", "第二处"],
+            "question": "这两处有什么关系？",
+        },
+    )
+
+    assert response.status_code == 200
+    events = parse_sse_events(response.text)
+    assert [event for event, _ in events] == ["start", "delta", "delta", "complete"]
+    assert events[0][1] == {"mode": "branch", "scope": "general", "retrieval_count": 0}
+    assert [data["text"] for event, data in events if event == "delta"] == ["分支", "回答"]
+    complete = events[-1][1]
+    assert complete["mode"] == "branch"
+    assert complete["model"] == "gpt-5.6-sol"
+    assert complete["retrieval_count"] == 0
+    assert complete["citations"] == []
+    assert adapter.direct_calls == 1
+    assert adapter.retrieval_calls == 0
+    assert adapter.last_direct_model == "gpt-5.6-sol"
+
+
 def test_branch_query_rejects_model_provider_retrieval_and_oversized_inputs(tmp_path: Path):
     client, adapter = make_client(tmp_path)
     login(client, "demo-a")
@@ -791,8 +906,9 @@ def test_branch_query_rejects_model_provider_retrieval_and_oversized_inputs(tmp_
         {"mode": "retrieval"},
         {"document_ids": ["secret-document"]},
     ):
-        response = client.post("/api/branch-query", json={**base, **forbidden})
-        assert response.status_code == 422
+        for endpoint in ("/api/branch-query", "/api/branch-query/stream"):
+            response = client.post(endpoint, json={**base, **forbidden})
+            assert response.status_code == 422
 
     assert client.post(
         "/api/branch-query",

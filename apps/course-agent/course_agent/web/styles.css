@@ -2824,6 +2824,8 @@ body.document-reader-open .library-chat { display: none; }
   color: var(--text-primary);
 }
 .math-render-error { color: var(--danger); font-family: var(--mono); }
+.chat-row-incomplete .chat-bubble-incomplete { opacity: 0.78; }
+.chat-answer-status { margin-top: 6px; font-size: 0.76rem; }
 
 /* ---------- Modal ---------- */
 .modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }

@@ -6,15 +6,16 @@ import tempfile
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
-from typing import Any, Iterator, Literal, Optional
+from typing import Any, AsyncIterator, Iterator, Literal, Optional
 
 import fitz
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.middleware.sessions import SessionMiddleware
@@ -35,7 +36,7 @@ from .ingestion import (
     reparse_document,
     write_prepared_pdf_ingestion,
 )
-from .llm import LLMAdapter
+from .llm import LLMAdapter, LLMResult, LLMStreamComplete, LLMStreamDelta, LLMStreamError
 from .model_catalog import (
     ModelCatalog,
     ModelCatalogError,
@@ -238,6 +239,32 @@ class BranchQueryRequest(BaseModel):
             raise ValueError("分支历史总长度超过限制")
         self.selected_fragments = fragments
         return self
+
+
+@dataclass(frozen=True)
+class PreparedQuery:
+    mode: Literal["direct", "retrieval"]
+    scope: Literal["general", "knowledge_base"]
+    question: str
+    history: list[dict]
+    system: str
+    preference_context: str | None
+    reference_context: str | None
+    selected_model: str
+    selected_reasoning: str | None
+    retrieval_results: list[SearchResult]
+    retrieval_count: int
+    source_map: dict[str, dict]
+    space_id: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedBranchQuery:
+    question: str
+    history: list[dict]
+    system: str
+    reference_context: str
+    model: str
 
 
 class SettingsUpdate(BaseModel):
@@ -1985,8 +2012,32 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             ),
         }
 
-    @app.post("/api/query")
-    def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
+    def _citations_for_result(result: LLMResult, source_map: dict[str, dict]) -> list[dict]:
+        citation_ids = result.citation_ids or ([] if not result.degraded else list(source_map))
+        return [source_map[item] for item in citation_ids if item in source_map]
+
+    def _model_error_for_result(result: LLMResult) -> dict[str, str | None] | None:
+        if not result.error_code:
+            return None
+        return {"code": result.error_code, "message": result.error_message}
+
+    def _query_result_payload(prepared: PreparedQuery, result: LLMResult) -> dict:
+        payload = {
+            "answer": result.answer,
+            "mode": prepared.mode,
+            "scope": prepared.scope,
+            "degraded": result.degraded,
+            "model": result.model,
+            "usage": result.usage.as_dict() if result.usage else None,
+            "retrieval_count": prepared.retrieval_count,
+            "citations": _citations_for_result(result, prepared.source_map),
+            "model_error": _model_error_for_result(result),
+        }
+        if prepared.space_id:
+            payload["space_id"] = prepared.space_id
+        return payload
+
+    def prepare_query(payload: QueryRequest, user_id: str) -> PreparedQuery:
         history = [m.model_dump() for m in payload.messages]
         reference_context = _serialize_context_references(payload.context_references)
         selected_model, selected_reasoning = validate_query_model(payload)
@@ -2000,30 +2051,20 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             system = _general_direct_prompt(payload.assistant_preferences)
             if reference_context:
                 system = f"{system}\n{_quoted_reference_system_rule(retrieval=False)}"
-            llm_result = app.state.llm.generate_direct(
-                payload.question,
+            return PreparedQuery(
+                mode="direct",
+                scope="general",
+                question=payload.question,
                 history=history,
                 system=system,
                 preference_context=_assistant_custom_preference(payload.assistant_preferences),
                 reference_context=reference_context,
-                model=selected_model,
-                reasoning_effort=selected_reasoning,
+                selected_model=selected_model,
+                selected_reasoning=selected_reasoning,
+                retrieval_results=[],
+                retrieval_count=0,
+                source_map={},
             )
-            return {
-                "answer": llm_result.answer,
-                "mode": "direct",
-                "scope": "general",
-                "degraded": llm_result.degraded,
-                "model": llm_result.model,
-                "usage": llm_result.usage.as_dict() if llm_result.usage else None,
-                "retrieval_count": 0,
-                "citations": [],
-                "model_error": (
-                    {"code": llm_result.error_code, "message": llm_result.error_message}
-                    if llm_result.error_code
-                    else None
-                ),
-            }
 
         if scope != "knowledge_base":
             raise HTTPException(
@@ -2035,7 +2076,6 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 status_code=422,
                 detail=_error("missing_space_id", "请先选择一个知识库空间再提问"),
             )
-
         document_ids = _clean_document_ids(payload.document_ids)
         if not document_ids:
             raise HTTPException(
@@ -2061,45 +2101,205 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         )
         if reference_context:
             system = f"{system}\n{_quoted_reference_system_rule(retrieval=True)}"
-        llm_result = app.state.llm.generate(
-            payload.question,
-            results,
+        source_map = {item.citation_id: item.as_dict() for item in results}
+        return PreparedQuery(
+            mode="retrieval",
+            scope="knowledge_base",
+            space_id=payload.space_id,
+            question=payload.question,
             history=history,
             system=system,
             preference_context=_assistant_custom_preference(payload.assistant_preferences),
             reference_context=reference_context,
-            model=selected_model,
-            reasoning_effort=selected_reasoning,
+            selected_model=selected_model,
+            selected_reasoning=selected_reasoning,
+            retrieval_results=results,
+            retrieval_count=len(results),
+            source_map=source_map,
         )
-        source_map = {item.citation_id: item.as_dict() for item in results}
-        citation_ids = llm_result.citation_ids or ([] if not llm_result.degraded else list(source_map))
-        citations = [source_map[item] for item in citation_ids if item in source_map]
-        return {
-            "answer": llm_result.answer,
-            "mode": "retrieval",
-            "scope": "knowledge_base",
-            "space_id": payload.space_id,
-            "degraded": llm_result.degraded,
-            "model": llm_result.model,
-            "usage": llm_result.usage.as_dict() if llm_result.usage else None,
-            "retrieval_count": len(results),
-            "citations": citations,
-            "model_error": (
-                {"code": llm_result.error_code, "message": llm_result.error_message}
-                if llm_result.error_code
-                else None
-            ),
-        }
 
-    @app.post("/api/branch-query")
-    def branch_query(payload: BranchQueryRequest, user_id: str = Depends(current_user)) -> dict:
+    def prepare_branch_query(payload: BranchQueryRequest) -> PreparedBranchQuery:
         branch_model = (app.state.settings.branch_llm_model or "gpt-5.6-sol").strip()
-        llm_result = app.state.llm.generate_direct(
-            payload.question,
+        return PreparedBranchQuery(
+            question=payload.question,
             history=[message.model_dump() for message in payload.messages],
             system=_branch_system_prompt(),
             reference_context=_serialize_branch_reference(payload),
             model=branch_model,
+        )
+
+    def _sse(event: str, data: dict) -> bytes:
+        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+
+    def _sse_headers() -> dict[str, str]:
+        return {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+
+    def _stream_error_payload(event: LLMStreamError) -> dict:
+        return {
+            "code": event.code,
+            "message": event.message,
+            "retryable": event.retryable,
+            "partial": event.partial,
+        }
+
+    async def _query_sse_events(
+        request: Request,
+        prepared: PreparedQuery,
+    ) -> AsyncIterator[bytes]:
+        yield _sse(
+            "start",
+            {
+                "mode": prepared.mode,
+                "scope": prepared.scope,
+                "retrieval_count": prepared.retrieval_count,
+            },
+        )
+        stream = (
+            app.state.llm.stream_direct(
+                prepared.question,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+            if prepared.mode == "direct"
+            else app.state.llm.stream(
+                prepared.question,
+                prepared.retrieval_results,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+        )
+        try:
+            async for event in stream:
+                if await request.is_disconnected():
+                    break
+                if isinstance(event, LLMStreamDelta):
+                    yield _sse("delta", {"text": event.text})
+                elif isinstance(event, LLMStreamComplete):
+                    yield _sse("complete", _query_result_payload(prepared, event.result))
+                    break
+                elif isinstance(event, LLMStreamError):
+                    yield _sse("error", _stream_error_payload(event))
+                    break
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close:
+                await close()
+
+    async def _branch_sse_events(
+        request: Request,
+        prepared: PreparedBranchQuery,
+    ) -> AsyncIterator[bytes]:
+        yield _sse("start", {"mode": "branch", "scope": "general", "retrieval_count": 0})
+        stream = app.state.llm.stream_direct(
+            prepared.question,
+            history=prepared.history,
+            system=prepared.system,
+            reference_context=prepared.reference_context,
+            model=prepared.model,
+        )
+        try:
+            async for event in stream:
+                if await request.is_disconnected():
+                    break
+                if isinstance(event, LLMStreamDelta):
+                    yield _sse("delta", {"text": event.text})
+                elif isinstance(event, LLMStreamComplete):
+                    if event.result.degraded:
+                        code = event.result.error_code or "branch_model_unavailable"
+                        yield _sse(
+                            "error",
+                            {
+                                "code": code,
+                                "message": "GPT-5.6 独立分支暂不可用，请检查服务端模型配置后重试",
+                                "retryable": code not in {"llm_not_configured", "llm_http_401", "llm_http_403"},
+                                "partial": False,
+                            },
+                        )
+                    else:
+                        yield _sse(
+                            "complete",
+                            {
+                                "answer": event.result.answer,
+                                "mode": "branch",
+                                "scope": "general",
+                                "degraded": False,
+                                "model": event.result.model,
+                                "usage": event.result.usage.as_dict() if event.result.usage else None,
+                                "retrieval_count": 0,
+                                "citations": [],
+                                "model_error": None,
+                            },
+                        )
+                    break
+                elif isinstance(event, LLMStreamError):
+                    yield _sse("error", _stream_error_payload(event))
+                    break
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close:
+                await close()
+
+    @app.post("/api/query")
+    def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
+        prepared = prepare_query(payload, user_id)
+        if prepared.mode == "direct":
+            llm_result = app.state.llm.generate_direct(
+                prepared.question,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+        else:
+            llm_result = app.state.llm.generate(
+                prepared.question,
+                prepared.retrieval_results,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+        return _query_result_payload(prepared, llm_result)
+
+    @app.post("/api/query/stream")
+    def query_stream(
+        payload: QueryRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> StreamingResponse:
+        prepared = prepare_query(payload, user_id)
+        return StreamingResponse(
+            _query_sse_events(request, prepared),
+            media_type="text/event-stream; charset=utf-8",
+            headers=_sse_headers(),
+        )
+
+    @app.post("/api/branch-query")
+    def branch_query(payload: BranchQueryRequest, user_id: str = Depends(current_user)) -> dict:
+        prepared = prepare_branch_query(payload)
+        llm_result = app.state.llm.generate_direct(
+            prepared.question,
+            history=prepared.history,
+            system=prepared.system,
+            reference_context=prepared.reference_context,
+            model=prepared.model,
         )
         if llm_result.degraded:
             code = llm_result.error_code or "branch_model_unavailable"
@@ -2123,6 +2323,19 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "citations": [],
             "model_error": None,
         }
+
+    @app.post("/api/branch-query/stream")
+    def branch_query_stream(
+        payload: BranchQueryRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> StreamingResponse:
+        prepared = prepare_branch_query(payload)
+        return StreamingResponse(
+            _branch_sse_events(request, prepared),
+            media_type="text/event-stream; charset=utf-8",
+            headers=_sse_headers(),
+        )
 
     @app.get("/", response_class=FileResponse)
     def index() -> Path:
