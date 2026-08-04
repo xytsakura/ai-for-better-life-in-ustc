@@ -72,6 +72,17 @@ class DocumentMetadata:
     source_type: str = "team-material"
 
 
+@dataclass(frozen=True)
+class PreparedPdfIngestion:
+    document_id: str
+    revision_id: str
+    source_id: str
+    stored_path: Path
+    content_hash: str
+    parse_output: ParseOutput
+    copy_to_uploads: bool
+
+
 # ---- Utilities --------------------------------------------------------
 
 def file_sha256(path: Path) -> str:
@@ -260,27 +271,38 @@ def _write_ingestion_records(
     parse_output: ParseOutput,
     copy_to_uploads: bool,
     revision_id: str,
+    *,
+    document_status: str = "active",
+    source_access_mode: str = "private-team-use",
+    manage_transaction: bool = True,
 ) -> None:
     """Write all ingestion records inside a single transaction."""
     page_rows, chunk_rows, counts = parse_output.as_db_rows()
     parse_status = "ready" if counts["text_ok"] else "needs_ocr"
-    conn.execute("BEGIN")
+    if manage_transaction:
+        conn.execute("BEGIN")
     try:
         conn.execute(
             """INSERT INTO sources
                (id, source_type, source_url, license_status, access_mode)
-               VALUES (?, ?, ?, ?, 'private-team-use')""",
-            (source_id, metadata.source_type, metadata.source_url, metadata.license_status),
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                source_id,
+                metadata.source_type,
+                metadata.source_url,
+                metadata.license_status,
+                source_access_mode,
+            ),
         )
         conn.execute(
             """INSERT INTO documents
                (id, space_id, source_id, title, course, semester, material_type,
                 file_path, is_repo_source, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 document_id, space_id, source_id, metadata.title, metadata.course,
                 metadata.semester, metadata.material_type, str(stored_path),
-                0 if copy_to_uploads else 1,
+                0 if copy_to_uploads else 1, document_status,
             ),
         )
         conn.execute(
@@ -307,10 +329,76 @@ def _write_ingestion_records(
             chunk_rows,
         )
         _default_index_writer.write_chunks(conn, chunk_rows)
-        conn.commit()
+        if manage_transaction:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if manage_transaction:
+            conn.rollback()
         raise
+
+
+def prepare_pdf_ingestion(
+    settings: Settings,
+    path: Path,
+    *,
+    document_id: str | None = None,
+    revision_id: str | None = None,
+    source_id: str | None = None,
+    copy_to_uploads: bool = False,
+) -> PreparedPdfIngestion:
+    """Validate, optionally copy, parse, and return records ready for one DB transaction."""
+    path = path.resolve()
+    _default_parser.validate(path, settings.max_upload_bytes)
+    content_hash = file_sha256(path)
+    document_id = document_id or str(uuid.uuid4())
+    revision_id = revision_id or str(uuid.uuid4())
+    source_id = source_id or str(uuid.uuid4())
+    stored_path = path
+    if copy_to_uploads:
+        stored_path = settings.uploads_dir / f"{document_id}{path.suffix.lower() or '.pdf'}"
+        shutil.copy2(path, stored_path)
+    try:
+        parse_output = _default_parser.extract(stored_path, revision_id)
+    except Exception as exc:
+        if copy_to_uploads and stored_path.exists():
+            stored_path.unlink(missing_ok=True)
+        raise IngestionError(f"PDF parse failed: {exc}") from exc
+    return PreparedPdfIngestion(
+        document_id=document_id,
+        revision_id=revision_id,
+        source_id=source_id,
+        stored_path=stored_path,
+        content_hash=content_hash,
+        parse_output=parse_output,
+        copy_to_uploads=copy_to_uploads,
+    )
+
+
+def write_prepared_pdf_ingestion(
+    conn: sqlite3.Connection,
+    metadata: DocumentMetadata,
+    space_id: str,
+    prepared: PreparedPdfIngestion,
+    *,
+    document_status: str = "active",
+    source_access_mode: str = "private-team-use",
+    manage_transaction: bool = True,
+) -> None:
+    _write_ingestion_records(
+        conn,
+        metadata,
+        prepared.document_id,
+        prepared.source_id,
+        space_id,
+        prepared.stored_path,
+        prepared.content_hash,
+        prepared.parse_output,
+        prepared.copy_to_uploads,
+        prepared.revision_id,
+        document_status=document_status,
+        source_access_mode=source_access_mode,
+        manage_transaction=manage_transaction,
+    )
 
 
 def ingest_pdf(
@@ -330,32 +418,19 @@ def ingest_pdf(
     if duplicate:
         raise DuplicateDocument(duplicate)
 
-    document_id = str(uuid.uuid4())
-    revision_id = str(uuid.uuid4())
-    source_id = str(uuid.uuid4())
-    stored_path = path
-    if copy_to_uploads:
-        stored_path = settings.uploads_dir / f"{document_id}.pdf"
-        shutil.copy2(path, stored_path)
-
     try:
-        parse_output = _default_parser.extract(stored_path, revision_id)
-    except Exception as exc:
-        if copy_to_uploads and stored_path.exists():
-            stored_path.unlink(missing_ok=True)
-        raise IngestionError(f"PDF parse failed: {exc}") from exc
-
-    try:
-        _write_ingestion_records(
-            conn, metadata, document_id, source_id, space_id, stored_path,
-            content_hash, parse_output, copy_to_uploads, revision_id,
+        prepared = prepare_pdf_ingestion(
+            settings,
+            path,
+            copy_to_uploads=copy_to_uploads,
         )
+        write_prepared_pdf_ingestion(conn, metadata, space_id, prepared)
     except Exception:
-        if copy_to_uploads and stored_path.exists():
-            stored_path.unlink(missing_ok=True)
+        if "prepared" in locals() and copy_to_uploads and prepared.stored_path.exists():
+            prepared.stored_path.unlink(missing_ok=True)
         raise
 
-    return document_details(conn, document_id)
+    return document_details(conn, prepared.document_id)
 
 
 def document_details(conn: sqlite3.Connection, document_id: str) -> dict:

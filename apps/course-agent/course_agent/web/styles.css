@@ -1930,6 +1930,304 @@ body.document-reader-open .library-chat { display: none; }
 }
 .icon-button:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+/* ---------- Marketplace ---------- */
+.view-marketplace {
+  padding: 28px 34px 40px;
+  background: var(--bg-1);
+}
+
+.marketplace-page {
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto;
+}
+
+.marketplace-header,
+.marketplace-toolbar,
+.marketplace-panel-title,
+.marketplace-card-header,
+.marketplace-detail-header,
+.publication-documents-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.marketplace-header { margin-bottom: 20px; }
+.marketplace-header h1 {
+  margin: 2px 0 6px;
+  font-size: 1.55rem;
+  line-height: 1.25;
+}
+.marketplace-header p,
+.marketplace-card p,
+.marketplace-detail p {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.marketplace-toolbar {
+  align-items: end;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+}
+.marketplace-search-field { flex: 1 1 320px; }
+.marketplace-course-field { flex: 0 1 240px; }
+
+.marketplace-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border-1);
+}
+.marketplace-tab {
+  min-height: 42px;
+  padding: 0 14px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-tertiary);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.marketplace-tab:hover { color: var(--text-primary); }
+.marketplace-tab.active {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.marketplace-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 540px;
+}
+
+.marketplace-list-panel,
+.marketplace-detail-panel,
+.marketplace-my-panel {
+  min-width: 0;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  background: var(--bg-2);
+}
+.marketplace-list-panel,
+.marketplace-detail-panel {
+  max-height: calc(100vh - 210px);
+  overflow-y: auto;
+}
+.marketplace-my-panel { padding: 18px; }
+.marketplace-panel-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-1);
+  background: var(--bg-2);
+}
+.marketplace-panel-title h2 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.marketplace-library-list,
+.marketplace-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.marketplace-library-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 13px 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-3);
+  color: var(--text-primary);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.marketplace-library-item:hover,
+.marketplace-library-item.active {
+  border-color: var(--accent);
+  background: var(--bg-active);
+}
+.marketplace-item-title {
+  overflow: hidden;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.marketplace-item-meta,
+.marketplace-item-desc {
+  color: var(--text-tertiary);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+.marketplace-item-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.marketplace-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.marketplace-tag,
+.policy-badge,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bg-4);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+.status-pill.success {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.status-pill.compact {
+  min-height: 20px;
+  padding-inline: 6px;
+}
+.policy-badge {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.marketplace-detail {
+  padding: 20px;
+}
+.marketplace-detail-header h2,
+.marketplace-card h3 {
+  margin: 0 0 8px;
+  font-size: 1.25rem;
+}
+.marketplace-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 16px 0 12px;
+  color: var(--text-tertiary);
+  font-size: 0.78rem;
+}
+.marketplace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.marketplace-documents {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-1);
+}
+.marketplace-documents h3,
+.publication-documents h3 {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+}
+.marketplace-document-row,
+.review-document-row,
+.publication-document-row,
+.marketplace-card,
+.marketplace-version-row {
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-3);
+}
+.marketplace-document-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 14px;
+  margin-bottom: 10px;
+}
+.marketplace-policy-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.marketplace-card { padding: 16px; }
+.marketplace-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.marketplace-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+}
+.marketplace-version-row p {
+  margin: 6px 0 0;
+}
+.marketplace-loading {
+  padding: 18px;
+  color: var(--text-tertiary);
+  font-size: 0.84rem;
+}
+
+.publication-modal-card { width: min(94vw, 760px); }
+.publication-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.publication-documents {
+  padding: 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+}
+.publication-document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+}
+.publication-document-row {
+  padding: 12px;
+}
+.publication-document-select {
+  margin-bottom: 10px;
+}
+.publication-policy-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.review-document-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 13px 14px;
+  margin-bottom: 10px;
+}
+.compact-review-note input { min-height: 36px; }
+
 /* ---------- Schedule ---------- */
 .view-schedule {
   padding: 28px 34px 40px;
@@ -2924,6 +3222,11 @@ body.document-reader-open .library-chat { display: none; }
   .settings-layout { grid-template-columns: 1fr; }
   .settings-sidebar { min-width: 0; }
   .settings-sidebar h2 { display: none; }
+  .marketplace-layout { grid-template-columns: 1fr; }
+  .marketplace-list-panel,
+  .marketplace-detail-panel {
+    max-height: none;
+  }
   .settings-nav {
     width: 100%;
     min-width: 0;
@@ -3001,6 +3304,41 @@ body.document-reader-open .library-chat { display: none; }
   .feature-avatar-character-control { width: 100%; flex-basis: auto; }
   .feature-avatar-literature-direction { width: 100%; }
   .view-schedule { padding: 18px 12px 30px; }
+  .view-marketplace { padding: 18px 12px 30px; }
+  .marketplace-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .marketplace-header-actions { width: 100%; }
+  .marketplace-header-actions .button { width: 100%; min-height: 44px; }
+  .marketplace-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .marketplace-search-field,
+  .marketplace-course-field {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .marketplace-toolbar .button,
+  .marketplace-tabs button { min-height: 44px; }
+  .marketplace-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .marketplace-tabs::-webkit-scrollbar { display: none; }
+  .marketplace-tab { flex: 0 0 auto; }
+  .marketplace-card-header,
+  .marketplace-detail-header,
+  .marketplace-document-row,
+  .marketplace-version-row,
+  .publication-documents-header {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+  .marketplace-policy-row { justify-content: flex-start; }
+  .publication-policy-grid { grid-template-columns: 1fr; }
   .schedule-header { align-items: flex-start; flex-direction: column; }
   .schedule-actions { width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .schedule-actions .button { min-height: 44px; padding-inline: 10px; }

@@ -52,17 +52,79 @@ def accessible_document_ids(
     user_id: str,
     document_ids: list[str],
 ) -> set[str]:
-    """Return the subset of document_ids the user has active membership access to."""
+    """Return document_ids readable by the user for RAG before search/model calls."""
     if not document_ids:
         return set()
     placeholders = ",".join("?" for _ in document_ids)
     rows = conn.execute(
-        f"""SELECT d.id FROM documents d
-            JOIN memberships m ON m.space_id = d.space_id
-              AND m.user_id = ? AND m.status = 'active'
+        f"""SELECT d.id
+            FROM documents d
+            JOIN spaces s ON s.id = d.space_id
             JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
-            WHERE d.status = 'active' AND d.id IN ({placeholders})""",
-        [user_id, *document_ids],
+            LEFT JOIN memberships m ON m.space_id = d.space_id
+              AND m.user_id = ? AND m.status = 'active'
+            LEFT JOIN published_libraries pl ON pl.space_id = d.space_id
+              AND pl.status = 'published'
+            LEFT JOIN library_subscriptions ls ON ls.library_id = pl.id
+              AND ls.user_id = ? AND ls.status = 'active'
+            LEFT JOIN publication_versions pv ON pv.id = pl.current_version_id
+              AND pv.status = 'published'
+            LEFT JOIN publication_documents pd ON pd.version_id = pv.id
+              AND pd.document_id = d.id AND pd.use_in_rag = 1
+            WHERE d.status = 'active' AND d.id IN ({placeholders})
+              AND (
+                (s.space_type IN ('personal', 'shared') AND m.user_id IS NOT NULL)
+                OR
+                (s.space_type = 'subscribed' AND ls.user_id IS NOT NULL AND pd.document_id IS NOT NULL)
+              )""",
+        [user_id, user_id, *document_ids],
+    ).fetchall()
+    return {str(row["id"]) for row in rows}
+
+
+def accessible_document_ids_for_operation(
+    conn: sqlite3.Connection,
+    user_id: str,
+    document_ids: list[str],
+    operation: str,
+) -> set[str]:
+    """Return allowed ids for preview/download/RAG operation-level policy checks."""
+    if operation == "rag":
+        return accessible_document_ids(conn, user_id, document_ids)
+    if operation not in {"preview", "download", "read"}:
+        return set()
+    if not document_ids:
+        return set()
+    policy = {
+        "preview": "pd.can_preview = 1",
+        "download": "pd.can_download = 1",
+        "read": "1 = 1",
+    }[operation]
+    subscription = "1 = 1" if operation == "preview" else "ls.user_id IS NOT NULL"
+    placeholders = ",".join("?" for _ in document_ids)
+    rows = conn.execute(
+        f"""SELECT d.id
+            FROM documents d
+            JOIN spaces s ON s.id = d.space_id
+            JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+            LEFT JOIN memberships m ON m.space_id = d.space_id
+              AND m.user_id = ? AND m.status = 'active'
+            LEFT JOIN published_libraries pl ON pl.space_id = d.space_id
+              AND pl.status = 'published'
+            LEFT JOIN library_subscriptions ls ON ls.library_id = pl.id
+              AND ls.user_id = ? AND ls.status = 'active'
+            LEFT JOIN publication_versions pv ON pv.id = pl.current_version_id
+              AND pv.status = 'published'
+            LEFT JOIN publication_documents pd ON pd.version_id = pv.id
+              AND pd.document_id = d.id
+            WHERE d.status = 'active' AND d.id IN ({placeholders})
+              AND (
+                (s.space_type IN ('personal', 'shared') AND m.user_id IS NOT NULL)
+                OR
+                (s.space_type = 'subscribed' AND {subscription}
+                 AND pd.document_id IS NOT NULL AND {policy})
+              )""",
+        [user_id, user_id, *document_ids],
     ).fetchall()
     return {str(row["id"]) for row in rows}
 
@@ -97,12 +159,10 @@ class FTS5SearchBackend:
                 JOIN chunks c ON c.id = chunk_fts.chunk_id
                 JOIN revisions r ON r.id = c.revision_id AND r.status = 'active'
                 JOIN documents d ON d.id = r.document_id AND d.status = 'active'
-                JOIN memberships m ON m.space_id = d.space_id
-                  AND m.user_id = ? AND m.status = 'active'
                 WHERE chunk_fts MATCH ? AND d.id IN ({placeholders})
                 ORDER BY rank ASC
                 LIMIT ?""",
-            [user_id, query, *document_ids, max(1, min(top_k * 4, 32))],
+            [query, *document_ids, max(1, min(top_k * 4, 32))],
         ).fetchall()
         results: list[SearchResult] = []
         seen: set[tuple[str, int]] = set()

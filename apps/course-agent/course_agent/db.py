@@ -57,6 +57,72 @@ CREATE TABLE IF NOT EXISTS documents (
     deleted_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS published_libraries (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL UNIQUE REFERENCES spaces(id),
+    author_id TEXT NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,
+    course TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK (status IN ('pending', 'published', 'suspended', 'withdrawn')),
+    current_version_id TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS publication_versions (
+    id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL REFERENCES published_libraries(id) ON DELETE CASCADE,
+    version_number INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (
+        status IN ('pending', 'changes_requested', 'rejected', 'withdrawn', 'published', 'superseded')
+    ),
+    name TEXT NOT NULL DEFAULT '',
+    course TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    submitted_by TEXT NOT NULL REFERENCES users(id),
+    base_version_id TEXT,
+    reviewed_by TEXT,
+    review_note TEXT,
+    submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at TEXT,
+    published_at TEXT,
+    UNIQUE(library_id, version_number)
+);
+
+CREATE TABLE IF NOT EXISTS publication_documents (
+    version_id TEXT NOT NULL REFERENCES publication_versions(id) ON DELETE CASCADE,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    source_document_id TEXT NOT NULL REFERENCES documents(id),
+    use_in_rag INTEGER NOT NULL DEFAULT 1,
+    can_preview INTEGER NOT NULL DEFAULT 1,
+    can_download INTEGER NOT NULL DEFAULT 0,
+    review_status TEXT NOT NULL DEFAULT 'pending',
+    review_note TEXT,
+    PRIMARY KEY(version_id, document_id)
+);
+
+CREATE TABLE IF NOT EXISTS library_subscriptions (
+    library_id TEXT NOT NULL REFERENCES published_libraries(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('active', 'cancelled')),
+    subscribed_at TEXT,
+    cancelled_at TEXT,
+    PRIMARY KEY(library_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL REFERENCES users(id),
+    event_type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS revisions (
     id TEXT PRIMARY KEY,
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -104,23 +170,31 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
 CREATE INDEX IF NOT EXISTS idx_documents_space_status ON documents(space_id, status);
 CREATE INDEX IF NOT EXISTS idx_revisions_document_status ON revisions(document_id, status);
 CREATE INDEX IF NOT EXISTS idx_chunks_revision ON chunks(revision_id);
+CREATE INDEX IF NOT EXISTS idx_published_libraries_status ON published_libraries(status);
+CREATE INDEX IF NOT EXISTS idx_publication_versions_status ON publication_versions(status);
+CREATE INDEX IF NOT EXISTS idx_publication_documents_document ON publication_documents(document_id);
+CREATE INDEX IF NOT EXISTS idx_library_subscriptions_user_status ON library_subscriptions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, created_at);
 """
 
 
 DEMO_USERS = (
     ("demo-a", "谢同学", 1),
     ("demo-b", "队友演示", 1),
+    ("demo-c", "访客演示", 1),
 )
 
 DEMO_SPACES = (
     ("personal-demo-a", "谢同学的资料", "personal", "demo-a", "private"),
     ("personal-demo-b", "队友演示的资料", "personal", "demo-b", "private"),
+    ("personal-demo-c", "访客演示的资料", "personal", "demo-c", "private"),
     ("math-b1-shared", "数学分析 B1 学习小组", "shared", "demo-a", "invited"),
 )
 
 DEMO_MEMBERSHIPS = (
     ("personal-demo-a", "demo-a", "owner", "active"),
     ("personal-demo-b", "demo-b", "owner", "active"),
+    ("personal-demo-c", "demo-c", "owner", "active"),
     ("math-b1-shared", "demo-a", "owner", "active"),
     ("math-b1-shared", "demo-b", "member", "active"),
 )
@@ -147,6 +221,18 @@ def init_database(settings: Settings) -> None:
     settings.ensure_directories()
     with database(settings) as conn:
         conn.executescript(SCHEMA)
+        version_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(publication_versions)").fetchall()
+        }
+        for column, ddl in {
+            "name": "ALTER TABLE publication_versions ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+            "course": "ALTER TABLE publication_versions ADD COLUMN course TEXT NOT NULL DEFAULT ''",
+            "description": "ALTER TABLE publication_versions ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+            "tags_json": "ALTER TABLE publication_versions ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+        }.items():
+            if column not in version_columns:
+                conn.execute(ddl)
         conn.executemany(
             "INSERT OR IGNORE INTO users(id, display_name, is_demo) VALUES (?, ?, ?)",
             DEMO_USERS,

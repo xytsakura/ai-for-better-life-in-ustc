@@ -47,7 +47,7 @@ def main() -> None:
         users_response = client.get("/api/users")
         require(users_response.status_code == 200, "演示身份接口不可用")
         user_ids = {item["id"] for item in users_response.json().get("items", [])}
-        require({"demo-a", "demo-b"}.issubset(user_ids), "缺少两个预置演示身份")
+        require({"demo-a", "demo-b", "demo-c"}.issubset(user_ids), "缺少三个预置演示身份")
 
         session_response = client.post("/api/session", json={"user_id": "demo-a"})
         require(session_response.status_code == 200, "无法创建 demo-a 演示会话")
@@ -76,7 +76,7 @@ def main() -> None:
     print(f"- 服务地址：{base_url}")
     print("- 首页 / 前端 / KaTeX：正常")
     print("- SQLite / FTS5：正常")
-    print("- 演示身份：demo-a、demo-b")
+    print("- 演示身份：demo-a、demo-b、demo-c")
     print(f"- 数学分析 B1 资料：{args.expected_documents} 份")
     print(f"- 模型 API：{llm_status}")
 

@@ -38,6 +38,10 @@
           <span class="nav-icon" aria-hidden="true">▤</span>
           <span class="nav-label">知识库</span>
         </a>
+        <a href="#/marketplace" class="nav-item" data-view="marketplace" aria-label="知识广场" title="知识广场">
+          <span class="nav-icon" aria-hidden="true">◇</span>
+          <span class="nav-label">知识广场</span>
+        </a>
         <a href="#/schedule" class="nav-item" data-view="schedule" aria-label="日程表" title="日程表">
           <span class="nav-icon" aria-hidden="true">▦</span>
           <span class="nav-label">日程表</span>
@@ -290,6 +294,7 @@
               <h2 id="library-space-title">未选择空间</h2>
             </div>
             <div class="content-actions">
+              <button class="button button-secondary hidden" id="library-publish-btn" type="button">投稿到广场</button>
               <label class="button button-primary upload-button" id="library-upload-btn">
                 上传 PDF
                 <input id="library-upload-input" type="file" accept="application/pdf,.pdf" hidden>
@@ -370,6 +375,82 @@
             </div>
           </form>
         </section>
+      </div>
+    </section>
+
+    <!-- 知识广场 -->
+    <section id="view-marketplace" class="view view-marketplace hidden">
+      <div class="marketplace-page">
+        <header class="marketplace-header">
+          <div>
+            <div class="content-subtitle">订阅知识库</div>
+            <h1>知识广场</h1>
+            <p>浏览已审核的公开课程资料，订阅后作为独立知识库参与问答。</p>
+          </div>
+          <div class="marketplace-header-actions">
+            <button class="button button-secondary" id="marketplace-refresh" type="button">刷新</button>
+          </div>
+        </header>
+
+        <div class="marketplace-toolbar" role="search">
+          <label class="field marketplace-search-field" for="marketplace-search">
+            <span>搜索</span>
+            <input id="marketplace-search" type="search" maxlength="80" placeholder="名称、课程、简介或标签">
+          </label>
+          <label class="field marketplace-course-field" for="marketplace-course">
+            <span>课程</span>
+            <select id="marketplace-course">
+              <option value="">全部课程</option>
+            </select>
+          </label>
+          <button class="button button-primary" id="marketplace-search-submit" type="button">搜索</button>
+        </div>
+
+        <nav class="marketplace-tabs" role="tablist" aria-label="知识广场视图">
+          <button class="marketplace-tab active" type="button" role="tab" aria-selected="true" data-marketplace-tab="browse">广场</button>
+          <button class="marketplace-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="mine">我的投稿</button>
+          <button class="marketplace-tab hidden" id="marketplace-review-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="review">待审核</button>
+        </nav>
+
+        <div class="marketplace-layout" id="marketplace-tab-browse">
+          <section class="marketplace-list-panel" aria-label="公开知识库列表">
+            <div class="marketplace-panel-title">
+              <h2>公开知识库</h2>
+              <span id="marketplace-count" class="muted">0 个结果</span>
+            </div>
+            <div id="marketplace-library-list" class="marketplace-library-list"></div>
+          </section>
+          <section class="marketplace-detail-panel" id="marketplace-library-detail" aria-live="polite">
+            <div class="empty-state-library">
+              <div class="empty-icon">◇</div>
+              <p>选择一个公开知识库查看详情</p>
+            </div>
+          </section>
+        </div>
+
+        <section class="marketplace-my-panel hidden" id="marketplace-tab-mine" aria-live="polite">
+          <div class="marketplace-panel-title">
+            <h2>我的投稿</h2>
+            <span id="marketplace-mine-count" class="muted">0 个投稿</span>
+          </div>
+          <div id="marketplace-mine-list" class="marketplace-stack"></div>
+        </section>
+
+        <div class="marketplace-layout hidden" id="marketplace-tab-review">
+          <section class="marketplace-list-panel" aria-label="待审核版本">
+            <div class="marketplace-panel-title">
+              <h2>待审核</h2>
+              <span id="marketplace-review-count" class="muted">0 个版本</span>
+            </div>
+            <div id="marketplace-review-list" class="marketplace-library-list"></div>
+          </section>
+          <section class="marketplace-detail-panel" id="marketplace-review-detail" aria-live="polite">
+            <div class="empty-state-library">
+              <div class="empty-icon">◇</div>
+              <p>选择一个待审核版本查看逐份资料策略</p>
+            </div>
+          </section>
+        </div>
       </div>
     </section>
 
@@ -738,6 +819,51 @@
         <p>登录后查看对应的个人空间与学习小组</p>
       </div>
       <div id="login-user-list" class="login-user-list"></div>
+    </div>
+  </div>
+
+  <!-- 投稿到知识广场 -->
+  <div id="publication-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="publication-modal-title">
+    <div class="modal-backdrop" data-close-modal="publication"></div>
+    <div class="modal-card modal-card-wide publication-modal-card">
+      <button class="modal-close" id="publication-modal-close" type="button" aria-label="关闭投稿窗口" title="关闭">×</button>
+      <div class="modal-header modal-header-left">
+        <h2 id="publication-modal-title">投稿到知识广场</h2>
+        <p id="publication-modal-desc">从当前个人知识库明确选择资料，生成独立审核快照。</p>
+      </div>
+      <form id="publication-form" class="publication-form" autocomplete="off">
+        <div class="form-grid">
+          <label class="field">
+            <span>知识库名称</span>
+            <input id="publication-name" type="text" maxlength="80" required placeholder="例如：数学分析期末复习">
+          </label>
+          <label class="field">
+            <span>课程</span>
+            <input id="publication-course" type="text" maxlength="80" required placeholder="例如：数学分析 B1">
+          </label>
+        </div>
+        <label class="field">
+          <span>简介</span>
+          <textarea id="publication-description" rows="3" maxlength="600" required placeholder="说明资料范围、适用场景和来源边界"></textarea>
+        </label>
+        <label class="field">
+          <span>标签</span>
+          <input id="publication-tags" type="text" maxlength="160" placeholder="用逗号分隔，例如：期末, 例题, 笔记">
+        </label>
+        <section class="publication-documents" aria-labelledby="publication-documents-title">
+          <div class="publication-documents-header">
+            <h3 id="publication-documents-title">选择资料与授权策略</h3>
+            <span id="publication-selected-count" class="muted">已选 0 份</span>
+          </div>
+          <div id="publication-document-list" class="publication-document-list"></div>
+        </section>
+        <div class="modal-actions">
+          <span id="publication-modal-status" class="muted"></span>
+          <span class="modal-actions-spacer"></span>
+          <button class="button button-secondary" id="publication-cancel" type="button">取消</button>
+          <button class="button button-primary" id="publication-submit" type="submit">提交审核</button>
+        </div>
+      </form>
     </div>
   </div>
 

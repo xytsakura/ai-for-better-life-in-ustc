@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import fitz
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
+import course_agent.main as course_agent_main
 from course_agent.config import Settings
 from course_agent.llm import FakeLLMAdapter, LLMResult
 from course_agent.main import create_app
@@ -362,7 +365,7 @@ def test_frontend_query_state_guards_are_packaged(tmp_path: Path):
 
     source_list = section("function renderSourceList(", "function renderSourceSelector()")
     assert "button.disabled = state.isQuerying;" in source_list
-    assert "${state.isQuerying ? ' disabled' : ''}" in source_list
+    assert "${state.isQuerying || doc.use_in_rag === false ? ' disabled' : ''}" in source_list
     source_change_guard = source_list.index("if (state.isQuerying) {")
     assert source_change_guard < source_list.index("if (input.checked)")
     assert "input.checked = state.selectedDocumentIds.has(input.value);" in source_list
@@ -1188,3 +1191,420 @@ def test_shared_space_retrieval_is_available_to_both_users(tmp_path: Path):
     assert result.status_code == 200
     assert result.json()["mode"] == "retrieval"
     assert result.json()["retrieval_count"] >= 1
+
+
+def publish_demo_b_library(
+    client: TestClient,
+    tmp_path: Path,
+    *,
+    name: str = "公开复习库",
+    text: str = "Subscription marketplace calculus document with searchable uniform convergence content.",
+    use_in_rag: bool = True,
+    can_preview: bool = True,
+    can_download: bool = False,
+) -> tuple[str, str, str]:
+    login(client, "demo-b")
+    personal = personal_space(client)
+    source_doc_id = upload_pdf(client, tmp_path, personal["id"], f"{name}.pdf", text)
+    submitted = client.post(
+        "/api/publications",
+        json={
+            "name": name,
+            "course": "数学分析 B1",
+            "description": "公开资料快照",
+            "tags": ["期末", "RAG"],
+            "documents": [
+                {
+                    "document_id": source_doc_id,
+                    "use_in_rag": use_in_rag,
+                    "can_preview": can_preview,
+                    "can_download": can_download,
+                }
+            ],
+        },
+    )
+    assert submitted.status_code == 201, submitted.text
+    library_id = submitted.json()["library"]["id"]
+    version_id = submitted.json()["version"]["id"]
+    snapshot_doc_id = submitted.json()["documents"][0]["document_id"]
+
+    login(client, "demo-a")
+    reviewed = client.patch(
+        f"/api/admin/publication-versions/{version_id}",
+        json={"action": "approve", "review_note": "ok", "document_reviews": []},
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    return library_id, version_id, snapshot_doc_id
+
+
+def submit_demo_b_version(
+    client: TestClient,
+    tmp_path: Path,
+    library_id: str,
+    *,
+    name: str,
+    text: str,
+) -> tuple[str, str]:
+    login(client, "demo-b")
+    personal = personal_space(client)
+    source_doc_id = upload_pdf(client, tmp_path, personal["id"], f"{name}.pdf", text)
+    response = client.post(
+        f"/api/publications/{library_id}/versions",
+        json={
+            "name": name,
+            "course": "数学分析 B1",
+            "description": f"{name} 的公开快照",
+            "tags": ["new"],
+            "documents": [{"document_id": source_doc_id}],
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["version"]["id"], response.json()["documents"][0]["document_id"]
+
+
+def test_subscription_marketplace_publish_subscribe_cancel_and_rag_permissions(tmp_path: Path):
+    client, adapter = make_client(tmp_path)
+    library_id, _version_id, snapshot_doc_id = publish_demo_b_library(client, tmp_path)
+    login(client, "demo-c")
+
+    listed = client.get("/api/marketplace/libraries")
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["id"] == library_id
+    detail = client.get(f"/api/marketplace/libraries/{library_id}")
+    assert detail.status_code == 200
+    assert detail.json()["documents"][0]["document_id"] == snapshot_doc_id
+    assert "source_document_id" not in detail.json()["documents"][0]
+
+    # Logged-in marketplace visitors may preview explicitly previewable material,
+    # but download and RAG remain subscription-only.
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 200
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 404
+    not_subscribed = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": detail.json()["library"]["space_id"],
+            "question": "Should require a subscription",
+            "document_ids": [snapshot_doc_id],
+        },
+    )
+    assert not_subscribed.status_code == 404
+
+    subscribed = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    assert subscribed.status_code == 200
+    space_id = subscribed.json()["space_id"]
+    subscribed_again = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    assert subscribed_again.status_code == 200
+    spaces = client.get("/api/spaces").json()["items"]
+    assert any(item["id"] == space_id and item["space_type"] == "subscribed" for item in spaces)
+    docs = client.get(f"/api/spaces/{space_id}/documents").json()["items"]
+    assert [item["id"] for item in docs] == [snapshot_doc_id]
+
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 200
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 404
+    answer = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": space_id,
+            "question": "What content is searchable?",
+            "document_ids": [snapshot_doc_id],
+        },
+    )
+    assert answer.status_code == 200, answer.text
+    assert adapter.retrieval_calls == 1
+
+    cancelled = client.delete(f"/api/marketplace/libraries/{library_id}/subscription")
+    assert cancelled.status_code == 200
+    cancelled_again = client.delete(f"/api/marketplace/libraries/{library_id}/subscription")
+    assert cancelled_again.status_code == 200
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 200
+    blocked = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": space_id,
+            "question": "Should be blocked",
+            "document_ids": [snapshot_doc_id],
+        },
+    )
+    assert blocked.status_code == 404
+
+
+def test_subscription_document_operation_policies_and_suspend_restore(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, snapshot_doc_id = publish_demo_b_library(
+        client,
+        tmp_path,
+        name="不可检索预览库",
+        use_in_rag=False,
+        can_preview=False,
+        can_download=False,
+    )
+    login(client, "demo-c")
+    subscribed = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    space_id = subscribed.json()["space_id"]
+
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 404
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 404
+    blocked = client.post(
+        "/api/query",
+        json={
+            "mode": "retrieval",
+            "scope": "knowledge_base",
+            "space_id": space_id,
+            "question": "Should not use RAG",
+            "document_ids": [snapshot_doc_id],
+        },
+    )
+    assert blocked.status_code == 404
+
+    login(client, "demo-a")
+    suspended = client.post(f"/api/admin/publications/{library_id}/suspend")
+    assert suspended.status_code == 200
+    login(client, "demo-c")
+    assert client.get(f"/api/spaces/{space_id}/documents").status_code == 404
+    login(client, "demo-a")
+    restored = client.post(f"/api/admin/publications/{library_id}/restore")
+    assert restored.status_code == 200
+    login(client, "demo-c")
+    assert client.get(f"/api/spaces/{space_id}/documents").status_code == 200
+
+
+def test_publication_new_version_switches_current_documents_and_invalidates_old_ids(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, old_doc_id = publish_demo_b_library(client, tmp_path)
+    login(client, "demo-c")
+    subscribed = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    space_id = subscribed.json()["space_id"]
+    assert client.get(f"/api/documents/{old_doc_id}/pages/1").status_code == 200
+
+    login(client, "demo-b")
+    personal = personal_space(client)
+    new_source_doc_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "new-version.pdf",
+        "Subscription marketplace new version searchable document content.",
+    )
+    new_version = client.post(
+        f"/api/publications/{library_id}/versions",
+        json={
+            "name": "公开复习库新版",
+            "course": "数学分析 B1",
+            "description": "新版",
+            "tags": ["new"],
+            "documents": [{"document_id": new_source_doc_id}],
+        },
+    )
+    assert new_version.status_code == 201, new_version.text
+    new_version_id = new_version.json()["version"]["id"]
+    new_doc_id = new_version.json()["documents"][0]["document_id"]
+
+    login(client, "demo-a")
+    approved = client.patch(
+        f"/api/admin/publication-versions/{new_version_id}",
+        json={"action": "approve", "review_note": "ok", "document_reviews": []},
+    )
+    assert approved.status_code == 200, approved.text
+    login(client, "demo-c")
+    docs = client.get(f"/api/spaces/{space_id}/documents").json()["items"]
+    assert [item["id"] for item in docs] == [new_doc_id]
+    assert client.get(f"/api/documents/{old_doc_id}/pages/1").status_code == 404
+    assert client.get(f"/api/documents/{new_doc_id}/pages/1").status_code == 200
+
+
+def test_publication_author_and_admin_can_review_staged_snapshot(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-b")
+    personal = personal_space(client)
+    source_doc_id = upload_pdf(
+        client,
+        tmp_path,
+        personal["id"],
+        "review-only.pdf",
+        "A staged publication document for author and administrator review.",
+    )
+    submitted = client.post(
+        "/api/publications",
+        json={
+            "name": "待审资料库",
+            "course": "数学分析 B1",
+            "description": "审阅权限测试",
+            "documents": [
+                {
+                    "document_id": source_doc_id,
+                    "use_in_rag": False,
+                    "can_preview": False,
+                    "can_download": False,
+                }
+            ],
+        },
+    )
+    assert submitted.status_code == 201, submitted.text
+    snapshot_doc_id = submitted.json()["documents"][0]["document_id"]
+
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 200
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 200
+
+    login(client, "demo-a")
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 200
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 200
+
+    login(client, "demo-c")
+    assert client.get(f"/api/documents/{snapshot_doc_id}/pages/1").status_code == 404
+    assert client.get(f"/api/documents/{snapshot_doc_id}/file").status_code == 404
+
+    login(client, "demo-a")
+    approved = client.patch(
+        f"/api/admin/publication-versions/{submitted.json()['version']['id']}",
+        json={
+            "action": "approve",
+            "review_note": "",
+            "document_reviews": [
+                {
+                    "document_id": snapshot_doc_id,
+                    "use_in_rag": False,
+                    "can_preview": False,
+                    "can_download": False,
+                    "review_note": "",
+                }
+            ],
+        },
+    )
+    assert approved.status_code == 200, approved.text
+
+
+def test_publication_rollback_preserves_suspension_and_base_conflict(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, first_version_id, first_doc_id = publish_demo_b_library(client, tmp_path)
+
+    second_version_id, second_doc_id = submit_demo_b_version(
+        client,
+        tmp_path,
+        library_id,
+        name="公开复习库 v2",
+        text="Second publication version with updated review content.",
+    )
+    login(client, "demo-a")
+    approved = client.patch(
+        f"/api/admin/publication-versions/{second_version_id}",
+        json={"action": "approve", "review_note": "v2 ok", "document_reviews": []},
+    )
+    assert approved.status_code == 200, approved.text
+
+    third_version_id, _third_doc_id = submit_demo_b_version(
+        client,
+        tmp_path,
+        library_id,
+        name="公开复习库 v3",
+        text="Third publication version awaiting review.",
+    )
+    login(client, "demo-a")
+    rolled_back = client.post(
+        f"/api/admin/publications/{library_id}/rollback",
+        json={"version_id": first_version_id, "review_note": "回滚验证"},
+    )
+    assert rolled_back.status_code == 200, rolled_back.text
+    assert rolled_back.json()["library"]["current_version_id"] == first_version_id
+
+    stale_approval = client.patch(
+        f"/api/admin/publication-versions/{third_version_id}",
+        json={"action": "approve", "review_note": "stale", "document_reviews": []},
+    )
+    assert stale_approval.status_code == 409
+    assert stale_approval.json()["error"]["code"] == "publication_base_changed"
+
+    suspended = client.post(f"/api/admin/publications/{library_id}/suspend")
+    assert suspended.status_code == 200
+    assert client.post(f"/api/admin/publications/{library_id}/suspend").status_code == 409
+    admin_list = client.get("/api/marketplace/libraries").json()["items"]
+    assert any(item["id"] == library_id and item["status"] == "suspended" for item in admin_list)
+    admin_detail = client.get(f"/api/marketplace/libraries/{library_id}")
+    assert admin_detail.status_code == 200
+    assert {item["id"] for item in admin_detail.json()["versions"]} == {first_version_id, second_version_id}
+    rollback_while_suspended = client.post(
+        f"/api/admin/publications/{library_id}/rollback",
+        json={"version_id": second_version_id},
+    )
+    assert rollback_while_suspended.status_code == 200, rollback_while_suspended.text
+    assert rollback_while_suspended.json()["library"]["status"] == "suspended"
+
+    login(client, "demo-c")
+    assert all(item["id"] != library_id for item in client.get("/api/marketplace/libraries").json()["items"])
+    assert client.get(f"/api/marketplace/libraries/{library_id}").status_code == 404
+    subscription = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    assert subscription.status_code == 409
+    assert client.get(f"/api/documents/{first_doc_id}/pages/1").status_code == 404
+    assert client.get(f"/api/documents/{second_doc_id}/pages/1").status_code == 404
+
+    login(client, "demo-a")
+    restored = client.post(f"/api/admin/publications/{library_id}/restore")
+    assert restored.status_code == 200
+    assert client.post(f"/api/admin/publications/{library_id}/restore").status_code == 409
+    login(client, "demo-c")
+    subscribed = client.post(f"/api/marketplace/libraries/{library_id}/subscribe")
+    assert subscribed.status_code == 200
+    assert client.get(f"/api/documents/{first_doc_id}/pages/1").status_code == 404
+    assert client.get(f"/api/documents/{second_doc_id}/pages/1").status_code == 200
+
+
+def test_multi_document_publication_failure_leaves_no_snapshot_residue(monkeypatch, tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-b")
+    personal = personal_space(client)
+    first_source_id = upload_pdf(client, tmp_path, personal["id"], "source-one.pdf", "First source document.")
+    second_source_id = upload_pdf(client, tmp_path, personal["id"], "source-two.pdf", "Second source document.")
+
+    database_path = tmp_path / "course-agent.sqlite3"
+    with sqlite3.connect(database_path) as conn:
+        baseline = {
+            "documents": conn.execute("SELECT count(*) FROM documents").fetchone()[0],
+            "sources": conn.execute("SELECT count(*) FROM sources").fetchone()[0],
+            "revisions": conn.execute("SELECT count(*) FROM revisions").fetchone()[0],
+            "pages": conn.execute("SELECT count(*) FROM pages").fetchone()[0],
+            "chunks": conn.execute("SELECT count(*) FROM chunks").fetchone()[0],
+            "fts": conn.execute("SELECT count(*) FROM chunk_fts").fetchone()[0],
+        }
+    baseline_files = {path.name for path in (tmp_path / "uploads").iterdir()}
+
+    original_write = course_agent_main.write_prepared_pdf_ingestion
+    calls = 0
+
+    def fail_on_second_write(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("forced second snapshot write failure")
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(course_agent_main, "write_prepared_pdf_ingestion", fail_on_second_write)
+    with pytest.raises(RuntimeError, match="forced second snapshot write failure"):
+        client.post(
+            "/api/publications",
+            json={
+                "name": "事务失败测试",
+                "course": "数学分析 B1",
+                "description": "两份资料必须全部成功或全部回滚",
+                "documents": [
+                    {"document_id": first_source_id},
+                    {"document_id": second_source_id},
+                ],
+            },
+        )
+
+    with sqlite3.connect(database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM published_libraries").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM publication_versions").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM publication_documents").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM documents").fetchone()[0] == baseline["documents"]
+        assert conn.execute("SELECT count(*) FROM sources").fetchone()[0] == baseline["sources"]
+        assert conn.execute("SELECT count(*) FROM revisions").fetchone()[0] == baseline["revisions"]
+        assert conn.execute("SELECT count(*) FROM pages").fetchone()[0] == baseline["pages"]
+        assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == baseline["chunks"]
+        assert conn.execute("SELECT count(*) FROM chunk_fts").fetchone()[0] == baseline["fts"]
+    assert {path.name for path in (tmp_path / "uploads").iterdir()} == baseline_files

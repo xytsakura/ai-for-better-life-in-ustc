@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import uuid
 from collections import OrderedDict
@@ -30,7 +31,9 @@ from .ingestion import (
     delete_document,
     document_details,
     ingest_pdf,
+    prepare_pdf_ingestion,
     reparse_document,
+    write_prepared_pdf_ingestion,
 )
 from .llm import LLMAdapter
 from .model_catalog import (
@@ -40,7 +43,13 @@ from .model_catalog import (
     invalidate_model_catalog,
     validate_base_url_for_saved_config,
 )
-from .retrieval import FTS5SearchBackend, SearchResult, accessible_document_ids, search
+from .retrieval import (
+    FTS5SearchBackend,
+    SearchResult,
+    accessible_document_ids,
+    accessible_document_ids_for_operation,
+    search,
+)
 from .tokenizer import JiebaTokenizer
 
 
@@ -242,6 +251,65 @@ class SettingsUpdate(BaseModel):
     parser_backend: Optional[str] = None
     chunking_backend: Optional[str] = None
     tokenizer_backend: Optional[str] = None
+
+
+class PublicationDocumentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=100)
+    use_in_rag: bool = True
+    can_preview: bool = True
+    can_download: bool = False
+
+
+class PublicationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    course: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    documents: list[PublicationDocumentInput] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def normalize_publication_request(self) -> "PublicationCreateRequest":
+        self.name = self.name.strip()
+        self.course = self.course.strip()
+        self.description = self.description.strip()
+        self.tags = [tag.strip() for tag in self.tags if tag.strip()][:20]
+        document_ids = [item.document_id.strip() for item in self.documents]
+        if not self.name or not self.course:
+            raise ValueError("name and course are required")
+        if len(set(document_ids)) != len(document_ids):
+            raise ValueError("documents cannot contain duplicate document_id")
+        for item in self.documents:
+            item.document_id = item.document_id.strip()
+        return self
+
+
+class PublicationReviewDocumentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: str = Field(min_length=1, max_length=100)
+    use_in_rag: bool = True
+    can_preview: bool = True
+    can_download: bool = False
+    review_note: str = Field(default="", max_length=2000)
+
+
+class PublicationReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["approve", "changes_requested", "reject"]
+    review_note: str = Field(default="", max_length=2000)
+    document_reviews: list[PublicationReviewDocumentInput] = Field(default_factory=list, max_length=100)
+
+
+class PublicationRollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version_id: str = Field(min_length=1, max_length=100)
+    review_note: str = Field(default="", max_length=2000)
 
 
 def _error(code: str, message: str, retryable: bool = False) -> dict:
@@ -511,7 +579,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="瀚海行agent", version="0.6.0")
+    app = FastAPI(title="瀚海行agent", version="0.7.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
@@ -603,37 +671,442 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "is_admin": user_id in (app.state.settings.admin_user_ids or set()),
         }
 
+    def is_admin_user(user_id: str) -> bool:
+        return user_id in (app.state.settings.admin_user_ids or set())
+
+    def audit_event(
+        conn: Any,
+        actor_id: str,
+        event_type: str,
+        target_type: str,
+        target_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        conn.execute(
+            """INSERT INTO audit_events
+               (id, actor_id, event_type, target_type, target_id, metadata_json)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                actor_id,
+                event_type,
+                target_type,
+                target_id,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+
+    def parse_tags(value: Any) -> list[str]:
+        try:
+            tags = json.loads(str(value or "[]"))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(tags, list):
+            return []
+        return [str(tag) for tag in tags if str(tag).strip()]
+
+    def version_dict(row: Any) -> dict:
+        return {
+            "id": row["id"],
+            "library_id": row["library_id"],
+            "version_number": int(row["version_number"]),
+            "status": row["status"],
+            "name": row["name"],
+            "course": row["course"],
+            "description": row["description"],
+            "tags": parse_tags(row["tags_json"]),
+            "submitted_by": row["submitted_by"],
+            "base_version_id": row["base_version_id"],
+            "reviewed_by": row["reviewed_by"],
+            "review_note": row["review_note"],
+            "submitted_at": row["submitted_at"],
+            "reviewed_at": row["reviewed_at"],
+            "published_at": row["published_at"],
+        }
+
+    def library_dict(conn: Any, row: Any, user_id: str | None = None) -> dict:
+        library_id = str(row["id"])
+        subscription = None
+        if user_id:
+            subscription = conn.execute(
+                "SELECT status FROM library_subscriptions WHERE library_id = ? AND user_id = ?",
+                (library_id, user_id),
+            ).fetchone()
+        document_count = 0
+        if row["current_version_id"]:
+            document_count = conn.execute(
+                """SELECT count(*) AS count
+                   FROM publication_documents pd
+                   JOIN documents d ON d.id = pd.document_id
+                   WHERE pd.version_id = ? AND d.status = 'active'""",
+                (row["current_version_id"],),
+            ).fetchone()["count"]
+        subscriber_count = conn.execute(
+            """SELECT count(*) AS count FROM library_subscriptions
+               WHERE library_id = ? AND status = 'active'""",
+            (library_id,),
+        ).fetchone()["count"]
+        author = conn.execute(
+            "SELECT display_name FROM users WHERE id = ?", (row["author_id"],)
+        ).fetchone()
+        return {
+            "id": library_id,
+            "space_id": row["space_id"],
+            "author_id": row["author_id"],
+            "author_name": author["display_name"] if author else row["author_id"],
+            "name": row["name"],
+            "course": row["course"],
+            "description": row["description"],
+            "tags": parse_tags(row["tags_json"]),
+            "status": row["status"],
+            "current_version_id": row["current_version_id"],
+            "document_count": int(document_count or 0),
+            "subscriber_count": int(subscriber_count or 0),
+            "is_subscribed": bool(subscription and subscription["status"] == "active"),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def publication_documents(
+        conn: Any,
+        version_id: str,
+        *,
+        include_source: bool = False,
+    ) -> list[dict]:
+        rows = conn.execute(
+            """SELECT pd.*, d.title, d.course, d.semester, d.material_type, d.created_at,
+                      d.file_path, r.page_count, r.searchable_pages, r.needs_ocr_pages,
+                      r.needs_review_pages, r.failed_pages, r.parse_status, s.license_status,
+                      s.source_url
+               FROM publication_documents pd
+               JOIN documents d ON d.id = pd.document_id
+               LEFT JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+               LEFT JOIN sources s ON s.id = d.source_id
+               WHERE pd.version_id = ?
+               ORDER BY d.created_at DESC""",
+            (version_id,),
+        ).fetchall()
+        items: list[dict] = []
+        for row in rows:
+            file_path = Path(str(row["file_path"]))
+            item = {
+                "document_id": row["document_id"],
+                "title": row["title"],
+                "filename": file_path.name,
+                "course": row["course"],
+                "semester": row["semester"],
+                "material_type": row["material_type"],
+                "content_type": "application/pdf",
+                "page_count": int(row["page_count"] or 0),
+                "searchable_pages": int(row["searchable_pages"] or 0),
+                "needs_ocr_pages": int(row["needs_ocr_pages"] or 0),
+                "needs_review_pages": int(row["needs_review_pages"] or 0),
+                "failed_pages": int(row["failed_pages"] or 0),
+                "parse_status": row["parse_status"],
+                "license_status": row["license_status"],
+                "source_url": row["source_url"],
+                "use_in_rag": bool(row["use_in_rag"]),
+                "can_preview": bool(row["can_preview"]),
+                "can_download": bool(row["can_download"]),
+                "review_status": row["review_status"],
+                "review_note": row["review_note"],
+                "created_at": row["created_at"],
+            }
+            if include_source:
+                item["source_document_id"] = row["source_document_id"]
+            items.append(item)
+        return items
+
     def require_space(conn: Any, user_id: str, space_id: str) -> Any:
         row = conn.execute(
-            """SELECT s.*, m.role, m.status AS membership_status
+            """SELECT s.*, m.role, m.status AS membership_status,
+                      NULL AS library_id, NULL AS current_version_id
                FROM spaces s JOIN memberships m ON m.space_id = s.id
-               WHERE s.id = ? AND m.user_id = ? AND m.status = 'active'""",
+               WHERE s.id = ? AND m.user_id = ? AND m.status = 'active'
+                 AND s.space_type IN ('personal', 'shared')""",
             (space_id, user_id),
         ).fetchone()
         if not row:
+            row = conn.execute(
+                """SELECT s.*, 'reader' AS role, ls.status AS membership_status,
+                          pl.id AS library_id, pl.current_version_id
+                   FROM spaces s
+                   JOIN published_libraries pl ON pl.space_id = s.id AND pl.status = 'published'
+                   JOIN library_subscriptions ls ON ls.library_id = pl.id
+                     AND ls.user_id = ? AND ls.status = 'active'
+                   WHERE s.id = ? AND s.space_type = 'subscribed'""",
+                (user_id, space_id),
+            ).fetchone()
+        if not row:
             raise HTTPException(
                 status_code=404,
-                detail=_error("space_not_found", "知识空间不存在或当前用户不可访问"),
+                detail=_error("space_not_found", "space not found or not accessible"),
             )
         return row
 
-    def require_document(conn: Any, user_id: str, document_id: str) -> Any:
+    def require_document(
+        conn: Any,
+        user_id: str,
+        document_id: str,
+        *,
+        operation: Literal["read", "preview", "download", "rag", "write"] = "read",
+    ) -> Any:
+        if operation == "write":
+            row = conn.execute(
+                """SELECT d.*, s.space_type, m.role, r.id AS revision_id, r.page_count, r.parse_status,
+                          r.searchable_pages, r.needs_ocr_pages, r.needs_review_pages, r.failed_pages
+                   FROM documents d
+                   JOIN spaces s ON s.id = d.space_id
+                   JOIN memberships m ON m.space_id = d.space_id AND m.user_id = ?
+                     AND m.status = 'active'
+                   LEFT JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+                   WHERE d.id = ? AND d.status = 'active'
+                     AND s.space_type IN ('personal', 'shared')""",
+                (user_id, document_id),
+            ).fetchone()
+            if not row:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error("document_not_found", "document not found or not writable"),
+                )
+            return row
+        review_access = False
+        if operation in {"read", "preview", "download"}:
+            review_access = bool(
+                conn.execute(
+                    """SELECT 1
+                       FROM publication_documents pd
+                       JOIN publication_versions pv ON pv.id = pd.version_id
+                       JOIN published_libraries pl ON pl.id = pv.library_id
+                       WHERE pd.document_id = ? AND (pl.author_id = ? OR ? = 1)
+                       LIMIT 1""",
+                    (document_id, user_id, 1 if is_admin_user(user_id) else 0),
+                ).fetchone()
+            )
+        allowed = accessible_document_ids_for_operation(conn, user_id, [document_id], operation)
+        if document_id not in allowed and not review_access:
+            raise HTTPException(
+                status_code=404,
+                detail=_error("document_not_found", "document not found or not accessible"),
+            )
         row = conn.execute(
-            """SELECT d.*, m.role, r.id AS revision_id, r.page_count, r.parse_status,
+            """SELECT d.*, s.space_type, COALESCE(m.role, 'reader') AS role,
+                      r.id AS revision_id, r.page_count, r.parse_status,
                       r.searchable_pages, r.needs_ocr_pages, r.needs_review_pages, r.failed_pages
                FROM documents d
-               JOIN memberships m ON m.space_id = d.space_id AND m.user_id = ?
+               JOIN spaces s ON s.id = d.space_id
+               LEFT JOIN memberships m ON m.space_id = d.space_id AND m.user_id = ?
                  AND m.status = 'active'
                LEFT JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
-               WHERE d.id = ? AND d.status = 'active'""",
-            (user_id, document_id),
+               WHERE d.id = ? AND (d.status = 'active' OR ? = 1)""",
+            (user_id, document_id, 1 if review_access else 0),
         ).fetchone()
         if not row:
             raise HTTPException(
                 status_code=404,
-                detail=_error("document_not_found", "资料不存在或当前用户不可访问"),
+                detail=_error("document_not_found", "document not found or not accessible"),
             )
         return row
+
+    def fetch_library(conn: Any, library_id: str) -> Any:
+        row = conn.execute(
+            "SELECT * FROM published_libraries WHERE id = ?", (library_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=_error("publication_not_found", "publication not found"),
+            )
+        return row
+
+    def fetch_version(conn: Any, version_id: str) -> Any:
+        row = conn.execute(
+            "SELECT * FROM publication_versions WHERE id = ?", (version_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=_error("publication_not_found", "publication version not found"),
+            )
+        return row
+
+    def assert_library_author(library: Any, user_id: str) -> None:
+        if library["author_id"] != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail=_error("publication_document_forbidden", "only the author can manage this publication"),
+            )
+
+    def selected_personal_documents(
+        conn: Any,
+        user_id: str,
+        document_ids: list[str],
+    ) -> list[Any]:
+        placeholders = ",".join("?" for _ in document_ids)
+        rows = conn.execute(
+            f"""SELECT d.*, s.source_url, s.license_status, s.source_type
+                FROM documents d
+                JOIN spaces sp ON sp.id = d.space_id AND sp.space_type = 'personal'
+                JOIN memberships m ON m.space_id = d.space_id AND m.user_id = ?
+                  AND m.status = 'active' AND m.role = 'owner'
+                JOIN sources s ON s.id = d.source_id
+                WHERE d.id IN ({placeholders}) AND d.status = 'active'
+                ORDER BY d.created_at DESC""",
+            (user_id, *document_ids),
+        ).fetchall()
+        by_id = {str(row["id"]): row for row in rows}
+        if set(by_id) != set(document_ids):
+            raise HTTPException(
+                status_code=403,
+                detail=_error(
+                    "publication_document_forbidden",
+                    "all submitted documents must belong to the current user's personal space",
+                ),
+            )
+        return [by_id[item] for item in document_ids]
+
+    def create_publication_snapshot(
+        conn: Any,
+        user_id: str,
+        payload: PublicationCreateRequest,
+        *,
+        library: Any | None = None,
+    ) -> tuple[Any, Any]:
+        document_ids = [item.document_id for item in payload.documents]
+        source_rows = selected_personal_documents(conn, user_id, document_ids)
+        policy_by_id = {item.document_id: item for item in payload.documents}
+        prepared_items: list[tuple[Any, PublicationDocumentInput, Any]] = []
+        copied_paths: list[Path] = []
+        library_id = str(library["id"]) if library else str(uuid.uuid4())
+        space_id = str(library["space_id"]) if library else str(uuid.uuid4())
+        version_id = str(uuid.uuid4())
+        try:
+            for source_row in source_rows:
+                source_path = Path(str(source_row["file_path"]))
+                document_id = str(uuid.uuid4())
+                prepared = prepare_pdf_ingestion(
+                    settings,
+                    source_path,
+                    document_id=document_id,
+                    revision_id=str(uuid.uuid4()),
+                    source_id=str(uuid.uuid4()),
+                    copy_to_uploads=True,
+                )
+                copied_paths.append(prepared.stored_path)
+                prepared_items.append((source_row, policy_by_id[str(source_row["id"])], prepared))
+            conn.execute("BEGIN IMMEDIATE")
+            if library:
+                pending = conn.execute(
+                    """SELECT 1 FROM publication_versions
+                       WHERE library_id = ? AND status = 'pending' LIMIT 1""",
+                    (library_id,),
+                ).fetchone()
+                if pending:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_error("already_pending_review", "a version is already pending review"),
+                    )
+                version_number = int(
+                    conn.execute(
+                        "SELECT COALESCE(MAX(version_number), 0) + 1 AS next FROM publication_versions WHERE library_id = ?",
+                        (library_id,),
+                    ).fetchone()["next"]
+                )
+                base_version_id = library["current_version_id"]
+            else:
+                version_number = 1
+                base_version_id = None
+                conn.execute(
+                    """INSERT INTO spaces(id, name, space_type, owner_id, visibility)
+                       VALUES (?, ?, 'subscribed', ?, 'public-subscription')""",
+                    (space_id, payload.name, user_id),
+                )
+                conn.execute(
+                    """INSERT INTO published_libraries
+                       (id, space_id, author_id, name, course, description, tags_json, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                    (
+                        library_id,
+                        space_id,
+                        user_id,
+                        payload.name,
+                        payload.course,
+                        payload.description,
+                        json.dumps(payload.tags, ensure_ascii=False),
+                    ),
+                )
+            conn.execute(
+                """INSERT INTO publication_versions
+                   (id, library_id, version_number, status, name, course, description, tags_json,
+                    submitted_by, base_version_id)
+                   VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
+                (
+                    version_id,
+                    library_id,
+                    version_number,
+                    payload.name,
+                    payload.course,
+                    payload.description,
+                    json.dumps(payload.tags, ensure_ascii=False),
+                    user_id,
+                    base_version_id,
+                ),
+            )
+            for source_row, policy, prepared in prepared_items:
+                metadata = DocumentMetadata(
+                    title=str(source_row["title"]),
+                    material_type=str(source_row["material_type"]),
+                    license_status=str(source_row["license_status"]),
+                    semester=source_row["semester"],
+                    source_url=source_row["source_url"],
+                    course=str(source_row["course"]),
+                    source_type="publication-snapshot",
+                )
+                write_prepared_pdf_ingestion(
+                    conn,
+                    metadata,
+                    space_id,
+                    prepared,
+                    document_status="staged",
+                    source_access_mode="public-subscription-review",
+                    manage_transaction=False,
+                )
+                conn.execute(
+                    """INSERT INTO publication_documents
+                       (version_id, document_id, source_document_id, use_in_rag,
+                        can_preview, can_download, review_status)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+                    (
+                        version_id,
+                        prepared.document_id,
+                        source_row["id"],
+                        1 if policy.use_in_rag else 0,
+                        1 if policy.can_preview else 0,
+                        1 if policy.can_download else 0,
+                    ),
+                )
+            audit_event(
+                conn,
+                user_id,
+                "publication_version_submitted",
+                "publication_version",
+                version_id,
+                {"library_id": library_id, "document_count": len(prepared_items)},
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            for path in copied_paths:
+                path.unlink(missing_ok=True)
+            raise
+        return fetch_library(conn, library_id), fetch_version(conn, version_id)
+
+    def publication_response(conn: Any, library: Any, version: Any, user_id: str, *, include_source: bool = False) -> dict:
+        return {
+            "library": library_dict(conn, library, user_id),
+            "version": version_dict(version),
+            "documents": publication_documents(conn, version["id"], include_source=include_source),
+        }
 
     @app.get("/api/health")
     def api_health() -> dict:
@@ -699,35 +1172,75 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.get("/api/spaces")
     def spaces(user_id: str = Depends(current_user)) -> dict:
         with get_db() as conn:
-            rows = conn.execute(
+            membership_rows = conn.execute(
                 """SELECT s.id, s.name, s.space_type, s.owner_id, s.visibility, m.role,
+                          NULL AS library_id, NULL AS current_version_id,
                           (SELECT count(*) FROM documents d WHERE d.space_id = s.id AND d.status = 'active') AS document_count
                    FROM spaces s JOIN memberships m ON m.space_id = s.id
-                   WHERE m.user_id = ? AND m.status = 'active' ORDER BY s.space_type, s.name""",
+                   WHERE m.user_id = ? AND m.status = 'active'
+                     AND s.space_type IN ('personal', 'shared')
+                   ORDER BY s.space_type, s.name""",
                 (user_id,),
             ).fetchall()
-        return {"items": [dict(row) for row in rows]}
+            subscription_rows = conn.execute(
+                """SELECT s.id, s.name, s.space_type, s.owner_id, s.visibility, 'reader' AS role,
+                          pl.id AS library_id, pl.current_version_id,
+                          (SELECT count(*)
+                           FROM publication_documents pd
+                           JOIN documents d ON d.id = pd.document_id
+                           WHERE pd.version_id = pl.current_version_id AND d.status = 'active') AS document_count
+                   FROM library_subscriptions ls
+                   JOIN published_libraries pl ON pl.id = ls.library_id AND pl.status = 'published'
+                   JOIN spaces s ON s.id = pl.space_id
+                   WHERE ls.user_id = ? AND ls.status = 'active'
+                   ORDER BY s.name""",
+                (user_id,),
+            ).fetchall()
+        return {"items": [dict(row) for row in [*membership_rows, *subscription_rows]]}
 
     @app.get("/api/spaces/{space_id}/documents")
     def documents(space_id: str, page: int = 1, page_size: int = 20, user_id: str = Depends(current_user)) -> dict:
         if page < 1 or not 1 <= page_size <= 100:
             raise HTTPException(status_code=422, detail=_error("invalid_pagination", "页码或每页数量无效"))
         with get_db() as conn:
-            require_space(conn, user_id, space_id)
-            total = conn.execute(
-                "SELECT count(*) AS count FROM documents WHERE space_id = ? AND status = 'active'",
-                (space_id,),
-            ).fetchone()["count"]
-            rows = conn.execute(
-                """SELECT d.id, d.title, d.course, d.semester, d.material_type, d.created_at,
-                          r.page_count, r.searchable_pages, r.needs_ocr_pages, r.needs_review_pages,
-                          r.failed_pages, r.parse_status, s.license_status, s.source_url
-                   FROM documents d JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
-                   JOIN sources s ON s.id = d.source_id
-                   WHERE d.space_id = ? AND d.status = 'active'
-                   ORDER BY d.created_at DESC LIMIT ? OFFSET ?""",
-                (space_id, page_size, (page - 1) * page_size),
-            ).fetchall()
+            space = require_space(conn, user_id, space_id)
+            if space["space_type"] == "subscribed":
+                total = conn.execute(
+                    """SELECT count(*) AS count
+                       FROM publication_documents pd
+                       JOIN documents d ON d.id = pd.document_id
+                       WHERE pd.version_id = ? AND d.status = 'active'""",
+                    (space["current_version_id"],),
+                ).fetchone()["count"]
+                rows = conn.execute(
+                    """SELECT d.id, d.title, d.course, d.semester, d.material_type, d.created_at,
+                              r.page_count, r.searchable_pages, r.needs_ocr_pages, r.needs_review_pages,
+                              r.failed_pages, r.parse_status, s.license_status, s.source_url,
+                              pd.use_in_rag, pd.can_preview, pd.can_download
+                       FROM publication_documents pd
+                       JOIN documents d ON d.id = pd.document_id AND d.status = 'active'
+                       JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+                       JOIN sources s ON s.id = d.source_id
+                       WHERE pd.version_id = ?
+                       ORDER BY d.created_at DESC LIMIT ? OFFSET ?""",
+                    (space["current_version_id"], page_size, (page - 1) * page_size),
+                ).fetchall()
+            else:
+                total = conn.execute(
+                    "SELECT count(*) AS count FROM documents WHERE space_id = ? AND status = 'active'",
+                    (space_id,),
+                ).fetchone()["count"]
+                rows = conn.execute(
+                    """SELECT d.id, d.title, d.course, d.semester, d.material_type, d.created_at,
+                              r.page_count, r.searchable_pages, r.needs_ocr_pages, r.needs_review_pages,
+                              r.failed_pages, r.parse_status, s.license_status, s.source_url,
+                              1 AS use_in_rag, 1 AS can_preview, 1 AS can_download
+                       FROM documents d JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
+                       JOIN sources s ON s.id = d.source_id
+                       WHERE d.space_id = ? AND d.status = 'active'
+                       ORDER BY d.created_at DESC LIMIT ? OFFSET ?""",
+                    (space_id, page_size, (page - 1) * page_size),
+                ).fetchall()
         return {"items": [dict(row) for row in rows], "page": page, "page_size": page_size, "total": total}
 
     @app.post("/api/spaces/{space_id}/documents")
@@ -752,7 +1265,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         size = 0
         try:
             with temp_path.open("wb") as output:
-                while block := await file.read(1024 * 1024):
+                while True:
+                    block = await file.read(1024 * 1024)
+                    if not block:
+                        break
                     size += len(block)
                     if size > settings.max_upload_bytes:
                         raise HTTPException(status_code=422, detail=_error("file_too_large", "文件超过 50 MiB"))
@@ -781,7 +1297,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.delete("/api/documents/{document_id}", status_code=204)
     def remove_document(document_id: str, user_id: str = Depends(current_user)) -> None:
         with get_db() as conn:
-            row = require_document(conn, user_id, document_id)
+            row = require_document(conn, user_id, document_id, operation="write")
             if row["role"] == "reader":
                 raise HTTPException(status_code=403, detail=_error("write_forbidden", "当前成员没有删除权限"))
             try:
@@ -792,7 +1308,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.post("/api/documents/{document_id}/reparse")
     def reparse(document_id: str, user_id: str = Depends(current_user)) -> dict:
         with get_db() as conn:
-            row = require_document(conn, user_id, document_id)
+            row = require_document(conn, user_id, document_id, operation="write")
             if row["role"] == "reader":
                 raise HTTPException(status_code=403, detail=_error("write_forbidden", "当前成员没有重新解析权限"))
             try:
@@ -806,7 +1322,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         if page_number < 1:
             raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
         with get_db() as conn:
-            row = require_document(conn, user_id, document_id)
+            row = require_document(conn, user_id, document_id, operation="preview")
             page = conn.execute(
                 """SELECT p.page_number, p.status, p.content, d.title
                    FROM pages p JOIN revisions r ON r.id = p.revision_id AND r.status = 'active'
@@ -823,7 +1339,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     @app.get("/api/documents/{document_id}/file")
     def document_file(document_id: str, user_id: str = Depends(current_user)) -> FileResponse:
         with get_db() as conn:
-            row = require_document(conn, user_id, document_id)
+            row = require_document(conn, user_id, document_id, operation="download")
         file_path = Path(row["file_path"])
         if not file_path.is_file():
             raise HTTPException(
@@ -850,7 +1366,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         if page_number < 1:
             raise HTTPException(status_code=404, detail=_error("page_not_found", "页面不存在"))
         with get_db() as conn:
-            row = require_document(conn, user_id, document_id)
+            row = require_document(conn, user_id, document_id, operation="preview")
         file_path = Path(row["file_path"])
         if not file_path.is_file():
             raise HTTPException(
@@ -890,6 +1406,500 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             media_type="image/png",
             headers={"Cache-Control": "private, no-store"},
         )
+
+    @app.get("/api/marketplace/libraries")
+    def marketplace_libraries(
+        q: str = "",
+        course: str = "",
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise HTTPException(status_code=422, detail=_error("invalid_pagination", "invalid pagination"))
+        filters = ["status IN ('published', 'suspended')" if is_admin_user(user_id) else "status = 'published'"]
+        params: list[Any] = []
+        if q.strip():
+            filters.append("(name LIKE ? OR description LIKE ? OR tags_json LIKE ?)")
+            needle = f"%{q.strip()}%"
+            params.extend([needle, needle, needle])
+        if course.strip():
+            filters.append("course = ?")
+            params.append(course.strip())
+        where = " AND ".join(filters)
+        with get_db() as conn:
+            total = conn.execute(
+                f"SELECT count(*) AS count FROM published_libraries WHERE {where}",
+                params,
+            ).fetchone()["count"]
+            rows = conn.execute(
+                f"""SELECT * FROM published_libraries
+                    WHERE {where}
+                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                [*params, page_size, (page - 1) * page_size],
+            ).fetchall()
+            items = [library_dict(conn, row, user_id) for row in rows]
+        return {"items": items, "page": page, "page_size": page_size, "total": int(total)}
+
+    @app.get("/api/marketplace/libraries/{library_id}")
+    def marketplace_library_detail(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            can_manage_suspended = is_admin_user(user_id) and library["status"] == "suspended"
+            if (library["status"] != "published" and not can_manage_suspended) or not library["current_version_id"]:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error("publication_not_published", "publication is not published"),
+                )
+            version = fetch_version(conn, library["current_version_id"])
+            response = publication_response(conn, library, version, user_id)
+            if is_admin_user(user_id):
+                versions = conn.execute(
+                    """SELECT * FROM publication_versions
+                       WHERE library_id = ? AND status IN ('published', 'superseded')
+                       ORDER BY version_number DESC""",
+                    (library_id,),
+                ).fetchall()
+                response["versions"] = [version_dict(row) for row in versions]
+            return response
+
+    @app.post("/api/marketplace/libraries/{library_id}/subscribe")
+    def subscribe_library(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            if library["status"] != "published":
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("publication_not_published", "publication is not published"),
+                )
+            conn.execute("BEGIN")
+            conn.execute(
+                """INSERT INTO library_subscriptions
+                   (library_id, user_id, status, subscribed_at, cancelled_at)
+                   VALUES (?, ?, 'active', CURRENT_TIMESTAMP, NULL)
+                   ON CONFLICT(library_id, user_id) DO UPDATE SET
+                     status = 'active',
+                     subscribed_at = CURRENT_TIMESTAMP,
+                     cancelled_at = NULL""",
+                (library_id, user_id),
+            )
+            audit_event(conn, user_id, "library_subscribed", "published_library", library_id)
+            conn.commit()
+            library = fetch_library(conn, library_id)
+        return {
+            "library_id": library_id,
+            "status": "active",
+            "is_subscribed": True,
+            "space_id": library["space_id"],
+        }
+
+    @app.delete("/api/marketplace/libraries/{library_id}/subscription")
+    def unsubscribe_library(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            conn.execute("BEGIN")
+            conn.execute(
+                """INSERT INTO library_subscriptions
+                   (library_id, user_id, status, subscribed_at, cancelled_at)
+                   VALUES (?, ?, 'cancelled', NULL, CURRENT_TIMESTAMP)
+                   ON CONFLICT(library_id, user_id) DO UPDATE SET
+                     status = 'cancelled',
+                     cancelled_at = CURRENT_TIMESTAMP""",
+                (library_id, user_id),
+            )
+            audit_event(conn, user_id, "library_subscription_cancelled", "published_library", library_id)
+            conn.commit()
+        return {
+            "library_id": library_id,
+            "status": "cancelled",
+            "is_subscribed": False,
+            "space_id": library["space_id"],
+        }
+
+    @app.get("/api/publications/mine")
+    def my_publications(
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        if page < 1 or not 1 <= page_size <= 100:
+            raise HTTPException(status_code=422, detail=_error("invalid_pagination", "invalid pagination"))
+        with get_db() as conn:
+            total = conn.execute(
+                "SELECT count(*) AS count FROM published_libraries WHERE author_id = ?",
+                (user_id,),
+            ).fetchone()["count"]
+            libraries = conn.execute(
+                """SELECT * FROM published_libraries WHERE author_id = ?
+                   ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                (user_id, page_size, (page - 1) * page_size),
+            ).fetchall()
+            items = []
+            for library in libraries:
+                versions = conn.execute(
+                    """SELECT * FROM publication_versions
+                       WHERE library_id = ? ORDER BY version_number DESC""",
+                    (library["id"],),
+                ).fetchall()
+                items.append({
+                    **library_dict(conn, library, user_id),
+                    "versions": [version_dict(row) for row in versions],
+                })
+        return {"items": items, "page": page, "page_size": page_size, "total": int(total)}
+
+    @app.post("/api/publications", status_code=201)
+    def create_publication(payload: PublicationCreateRequest, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            library, version = create_publication_snapshot(conn, user_id, payload)
+            return publication_response(conn, library, version, user_id)
+
+    @app.post("/api/publications/{library_id}/versions", status_code=201)
+    def create_publication_version(
+        library_id: str,
+        payload: PublicationCreateRequest,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            assert_library_author(library, user_id)
+            if library["status"] == "withdrawn":
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "withdrawn publication cannot accept new versions"),
+                )
+            library, version = create_publication_snapshot(conn, user_id, payload, library=library)
+            return publication_response(conn, library, version, user_id)
+
+    @app.post("/api/publication-versions/{version_id}/withdraw")
+    def withdraw_publication_version(version_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            version = fetch_version(conn, version_id)
+            library = fetch_library(conn, version["library_id"])
+            assert_library_author(library, user_id)
+            if version["status"] not in {"pending", "changes_requested"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "only pending or changes_requested versions can be withdrawn"),
+                )
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE publication_versions SET status = 'withdrawn' WHERE id = ?",
+                (version_id,),
+            )
+            conn.execute(
+                """UPDATE documents SET status = 'withdrawn'
+                   WHERE id IN (SELECT document_id FROM publication_documents WHERE version_id = ?)
+                     AND status = 'staged'""",
+                (version_id,),
+            )
+            audit_event(conn, user_id, "publication_version_withdrawn", "publication_version", version_id)
+            conn.commit()
+            return {"version": version_dict(fetch_version(conn, version_id))}
+
+    @app.post("/api/publications/{library_id}/withdraw")
+    def withdraw_publication(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            assert_library_author(library, user_id)
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE published_libraries SET status = 'withdrawn', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (library_id,),
+            )
+            audit_event(conn, user_id, "publication_withdrawn", "published_library", library_id)
+            conn.commit()
+            library = fetch_library(conn, library_id)
+            return {"library": library_dict(conn, library, user_id)}
+
+    @app.get("/api/admin/publication-versions")
+    def admin_publication_versions(
+        status: str = "pending",
+        page: int = 1,
+        page_size: int = 20,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        require_admin(user_id)
+        if page < 1 or not 1 <= page_size <= 100:
+            raise HTTPException(status_code=422, detail=_error("invalid_pagination", "invalid pagination"))
+        with get_db() as conn:
+            total = conn.execute(
+                "SELECT count(*) AS count FROM publication_versions WHERE status = ?",
+                (status,),
+            ).fetchone()["count"]
+            rows = conn.execute(
+                """SELECT pv.*, pl.author_id, u.display_name AS author_name, pl.status AS library_status
+                   FROM publication_versions pv
+                   JOIN published_libraries pl ON pl.id = pv.library_id
+                   JOIN users u ON u.id = pl.author_id
+                   WHERE pv.status = ?
+                   ORDER BY pv.submitted_at DESC LIMIT ? OFFSET ?""",
+                (status, page_size, (page - 1) * page_size),
+            ).fetchall()
+            items = []
+            for row in rows:
+                item = version_dict(row)
+                item.update({
+                    "author_id": row["author_id"],
+                    "author_name": row["author_name"],
+                    "library_status": row["library_status"],
+                })
+                items.append(item)
+        return {"items": items, "page": page, "page_size": page_size, "total": int(total)}
+
+    @app.get("/api/admin/publication-versions/{version_id}")
+    def admin_publication_version_detail(version_id: str, user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
+        with get_db() as conn:
+            version = fetch_version(conn, version_id)
+            library = fetch_library(conn, version["library_id"])
+            return publication_response(conn, library, version, user_id, include_source=True)
+
+    @app.patch("/api/admin/publication-versions/{version_id}")
+    def review_publication_version(
+        version_id: str,
+        payload: PublicationReviewRequest,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        require_admin(user_id)
+        with get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            version = fetch_version(conn, version_id)
+            library = fetch_library(conn, version["library_id"])
+            if library["author_id"] == user_id:
+                raise HTTPException(status_code=403, detail=_error("review_forbidden", "authors cannot review their own publications"))
+            if version["status"] != "pending":
+                raise HTTPException(status_code=409, detail=_error("invalid_review_transition", "version is not pending"))
+            docs = publication_documents(conn, version_id, include_source=True)
+            doc_ids = {item["document_id"] for item in docs}
+            for review in payload.document_reviews:
+                if review.document_id not in doc_ids:
+                    raise HTTPException(status_code=422, detail=_error("publication_document_forbidden", "review document is not in this version"))
+            for review in payload.document_reviews:
+                conn.execute(
+                    """UPDATE publication_documents
+                       SET use_in_rag = ?, can_preview = ?, can_download = ?,
+                           review_note = ?, review_status = ?
+                       WHERE version_id = ? AND document_id = ?""",
+                    (
+                        1 if review.use_in_rag else 0,
+                        1 if review.can_preview else 0,
+                        1 if review.can_download else 0,
+                        review.review_note,
+                        "approved" if payload.action == "approve" else payload.action,
+                        version_id,
+                        review.document_id,
+                    ),
+                )
+            if payload.action in {"changes_requested", "reject"}:
+                new_status = "changes_requested" if payload.action == "changes_requested" else "rejected"
+                updated = conn.execute(
+                    """UPDATE publication_versions
+                       SET status = ?, reviewed_by = ?, review_note = ?, reviewed_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND status = 'pending'""",
+                    (new_status, user_id, payload.review_note, version_id),
+                )
+                if updated.rowcount != 1:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_error("invalid_review_transition", "version is no longer pending"),
+                    )
+                conn.execute(
+                    "UPDATE publication_documents SET review_status = ? WHERE version_id = ? AND review_status = 'pending'",
+                    (new_status, version_id),
+                )
+                audit_event(conn, user_id, f"publication_version_{new_status}", "publication_version", version_id)
+                conn.commit()
+                version = fetch_version(conn, version_id)
+                library = fetch_library(conn, version["library_id"])
+                return publication_response(conn, library, version, user_id, include_source=True)
+
+            current_version_id = conn.execute(
+                "SELECT current_version_id FROM published_libraries WHERE id = ?",
+                (library["id"],),
+            ).fetchone()["current_version_id"]
+            if current_version_id != version["base_version_id"]:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("publication_base_changed", "publication base version changed"),
+                )
+            if current_version_id:
+                conn.execute(
+                    """UPDATE documents SET status = 'superseded'
+                       WHERE id IN (SELECT document_id FROM publication_documents WHERE version_id = ?)
+                         AND status = 'active'""",
+                    (current_version_id,),
+                )
+                conn.execute(
+                    "UPDATE publication_versions SET status = 'superseded' WHERE id = ?",
+                    (current_version_id,),
+                )
+            conn.execute(
+                """UPDATE documents SET status = 'active'
+                   WHERE id IN (SELECT document_id FROM publication_documents WHERE version_id = ?)
+                     AND status = 'staged'""",
+                (version_id,),
+            )
+            conn.execute(
+                "UPDATE publication_documents SET review_status = 'approved' WHERE version_id = ? AND review_status = 'pending'",
+                (version_id,),
+            )
+            updated = conn.execute(
+                """UPDATE publication_versions
+                   SET status = 'published', reviewed_by = ?, review_note = ?,
+                       reviewed_at = CURRENT_TIMESTAMP, published_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND status = 'pending'""",
+                (user_id, payload.review_note, version_id),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "version is no longer pending"),
+                )
+            conn.execute(
+                """UPDATE published_libraries
+                   SET name = ?, course = ?, description = ?, tags_json = ?,
+                       status = 'published', current_version_id = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (
+                    version["name"],
+                    version["course"],
+                    version["description"],
+                    version["tags_json"],
+                    version_id,
+                    library["id"],
+                ),
+            )
+            conn.execute(
+                "UPDATE spaces SET name = ? WHERE id = ?",
+                (version["name"], library["space_id"]),
+            )
+            audit_event(conn, user_id, "publication_version_approved", "publication_version", version_id)
+            conn.commit()
+            version = fetch_version(conn, version_id)
+            library = fetch_library(conn, version["library_id"])
+            return publication_response(conn, library, version, user_id, include_source=True)
+
+    @app.post("/api/admin/publications/{library_id}/suspend")
+    def suspend_publication(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            if library["author_id"] == user_id:
+                raise HTTPException(status_code=403, detail=_error("review_forbidden", "authors cannot suspend their own publications"))
+            if library["status"] != "published":
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "only published libraries can be suspended"),
+                )
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE published_libraries SET status = 'suspended', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'published'",
+                (library_id,),
+            )
+            audit_event(conn, user_id, "publication_suspended", "published_library", library_id)
+            conn.commit()
+            library = fetch_library(conn, library_id)
+            return {"library": library_dict(conn, library, user_id)}
+
+    @app.post("/api/admin/publications/{library_id}/restore")
+    def restore_publication(library_id: str, user_id: str = Depends(current_user)) -> dict:
+        require_admin(user_id)
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            if library["author_id"] == user_id:
+                raise HTTPException(status_code=403, detail=_error("review_forbidden", "authors cannot restore their own publications"))
+            if library["status"] != "suspended":
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "only suspended libraries can be restored"),
+                )
+            conn.execute("BEGIN")
+            conn.execute(
+                "UPDATE published_libraries SET status = 'published', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'suspended'",
+                (library_id,),
+            )
+            audit_event(conn, user_id, "publication_restored", "published_library", library_id)
+            conn.commit()
+            library = fetch_library(conn, library_id)
+            return {"library": library_dict(conn, library, user_id)}
+
+    @app.post("/api/admin/publications/{library_id}/rollback")
+    def rollback_publication(
+        library_id: str,
+        payload: PublicationRollbackRequest,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        require_admin(user_id)
+        with get_db() as conn:
+            library = fetch_library(conn, library_id)
+            if library["author_id"] == user_id:
+                raise HTTPException(status_code=403, detail=_error("review_forbidden", "authors cannot rollback their own publications"))
+            if library["status"] not in {"published", "suspended"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("invalid_review_transition", "only published or suspended libraries can be rolled back"),
+                )
+            target = fetch_version(conn, payload.version_id)
+            if (
+                target["library_id"] != library_id
+                or target["status"] != "superseded"
+                or payload.version_id == library["current_version_id"]
+            ):
+                raise HTTPException(status_code=409, detail=_error("invalid_review_transition", "invalid rollback target"))
+            conn.execute("BEGIN IMMEDIATE")
+            current_version_id = library["current_version_id"]
+            if current_version_id and current_version_id != payload.version_id:
+                conn.execute(
+                    """UPDATE documents SET status = 'superseded'
+                       WHERE id IN (SELECT document_id FROM publication_documents WHERE version_id = ?)
+                         AND status = 'active'""",
+                    (current_version_id,),
+                )
+                conn.execute(
+                    "UPDATE publication_versions SET status = 'superseded' WHERE id = ?",
+                    (current_version_id,),
+                )
+            conn.execute(
+                """UPDATE documents SET status = 'active'
+                   WHERE id IN (SELECT document_id FROM publication_documents WHERE version_id = ?)
+                     AND status IN ('staged', 'superseded')""",
+                (payload.version_id,),
+            )
+            conn.execute(
+                "UPDATE publication_versions SET status = 'published' WHERE id = ?",
+                (payload.version_id,),
+            )
+            conn.execute(
+                """UPDATE published_libraries
+                   SET name = ?, course = ?, description = ?, tags_json = ?,
+                        status = ?, current_version_id = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (
+                    target["name"],
+                    target["course"],
+                    target["description"],
+                    target["tags_json"],
+                    library["status"],
+                    payload.version_id,
+                    library_id,
+                ),
+            )
+            conn.execute("UPDATE spaces SET name = ? WHERE id = ?", (target["name"], library["space_id"]))
+            audit_event(
+                conn,
+                user_id,
+                "publication_rolled_back",
+                "published_library",
+                library_id,
+                {"version_id": payload.version_id, "review_note": payload.review_note},
+            )
+            conn.commit()
+            library = fetch_library(conn, library_id)
+            target = fetch_version(conn, payload.version_id)
+            return {"library": library_dict(conn, library, user_id), "version": version_dict(target)}
 
     @app.get("/api/settings")
     def get_settings(user_id: str = Depends(current_user)) -> dict:
