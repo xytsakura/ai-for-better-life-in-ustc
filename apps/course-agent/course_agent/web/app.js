@@ -381,7 +381,7 @@ function normalizeFeaturePreferences(value = {}) {
   const features = value && typeof value === 'object' ? value : {};
   return {
     schedule: features.schedule !== false,
-    avatar: features.avatar === true,
+    avatar: features.avatar !== false,
     avatarCharacter: normalizeHomeAgentAvatarCharacter(features.avatarCharacter),
     avatarScale: normalizeHomeAgentAvatarScale(features.avatarScale),
     avatarActions: normalizeAvatarActions(features.avatarActions),
@@ -1248,6 +1248,9 @@ function setHomeAgentAvatarControlsOpen(open, { focusAvatar = false } = {}) {
   avatar.controlsOpen = canOpen;
   if (dock) dock.dataset.controlsOpen = String(canOpen);
   if (button) button.setAttribute('aria-expanded', String(canOpen));
+  if (canOpen) {
+    window.requestAnimationFrame(() => clampHomeAgentAvatarPosition());
+  }
   if (!canOpen && focusAvatar && button) button.focus({ preventScroll: true });
 }
 
@@ -1623,14 +1626,22 @@ function homeAgentAvatarDragBounds() {
   const drag = state.homeAgentAvatar.drag;
   const surface = $('.app-main');
   const dock = $('#home-agent-avatar-dock');
+  const inputWrap = $('.home-input-wrap');
   if (!surface || !dock) return null;
 
   const surfaceRect = surface.getBoundingClientRect();
+  const inputRect = inputWrap?.getBoundingClientRect();
   syncHomeAgentAvatarControlGeometry();
+  const visibleControls = Array.from(
+    dock.querySelectorAll('[data-avatar-control-boundary]'),
+  ).filter(element => {
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none' && style.visibility !== 'hidden';
+  });
   const paintedRects = [
     dock.getBoundingClientRect(),
     $('#home-agent-avatar-button')?.getBoundingClientRect(),
-    ...Array.from(dock.querySelectorAll('[data-avatar-control-boundary]'), element => element.getBoundingClientRect()),
+    ...visibleControls.map(element => element.getBoundingClientRect()),
   ].filter(rect => rect && rect.width > 0 && rect.height > 0);
   if (
     surfaceRect.width <= 0
@@ -1651,7 +1662,10 @@ function homeAgentAvatarDragBounds() {
   const minX = HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - baseLeft;
   const maxX = viewportWidth - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - (baseLeft + paintedRect.right - paintedRect.left);
   const surfaceTop = Math.max(0, surfaceRect.top);
-  const surfaceBottom = Math.min(viewportHeight, surfaceRect.bottom);
+  const inputBoundary = inputRect && inputRect.height > 0
+    ? inputRect.top - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX
+    : viewportHeight;
+  const surfaceBottom = Math.min(viewportHeight, surfaceRect.bottom, inputBoundary);
   const minY = surfaceTop + HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - baseTop;
   const maxY = surfaceBottom - HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX - (baseTop + paintedRect.bottom - paintedRect.top);
 
@@ -4032,12 +4046,11 @@ function updateHomeModelLabel() {
 
 function modelSelectOptions(selectedModel) {
   const eligible = chatEligibleModels();
-  const models = [...eligible];
+  const models = eligible.length
+    ? eligible
+    : [normalizeModelInfo({ id: selectedModel || state.settings.llm_model || 'gpt-5.6-sol', chat_eligible: true })].filter(Boolean);
   if (selectedModel && !models.some(model => model.id === selectedModel)) {
     models.unshift(normalizeModelInfo({ id: selectedModel, chat_eligible: true }));
-  }
-  if (!models.length) {
-    return '';
   }
   return models.map(model => (
     `<option value="${escapeHtml(model.id)}"${model.id === selectedModel ? ' selected' : ''}>${escapeHtml(model.display_name)}</option>`
@@ -4057,26 +4070,12 @@ function renderModelControls() {
   }
   if (settingModel) {
     const defaultModel = state.settings.llm_model || selectedModel;
+    settingModel.innerHTML = modelSelectOptions(defaultModel);
     settingModel.value = defaultModel;
-    settingModel.disabled = !(isCurrentUserAdmin() || state.settings.demo_mode);
-    settingModel.placeholder = defaultModel ? '' : '例如 gpt-4o、claude-3-5-sonnet、deepseek-chat';
+    settingModel.disabled = !isCurrentUserAdmin();
   }
-  renderModelDatalist();
   renderReasoningControl();
   renderModelCatalogList();
-}
-
-function renderModelDatalist() {
-  const datalist = $('#settings-model-datalist');
-  if (!datalist) return;
-  const eligible = chatEligibleModels();
-  datalist.replaceChildren();
-  for (const model of eligible) {
-    const option = document.createElement('option');
-    option.value = model.id;
-    option.label = model.display_name || model.id;
-    datalist.appendChild(option);
-  }
 }
 
 function renderReasoningControl() {
@@ -4175,9 +4174,8 @@ function applyModelCatalog(payload) {
   if (!state.currentModel) {
     state.currentModel = state.settings.llm_model || chatEligibleModels()[0]?.id || '';
   }
-  // 用户已在配置里手动指定的模型名优先保留，不被发现列表覆盖。
-  if (!state.settings.llm_model && !findModelInfo(state.currentModel) && chatEligibleModels().length) {
-    state.currentModel = chatEligibleModels()[0].id;
+  if (!findModelInfo(state.currentModel) && chatEligibleModels().length) {
+    state.currentModel = state.settings.llm_model || chatEligibleModels()[0].id;
   }
   if (!state.currentReasoningEffort) {
     state.currentReasoningEffort = defaultReasoningForModel();
@@ -5799,7 +5797,6 @@ async function loadSettings() {
 
 function renderSettings() {
   const admin = isCurrentUserAdmin();
-  const canConfigure = admin || state.settings.demo_mode;
   $('#setting-base-url').value = state.settings.llm_base_url || '';
   $('#setting-api-key').value = '';
   $('#setting-api-key').placeholder = state.settings.llm_configured ? '已配置，留空表示保持不变' : 'sk-...';
@@ -5809,7 +5806,7 @@ function renderSettings() {
   ['#setting-base-url', '#setting-api-key', '#setting-model', '#setting-timeout', '#settings-test', '#settings-discover-models', '#settings-form button[type="submit"]']
     .forEach(selector => {
       const element = $(selector);
-      if (element) element.disabled = !canConfigure;
+      if (element) element.disabled = !admin;
     });
   const versionEl = $('#about-version');
   if (versionEl && state.settings?.version) versionEl.textContent = `v${state.settings.version}`;

@@ -458,8 +458,10 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert 'id="document-reader" role="dialog" aria-modal="false"' in html
     assert 'id="settings-discover-models"' in html
     assert 'id="settings-model-list"' in html
+    assert '<select id="setting-model"></select>' in html
+    assert 'id="settings-model-datalist"' not in html
 
-    script = client.get("/assets/app.js").text
+    script = client.get("/assets/app.js").text.replace("\r\n", "\n")
     assert "const REASONING_OPTIONS = Object.freeze([" in script
     assert "return state.settings.is_admin === true;" in script
     assert "if (item === null || item === undefined || item === '') return null;" in script

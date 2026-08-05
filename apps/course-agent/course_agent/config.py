@@ -46,9 +46,9 @@ class Settings:
     )
     llm_api_key: str = os.getenv("COURSE_AGENT_LLM_API_KEY", "")
     llm_base_url: str = os.getenv("COURSE_AGENT_LLM_BASE_URL", "")
-    llm_model: str = os.getenv("COURSE_AGENT_LLM_MODEL", "")
+    llm_model: str = os.getenv("COURSE_AGENT_LLM_MODEL", "gpt-5.6-sol")
     branch_llm_model: str = os.getenv(
-        "COURSE_AGENT_BRANCH_LLM_MODEL", ""
+        "COURSE_AGENT_BRANCH_LLM_MODEL", "gpt-5.6-sol"
     )
     llm_timeout_seconds: float = float(
         os.getenv("COURSE_AGENT_LLM_TIMEOUT_SECONDS", "45")
@@ -111,7 +111,7 @@ class Settings:
             if value:
                 self.llm_api_key = str(value).strip()
         if "llm_model" in data:
-            self.llm_model = str(data["llm_model"] or "").strip()
+            self.llm_model = str(data["llm_model"] or "").strip() or "gpt-5.6-sol"
         if "llm_timeout_seconds" in data:
             self.llm_timeout_seconds = float(data["llm_timeout_seconds"])
         for key in ("search_backend", "parser_backend", "chunking_backend", "tokenizer_backend"):

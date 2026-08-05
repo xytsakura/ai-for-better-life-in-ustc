@@ -256,7 +256,7 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert "course-agent-history-v1" not in script
 
 
-def test_virtual_avatar_bubble_theme_and_vertical_responsive_layout_are_packaged(tmp_path):
+def test_virtual_avatar_bubble_theme_and_floating_responsive_layout_are_packaged(tmp_path):
     client = make_client(tmp_path)
     html = client.get("/").text
     styles = client.get("/assets/styles.css").text
@@ -280,27 +280,38 @@ def test_virtual_avatar_bubble_theme_and_vertical_responsive_layout_are_packaged
     mobile_1100 = styles[
         styles.index("@media (max-width: 1100px)") : styles.index("@media (max-width: 900px)")
     ]
-    assert "grid-template-rows: 280px minmax(0, 1fr);" in mobile_1100
+    assert "grid-template-rows: minmax(0, 1fr);" in mobile_1100
     assert "grid-template-columns: minmax(0, 1fr);" in mobile_1100
     assert "grid-template-rows: 74px minmax(0, 1fr);" in mobile_1100
+    assert "width: 170px;" in mobile_1100
+    assert "height: 250px;" in mobile_1100
+    assert "bottom: 156px;" in mobile_1100
     assert "height: 144px; max-height: 144px;" in mobile_1100
     assert ".home-agent-avatar-stage" in mobile_1100
     assert "grid-row: 2;" in mobile_1100
+    assert "padding-right:" not in mobile_1100
 
     mobile_680 = styles[
         styles.index("@media (max-width: 680px)") : styles.index("@media (max-width: 420px)")
     ]
-    assert "grid-template-rows: 246px minmax(0, 1fr);" in mobile_680
+    assert "grid-template-rows: minmax(0, 1fr);" in mobile_680
     assert "grid-template-columns: minmax(0, 1fr);" in mobile_680
-    assert "grid-template-rows: 72px minmax(0, 1fr);" in mobile_680
-    assert "height: 130px; max-height: 130px;" in mobile_680
+    assert "width: 132px;" in mobile_680
+    assert "height: 188px;" in mobile_680
+    assert "bottom: 180px;" in mobile_680
+    assert "grid-template-rows: 52px minmax(0, 1fr);" in mobile_680
+    assert "height: 112px; max-height: 112px;" in mobile_680
+    assert "padding-right:" not in mobile_680
 
     mobile_420 = styles[
         styles.index("@media (max-width: 420px)") : styles.index("@media (prefers-reduced-motion: reduce)")
     ]
-    assert "grid-template-rows: 230px minmax(0, 1fr);" in mobile_420
+    assert "grid-template-rows: minmax(0, 1fr);" in mobile_420
     assert "grid-template-columns: minmax(0, 1fr);" in mobile_420
-    assert "height: 118px; max-height: 118px;" in mobile_420
+    assert "width: 112px;" in mobile_420
+    assert "height: 160px;" in mobile_420
+    assert "bottom: 180px;" in mobile_420
+    assert "height: 98px; max-height: 98px;" in mobile_420
     assert "grid-template-columns: minmax(0, 1fr) 72px" not in mobile_420
 
     settings_markup = html.split('id="view-settings"', 1)[1].split("<!-- Modals -->", 1)[0]
@@ -345,6 +356,8 @@ def test_virtual_avatar_dock_dragging_is_packaged(tmp_path):
     assert "--home-avatar-speech-min-width: 64px;" in dock_styles
     assert "--home-avatar-speech-max-width: 200px;" in dock_styles
     assert "--home-avatar-speech-tail-top: 50%;" in dock_styles
+    assert "position: fixed;" in dock_styles
+    assert "z-index: 40;" in dock_styles
     assert "transform: translate3d(var(--home-avatar-drag-x), var(--home-avatar-drag-y), 0);" in dock_styles
     assert ".home-agent-avatar-dock[data-dragging=\"true\"]" in dock_styles
     button_styles = styles[
@@ -363,15 +376,19 @@ def test_virtual_avatar_dock_dragging_is_packaged(tmp_path):
     bounds = section("function homeAgentAvatarDragBounds()", "function setHomeAgentAvatarOffset(")
     assert "const surface = $('.app-main');" in bounds
     assert "const dock = $('#home-agent-avatar-dock');" in bounds
+    assert "const inputWrap = $('.home-input-wrap');" in bounds
     assert "surface.getBoundingClientRect()" in bounds
+    assert "inputWrap?.getBoundingClientRect()" in bounds
     assert "dock.getBoundingClientRect()" in bounds
     assert "const viewportWidth = document.documentElement.clientWidth;" in bounds
     assert "const viewportHeight = document.documentElement.clientHeight;" in bounds
     assert "const paintedRects = [" in bounds
     assert "dock.querySelectorAll('[data-avatar-control-boundary]')" in bounds
+    assert "style.visibility !== 'hidden'" in bounds
     assert "const baseLeft = paintedRect.left - drag.offsetX;" in bounds
     assert "const baseTop = paintedRect.top - drag.offsetY;" in bounds
-    assert bounds.count("HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX") == 4
+    assert bounds.count("HOME_AGENT_AVATAR_BOUNDARY_PADDING_PX") == 5
+    assert "Math.min(viewportHeight, surfaceRect.bottom, inputBoundary)" in bounds
     assert "if (min <= max) return { min, max };" in bounds
     assert "const centered = (min + max) / 2;" in bounds
 

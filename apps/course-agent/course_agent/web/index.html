@@ -621,9 +621,8 @@
                 </label>
                 <label class="field">
                   <span>新对话默认模型</span>
-                  <input type="text" id="setting-model" list="settings-model-datalist" placeholder="例如 gpt-4o、claude-3-5-sonnet、deepseek-chat">
-                  <datalist id="settings-model-datalist"></datalist>
-                  <span class="field-hint">自由填写模型名；也可点击「发现模型」后从下拉中选择。留空表示暂不指定默认模型。</span>
+                  <select id="setting-model"></select>
+                  <span class="field-hint">只影响新对话；已有会话保留各自模型。</span>
                 </label>
                 <div class="settings-model-catalog">
                   <div class="settings-model-catalog-actions">
