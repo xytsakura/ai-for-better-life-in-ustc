@@ -385,7 +385,7 @@ async function renderDetail(id) {
 
         <div class="detail-section">
           <h2>数据与身份提示</h2>
-          <p class="lead">${escapeHtml(agent.data_policy)}</p>
+          <p class="lead">${escapeHtml(formatDataPolicy(agent.data_policy))}</p>
         </div>
       </div>
 
@@ -564,7 +564,11 @@ function applyAguiEvent(event, agentMessage) {
     renderMessageMarkdown(agentMessage, agentMessage.dataset.raw);
     return;
   }
-  if (type === 'TEXT_MESSAGE_END' || type === 'RUN_FINISHED') return;
+  if (type === 'TEXT_MESSAGE_END') return;
+  if (type === 'RUN_FINISHED') {
+    renderCitations(event.citations);
+    return;
+  }
   if (type?.startsWith('TOOL_CALL')) {
     renderToolCall(event);
     return;
@@ -772,8 +776,9 @@ function renderAdminRow(raw, selected) {
 
 function renderAdminDetail(raw) {
   const agent = normalizeAgent(raw);
-  const version = raw.active_version || raw.versions?.[0] || {};
+  const version = raw.versions?.find((item) => item.review_status === 'pending') || raw.active_version || raw.versions?.[0] || {};
   const versionId = version.version_id || version.id || raw.active_version_id || `${agent.id}@${agent.version}`;
+  const versionIsConnected = version.manifest?.integration?.mode === 'connected';
   const checks = raw.checks || version.checks || [
     { name: 'Manifest Schema', status: version.review_status === 'approved' ? 'passed' : 'pending', detail: '等待服务端自动检查结果' },
   ];
@@ -783,15 +788,17 @@ function renderAdminDetail(raw) {
     <div class="tag-list">${statusBadge(raw.status || agent.status || 'pending')} ${accessBadge(agent)}</div>
     <h3>自动检查</h3>
     <div class="check-list">
-      ${checks.map((check) => `<div class="check-item"><span>${statusDot(check.status)}</span><span><strong>${escapeHtml(check.name)}</strong><br><span class="small-muted">${escapeHtml(check.detail || '')}</span></span></div>`).join('')}
+      ${checks.map((check) => `<div class="check-item"><span>${statusDot(check.status)}</span><span><strong>${escapeHtml(check.name)}</strong><br><span class="small-muted">${escapeHtml(check.detail || check.safe_detail || check.error_code || '')}</span></span></div>`).join('')}
     </div>
     <h3>Manifest</h3>
     <pre class="manifest-box">${escapeHtml(JSON.stringify(raw.active_version?.manifest || raw.manifest || raw, null, 2))}</pre>
     <div class="action-row" style="margin-top:14px">
+      <button class="ghost-button" type="button" data-run-checks data-version="${escapeAttr(versionId)}">重新执行机器验收</button>
       ${version.review_status === 'pending' || raw.review_status === 'pending' || raw.status === 'pending' ? `<button class="button" type="button" data-review="approved" data-version="${escapeAttr(versionId)}">批准</button><button class="danger-button" type="button" data-review="rejected" data-version="${escapeAttr(versionId)}">拒绝</button>` : ''}
-      ${normalizeAccessLevel(agent) === 'connected' && !raw.featured ? `<button class="ghost-button" type="button" data-review-featured data-version="${escapeAttr(versionId)}">批准为 Featured</button>` : ''}
+      ${version.review_status === 'pending' && versionIsConnected ? `<button class="ghost-button" type="button" data-review-featured data-version="${escapeAttr(versionId)}">批准为 Featured</button>` : ''}
       ${raw.status === 'active' ? `<button class="danger-button" type="button" data-status-action="suspend">暂停</button>` : ''}
       ${raw.status === 'suspended' ? `<button class="button" type="button" data-status-action="restore">恢复</button>` : ''}
+      ${['active', 'suspended'].includes(raw.status) ? `<button class="danger-button" type="button" data-status-action="deprecate">废弃</button>` : ''}
       <button class="ghost-button" type="button" data-status-action="rollback">回滚</button>
     </div>
   `;
@@ -816,6 +823,9 @@ function bindAdminActions() {
   document.querySelector('[data-review-featured]')?.addEventListener('click', (event) => {
     adminReview('approved', event.currentTarget.dataset.version, true);
   });
+  document.querySelector('[data-run-checks]')?.addEventListener('click', (event) => {
+    adminRunChecks(event.currentTarget.dataset.version);
+  });
   document.querySelectorAll('[data-status-action]').forEach((button) => {
     button.addEventListener('click', () => adminStatus(button.dataset.statusAction));
   });
@@ -837,12 +847,28 @@ async function adminReview(decision, versionId, featured) {
   paintAdmin();
 }
 
+async function adminRunChecks(versionId) {
+  try {
+    const result = await apiJson(HUB_API.checkVersion(state.selectedAdminAgentId, versionId), {
+      method: 'POST',
+      body: {},
+      admin: true,
+    });
+    toast(result.overall_status === 'passed' ? '机器验收通过。' : '机器验收未通过，请查看检查项。');
+    state.adminAgents = await loadAdminAgents();
+  } catch (error) {
+    toast(`机器验收失败：${readableError(error)}`);
+  }
+  paintAdmin();
+}
+
 async function adminStatus(action) {
   const reason = prompt(`${action} 原因`, '');
   if (reason === null) return;
   try {
     const endpoint = action === 'suspend' ? HUB_API.suspend(state.selectedAdminAgentId)
       : action === 'restore' ? HUB_API.restore(state.selectedAdminAgentId)
+      : action === 'deprecate' ? HUB_API.deprecate(state.selectedAdminAgentId)
       : HUB_API.rollback(state.selectedAdminAgentId);
     const body = action === 'rollback' ? { reason, version_id: null } : { reason };
     const updated = await apiJson(endpoint, { method: 'POST', body, admin: true });
@@ -934,6 +960,15 @@ function healthBadge(health) {
   return `<span class="badge badge--${tone}">${escapeHtml(health?.label || '未检查')}</span>`;
 }
 
+function formatDataPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return String(policy || '平台按最小必要原则传递身份和请求上下文。');
+  return [
+    policy.receives_user_identity ? '会接收本次请求所需的短期用户身份' : '不接收 Hub 用户身份',
+    policy.receives_files ? '可能接收用户明确授权的文件' : '不接收用户文件',
+    policy.stores_conversation ? 'Agent 声明会保存对话' : 'Agent 声明不保存对话正文',
+  ].join('；') + '。';
+}
+
 function accessBadge(agent) {
   const meta = accessMeta(agent);
   return `<span class="badge badge--${meta.tone}">${escapeHtml(meta.label)}</span>`;
@@ -1002,6 +1037,23 @@ function renderToolCall(event) {
     <div class="tool-call__body"><pre><code>${escapeHtml(JSON.stringify(event, null, 2))}</code></pre></div>
   `;
   document.querySelector('#messages')?.appendChild(details);
+}
+
+function renderCitations(citations) {
+  if (!Array.isArray(citations) || !citations.length) return;
+  const section = document.createElement('section');
+  section.className = 'citation-list';
+  section.setAttribute('aria-label', '引用来源');
+  section.innerHTML = `
+    <h3>引用来源</h3>
+    <ol>${citations.map((citation, index) => {
+      const title = citation?.title || citation?.label || `来源 ${index + 1}`;
+      const href = safeUrl(citation?.url || citation?.href || '');
+      const location = citation?.page ? `第 ${escapeHtml(citation.page)} 页` : citation?.location || '';
+      return `<li>${href ? `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>` : `<strong>${escapeHtml(title)}</strong>`}${location ? ` <span class="small-muted">${escapeHtml(location)}</span>` : ''}</li>`;
+    }).join('')}</ol>
+  `;
+  document.querySelector('#messages')?.appendChild(section);
 }
 
 function skeletonDetail() {

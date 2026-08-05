@@ -2,20 +2,28 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from hub.config import Settings
+from hub.db import database
+from hub.gateway import _simple_chat_stream
+from hub.identity import IdentityService
 from hub.main import create_app
+from hub.schemas import RunAgentInput
 
 
 def make_client(tmp_path: Path) -> TestClient:
     settings = Settings(
         database_path=tmp_path / "hub.sqlite3",
         demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
         public_base_url="http://127.0.0.1:8100",
         internal_url_allowlist=("http://127.0.0.1:9101", "http://agent.internal"),
     )
@@ -99,7 +107,9 @@ def approve(
 def test_registry_review_public_sanitizes_private_endpoints(tmp_path: Path) -> None:
     client = make_client(tmp_path)
 
-    submitted = submit(client, manifest(mode="connected"))
+    source = manifest(mode="connected")
+    source["icon"] = "https://example.com/agent.png"
+    submitted = submit(client, source)
     version_id = submitted["versions"][0]["version_id"]
 
     assert client.get("/api/agents").json()["agents"] == []
@@ -113,6 +123,7 @@ def test_registry_review_public_sanitizes_private_endpoints(tmp_path: Path) -> N
     assert "chat_endpoint" not in public["active_version"]["manifest"]["integration"]
     assert "health_endpoint" not in public["active_version"]["manifest"]["integration"]
     assert "callback_urls" not in public["active_version"]["manifest"]["integration"]
+    assert "icon" not in public["active_version"]["manifest"]
     assert "trust_level" not in public["active_version"]
 
     admin = client.get("/api/admin/agents/demo-agent", headers={"X-Hub-User": "demo-a"}).json()
@@ -354,6 +365,118 @@ def test_simple_chat_gateway_adapts_json_to_agui_sse(tmp_path: Path, monkeypatch
     assert "citations" in response.text
 
 
+def test_agui_gateway_rejects_malformed_message_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = make_client(tmp_path)
+    submitted = submit(client, manifest(mode="connected", protocol="ag-ui"))
+    approve(client, "demo-agent", submitted["versions"][0]["version_id"])
+
+    class FakeStreamResponse:
+        status_code = 200
+        headers = {"content-type": "text/event-stream"}
+
+        async def aiter_lines(self):
+            yield 'data: {"type":"RUN_STARTED","threadId":"thread-1","runId":"run-1"}'
+            yield ""
+            yield 'data: {"type":"TEXT_MESSAGE_CONTENT","messageId":"missing","delta":"unsafe"}'
+            yield ""
+
+    class FakeStreamContext:
+        async def __aenter__(self) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+    class FakeAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "FakeAsyncClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        def stream(self, *args: Any, **kwargs: Any) -> FakeStreamContext:
+            return FakeStreamContext()
+
+    monkeypatch.setattr("hub.gateway.httpx.AsyncClient", FakeAsyncClient)
+    response = client.post(
+        "/api/gateway/agents/demo-agent/runs",
+        json={
+            "threadId": "thread-1",
+            "runId": "run-1",
+            "messages": [{"id": "user-1", "role": "user", "content": "hello"}],
+            "state": {},
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+        },
+    )
+    assert response.status_code == 200
+    assert '"code":"protocol_error"' in response.text
+    assert "unsafe" not in response.text
+    with database(client.app.state.settings.database_path) as conn:
+        invocation = conn.execute(
+            "SELECT status, error_code FROM hub_invocations ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+    assert dict(invocation) == {"status": "error", "error_code": "protocol_error"}
+
+
+@pytest.mark.asyncio
+async def test_client_disconnect_is_recorded_as_cancelled(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+    version_id = submitted["versions"][0]["version_id"]
+    approve(client, "demo-agent", version_id)
+    invocation_id = "inv-cancelled"
+    with database(client.app.state.settings.database_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO hub_invocations (
+              invocation_id, agent_id, version_id, user_id, run_id, status, started_at
+            ) VALUES (?, 'demo-agent', ?, 'demo-c', 'run-cancelled', 'started', '2026-08-06T00:00:00Z')
+            """,
+            (invocation_id, version_id),
+        )
+
+    class DisconnectedRequest:
+        async def is_disconnected(self) -> bool:
+            return True
+
+    run_input = RunAgentInput.model_validate(
+        {
+            "threadId": "thread-cancelled",
+            "runId": "run-cancelled",
+            "messages": [{"id": "user-1", "role": "user", "content": "hello"}],
+            "tools": [],
+            "context": [],
+        }
+    )
+    chunks = [
+        chunk
+        async for chunk in _simple_chat_stream(
+            settings=client.app.state.settings,
+            endpoint="http://127.0.0.1:9101/chat",
+            payload={},
+            run_input=run_input,
+            token="unused",
+            request_id="request-cancelled",
+            request=DisconnectedRequest(),
+            invocation_id=invocation_id,
+        )
+    ]
+    assert chunks == []
+    with database(client.app.state.settings.database_path) as conn:
+        invocation = conn.execute(
+            "SELECT status, error_code FROM hub_invocations WHERE invocation_id = ?",
+            (invocation_id,),
+        ).fetchone()
+    assert dict(invocation) == {"status": "cancelled", "error_code": "client_cancelled"}
+
+
 def test_workspace_start_requires_featured_agent(tmp_path: Path) -> None:
     client = make_client(tmp_path)
     submitted = submit(client, manifest(mode="connected", full_workspace=True))
@@ -382,3 +505,524 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert 'src="./' not in deep_link.text
     assert client.get("/app.js").status_code == 200
     assert client.get("/assets/ustc-emblem.jpg").status_code == 200
+
+
+class ConformanceResponse:
+    def __init__(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        content_type: str = "application/json",
+        content: bytes | None = None,
+    ) -> None:
+        self.status_code = 200
+        self.headers = {"content-type": content_type}
+        self._payload = payload or {}
+        self.content = content if content is not None else json.dumps(self._payload, ensure_ascii=False).encode("utf-8")
+        self.text = self.content.decode("utf-8", errors="replace")
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class PassingConformanceClient:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "PassingConformanceClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def request(self, method: str, url: str, **kwargs: Any) -> ConformanceResponse:
+        assert method == "GET"
+        return ConformanceResponse({"page": "ok"}, content_type="text/html")
+
+    async def get(self, url: str, **kwargs: Any) -> ConformanceResponse:
+        return ConformanceResponse(
+            {"status": "ok", "version": "1.0.0", "contract_version": "1.0", "capabilities": ["streaming"]}
+        )
+
+    async def post(self, url: str, **kwargs: Any) -> ConformanceResponse:
+        return ConformanceResponse(
+            {"message": {"id": "assistant-1", "role": "assistant", "content": "ok"}, "citations": [], "usage": {}}
+        )
+
+
+def test_approval_requires_passing_machine_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=True,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    submitted = client.post(
+        "/api/registry/agents",
+        json={"manifest": manifest(mode="connected", protocol="simple-chat"), "trust_level": "first_party_internal"},
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    version_id = submitted["versions"][0]["version_id"]
+
+    rejected = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/review",
+        json={"decision": "approved", "notes": "not checked", "featured": False},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error"] == "conformance_checks_not_passed"
+
+    monkeypatch.setattr("hub.conformance.httpx.AsyncClient", PassingConformanceClient)
+    checked = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/checks",
+        json={},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert checked.status_code == 200
+    assert checked.json()["overall_status"] == "passed"
+
+    approved = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/review",
+        json={"decision": "approved", "notes": "checks passed", "featured": False},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert approved.status_code == 200
+    version = approved.json()["versions"][0]
+    assert version["check_status"] == "passed"
+    assert {item["name"] for item in version["checks"]} == {
+        "url_safety",
+        "launch_url",
+        "health_contract",
+        "chat_contract",
+    }
+
+
+def test_external_icon_is_validated_cached_and_served_by_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        asset_cache_dir=tmp_path / "assets",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=True,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    source = manifest(mode="connected", protocol="simple-chat")
+    source["icon"] = "http://127.0.0.1:9101/icon.png"
+    submitted = submit(client, source)
+    version_id = submitted["versions"][0]["version_id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"safe-fixture"
+
+    class IconConformanceClient(PassingConformanceClient):
+        async def request(self, method: str, url: str, **kwargs: Any) -> ConformanceResponse:
+            if url.endswith("/icon.png"):
+                return ConformanceResponse(content_type="image/png", content=png)
+            return ConformanceResponse({"page": "ok"}, content_type="text/html")
+
+    monkeypatch.setattr("hub.conformance.httpx.AsyncClient", IconConformanceClient)
+    checked = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/checks",
+        json={},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert checked.status_code == 200
+    assert checked.json()["overall_status"] == "passed"
+    assert any(item["name"] == "icon_cache" for item in checked.json()["checks"])
+    approve(client, "demo-agent", version_id)
+
+    public = client.get("/api/agents/demo-agent").json()
+    assert public["active_version"]["manifest"]["icon"] == f"/api/assets/agent-icons/{version_id}"
+    icon = client.get(f"/api/assets/agent-icons/{version_id}")
+    assert icon.status_code == 200
+    assert icon.headers["content-type"] == "image/png"
+    assert icon.content == png
+
+
+def test_icon_cache_rejects_content_type_spoofing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        asset_cache_dir=tmp_path / "assets",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    source = manifest(mode="connected", protocol="simple-chat")
+    source["icon"] = "http://127.0.0.1:9101/icon.png"
+    submitted = submit(client, source)
+    version_id = submitted["versions"][0]["version_id"]
+
+    class SpoofedIconClient(PassingConformanceClient):
+        async def request(self, method: str, url: str, **kwargs: Any) -> ConformanceResponse:
+            if url.endswith("/icon.png"):
+                return ConformanceResponse(content_type="image/png", content=b"<script>alert(1)</script>")
+            return ConformanceResponse({"page": "ok"}, content_type="text/html")
+
+    monkeypatch.setattr("hub.conformance.httpx.AsyncClient", SpoofedIconClient)
+    checked = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/checks",
+        json={},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert checked.status_code == 200
+    assert checked.json()["overall_status"] == "failed"
+    assert next(item for item in checked.json()["checks"] if item["name"] == "icon_cache")["error_code"] == "unsafe_asset"
+
+
+def test_gateway_enforces_persistent_rate_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        rate_limit_requests=1,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    submitted = client.post(
+        "/api/registry/agents",
+        json={"manifest": manifest(mode="connected", protocol="simple-chat"), "trust_level": "first_party_internal"},
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    approve(client, "demo-agent", submitted["versions"][0]["version_id"])
+
+    class GatewayClient(PassingConformanceClient):
+        async def post(self, url: str, **kwargs: Any) -> ConformanceResponse:
+            return await PassingConformanceClient().post(url, **kwargs)
+
+    monkeypatch.setattr("hub.gateway.httpx.AsyncClient", GatewayClient)
+    body = {
+        "threadId": "thread-1",
+        "runId": "run-1",
+        "messages": [{"id": "user-1", "role": "user", "content": "hello"}],
+        "state": {},
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+    first = client.post("/api/gateway/agents/demo-agent/runs", json=body)
+    second = client.post("/api/gateway/agents/demo-agent/runs", json={**body, "runId": "run-2"})
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"]["error"] == "rate_limited"
+
+
+def test_gateway_converts_upstream_timeout_to_terminal_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = make_client(tmp_path)
+    submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+    approve(client, "demo-agent", submitted["versions"][0]["version_id"])
+
+    class TimeoutClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "TimeoutClient":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            return None
+
+        async def post(self, *args: Any, **kwargs: Any):
+            raise httpx.ReadTimeout("fixture timeout")
+
+    monkeypatch.setattr("hub.gateway.httpx.AsyncClient", TimeoutClient)
+    response = client.post(
+        "/api/gateway/agents/demo-agent/runs",
+        json={
+            "threadId": "thread-timeout",
+            "runId": "run-timeout",
+            "messages": [{"id": "user-1", "role": "user", "content": "hello"}],
+            "tools": [],
+            "context": [],
+        },
+    )
+    assert response.status_code == 200
+    assert '"type":"RUN_ERROR"' in response.text
+    assert '"code":"agent_timeout"' in response.text
+    with database(client.app.state.settings.database_path) as conn:
+        invocation = conn.execute(
+            "SELECT status, error_code FROM hub_invocations ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+    assert dict(invocation) == {"status": "error", "error_code": "agent_timeout"}
+
+
+def test_gateway_rejects_oversize_upstream_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        max_response_bytes=128,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+    approve(client, "demo-agent", submitted["versions"][0]["version_id"])
+
+    class OversizeClient(PassingConformanceClient):
+        async def post(self, *args: Any, **kwargs: Any) -> ConformanceResponse:
+            return ConformanceResponse(
+                {"message": {"id": "assistant-1", "role": "assistant", "content": "x" * 256}}
+            )
+
+    monkeypatch.setattr("hub.gateway.httpx.AsyncClient", OversizeClient)
+    response = client.post(
+        "/api/gateway/agents/demo-agent/runs",
+        json={
+            "threadId": "thread-large",
+            "runId": "run-large",
+            "messages": [{"id": "user-1", "role": "user", "content": "hello"}],
+            "tools": [],
+            "context": [],
+        },
+    )
+    assert response.status_code == 200
+    assert '"code":"response_too_large"' in response.text
+    assert "x" * 64 not in response.text
+
+
+def test_gateway_rejects_oversize_body_and_consecutive_unhealthy_agent(tmp_path: Path) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        max_request_bytes=128,
+        health_failure_threshold=2,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    submitted = client.post(
+        "/api/registry/agents",
+        json={"manifest": manifest(mode="connected", protocol="simple-chat"), "trust_level": "first_party_internal"},
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    version_id = submitted["versions"][0]["version_id"]
+    approve(client, "demo-agent", version_id)
+
+    oversized = client.post(
+        "/api/gateway/agents/demo-agent/runs",
+        content=json.dumps({"payload": "x" * 200}),
+        headers={"content-type": "application/json", "X-Hub-User": "demo-c"},
+    )
+    assert oversized.status_code == 413
+
+    with database(settings.database_path) as conn:
+        for index in range(2):
+            conn.execute(
+                """
+                INSERT INTO hub_health_checks (
+                  health_id, agent_id, version_id, status, capabilities_json, checked_at
+                ) VALUES (?, 'demo-agent', ?, 'offline', '[]', ?)
+                """,
+                (f"health-{index}", version_id, f"2026-08-06T00:00:0{index}Z"),
+            )
+    unavailable = client.post(
+        "/api/gateway/agents/demo-agent/runs",
+        json={"threadId": "t", "runId": "r", "messages": [], "tools": [], "context": []},
+    )
+    assert unavailable.status_code == 503
+    assert unavailable.json()["detail"]["error"] == "agent_unavailable"
+
+
+def test_conformance_revalidates_dangerous_redirect_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    client = TestClient(create_app(settings=settings))
+    submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+    version_id = submitted["versions"][0]["version_id"]
+
+    class RedirectClient(PassingConformanceClient):
+        async def request(self, method: str, url: str, **kwargs: Any) -> ConformanceResponse:
+            response = ConformanceResponse()
+            response.status_code = 302
+            response.headers = {"location": "http://169.254.169.254/latest/meta-data"}
+            return response
+
+    monkeypatch.setattr("hub.conformance.httpx.AsyncClient", RedirectClient)
+    checked = client.post(
+        f"/api/admin/agents/demo-agent/versions/{version_id}/checks",
+        json={},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert checked.status_code == 200
+    assert checked.json()["overall_status"] == "failed"
+    launch = next(item for item in checked.json()["checks"] if item["name"] == "launch_url")
+    assert launch["status"] == "failed"
+    assert launch["error_code"] == "agent_unavailable"
+
+
+def test_background_health_monitor_polls_active_connected_agents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    polled = threading.Event()
+
+    async def fake_health_check(conn, *, agent_id: str, settings: Settings):
+        assert agent_id == "demo-agent"
+        polled.set()
+        return {"status": "ok"}
+
+    monkeypatch.setattr("hub.main.check_agent_health", fake_health_check)
+    settings = Settings(
+        database_path=tmp_path / "hub.sqlite3",
+        demo_mode=True,
+        automatic_checks_enabled=False,
+        require_passing_checks=False,
+        health_poll_interval_seconds=0.02,
+        internal_url_allowlist=("http://127.0.0.1:9101",),
+    )
+    with TestClient(create_app(settings=settings)) as client:
+        submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+        approve(client, "demo-agent", submitted["versions"][0]["version_id"])
+        assert polled.wait(1.0)
+
+
+def test_deprecate_and_credential_rotation_are_governed(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    submitted = submit(client, manifest(mode="connected", protocol="simple-chat"))
+    version_id = submitted["versions"][0]["version_id"]
+    approve(client, "demo-agent", version_id)
+
+    first = client.post(
+        "/api/admin/agents/demo-agent/credentials",
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    second = client.post(
+        "/api/admin/agents/demo-agent/credentials",
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    with database(client.app.state.settings.database_path) as conn:
+        statuses = {
+            row["credential_id"]: row["status"]
+            for row in conn.execute(
+                "SELECT credential_id, status FROM hub_agent_credentials WHERE agent_id = 'demo-agent'"
+            ).fetchall()
+        }
+    assert statuses[first["credential_id"]] == "rotating"
+    assert statuses[second["credential_id"]] == "active"
+
+    revoked = client.post(
+        f"/api/admin/agents/demo-agent/credentials/{second['credential_id']}/status",
+        json={"status": "revoked", "reason": "rotation complete"},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert revoked.status_code == 200
+    deprecated = client.post(
+        "/api/admin/agents/demo-agent/deprecate",
+        json={"reason": "end of service"},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert deprecated.status_code == 200
+    assert deprecated.json()["status"] == "deprecated"
+    assert client.get("/api/agents").json()["agents"] == []
+
+
+def test_workspace_code_is_invalid_after_active_version_switch(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    first = submit(client, manifest(mode="connected", full_workspace=True, version="1.0.0"))
+    approve(client, "demo-agent", first["versions"][0]["version_id"], featured=True)
+    credential = client.post(
+        "/api/admin/agents/demo-agent/credentials",
+        headers={"X-Hub-User": "demo-a"},
+    ).json()
+    start = client.post(
+        "/api/agents/demo-agent/workspace/start",
+        json={"state": "state-version-switch-1234"},
+        headers={"X-Hub-User": "demo-c"},
+    ).json()
+    code = start["launch_url"].split("code=", 1)[1].split("&", 1)[0]
+
+    second = submit(client, manifest(mode="connected", full_workspace=True, version="1.1.0"))
+    approve(client, "demo-agent", second["versions"][0]["version_id"], featured=True)
+    basic = "Basic " + base64.b64encode(
+        f"demo-agent:{credential['client_secret']}".encode()
+    ).decode()
+    exchange = client.post(
+        "/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": "http://127.0.0.1:9101/callback",
+            "state": "state-version-switch-1234",
+        },
+        headers={"Authorization": basic},
+    )
+    assert exchange.status_code == 400
+    assert exchange.json()["detail"]["error"] == "invalid_grant"
+
+
+def test_rollback_restores_featured_approval_of_target_version(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    first = submit(client, manifest(mode="connected", full_workspace=True, version="1.0.0"))
+    first_version = first["versions"][0]["version_id"]
+    approve(client, "demo-agent", first_version, featured=True)
+    second = submit(client, manifest(mode="connected", full_workspace=True, version="1.1.0"))
+    second_version = second["versions"][0]["version_id"]
+    approve(client, "demo-agent", second_version, featured=False)
+
+    assert client.get("/api/agents/demo-agent").json()["featured"] is False
+    rolled_back = client.post(
+        "/api/admin/agents/demo-agent/rollback",
+        json={"version_id": first_version, "reason": "restore featured release"},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert rolled_back.status_code == 200
+    assert rolled_back.json()["active_version_id"] == first_version
+    assert rolled_back.json()["featured"] is True
+    workspace = client.post(
+        "/api/agents/demo-agent/workspace/start",
+        json={"state": "state-after-featured-rollback"},
+        headers={"X-Hub-User": "demo-c"},
+    )
+    assert workspace.status_code == 200
+
+
+def test_jwks_can_publish_previous_public_key_during_rotation(tmp_path: Path) -> None:
+    first = IdentityService(Settings(database_path=tmp_path / "first.sqlite3", jwt_kid="old-key"))
+    previous = first.jwks()["keys"][0]
+    rotated = IdentityService(
+        Settings(
+            database_path=tmp_path / "second.sqlite3",
+            jwt_kid="new-key",
+            jwt_previous_public_jwk_json=json.dumps(previous),
+        )
+    )
+    keys = rotated.jwks()["keys"]
+    assert [key["kid"] for key in keys] == ["new-key", "old-key"]
+    assert all("d" not in key for key in keys)
+
+
+def test_identity_signing_key_survives_hub_restart(tmp_path: Path) -> None:
+    key_file = tmp_path / "runtime" / "jwt-ed25519.pem"
+    first = IdentityService(
+        Settings(
+            database_path=tmp_path / "first.sqlite3",
+            jwt_private_key_file=key_file,
+        )
+    )
+    second = IdentityService(
+        Settings(
+            database_path=tmp_path / "second.sqlite3",
+            jwt_private_key_file=key_file,
+        )
+    )
+    assert key_file.is_file()
+    assert first.jwks() == second.jwks()

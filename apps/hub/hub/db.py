@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS hub_agent_versions (
   review_status TEXT NOT NULL CHECK (review_status IN ('pending','approved','rejected')),
   deployment_status TEXT NOT NULL CHECK (deployment_status IN ('staged','active','superseded','deprecated')),
   trust_level TEXT NOT NULL CHECK (trust_level IN ('third_party_external','first_party_internal')),
+  featured_approved INTEGER NOT NULL DEFAULT 0,
   submitted_by TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS hub_invocations (
   status TEXT NOT NULL,
   error_code TEXT,
   duration_ms INTEGER,
+  usage_json TEXT NOT NULL DEFAULT '{}',
   started_at TEXT NOT NULL,
   completed_at TEXT,
   FOREIGN KEY (agent_id) REFERENCES hub_agents(agent_id),
@@ -122,10 +124,44 @@ CREATE TABLE IF NOT EXISTS hub_agent_credentials (
   FOREIGN KEY (agent_id) REFERENCES hub_agents(agent_id)
 );
 
+CREATE TABLE IF NOT EXISTS hub_conformance_runs (
+  run_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  version_id TEXT NOT NULL,
+  overall_status TEXT NOT NULL CHECK (overall_status IN ('passed','failed')),
+  checks_json TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  FOREIGN KEY (agent_id) REFERENCES hub_agents(agent_id),
+  FOREIGN KEY (version_id) REFERENCES hub_agent_versions(version_id)
+);
+
+CREATE TABLE IF NOT EXISTS hub_rate_limits (
+  user_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  window_start INTEGER NOT NULL,
+  request_count INTEGER NOT NULL,
+  PRIMARY KEY (user_id, agent_id, window_start),
+  FOREIGN KEY (agent_id) REFERENCES hub_agents(agent_id)
+);
+
+CREATE TABLE IF NOT EXISTS hub_version_assets (
+  version_id TEXT NOT NULL,
+  asset_type TEXT NOT NULL CHECK (asset_type IN ('icon')),
+  file_path TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (version_id, asset_type),
+  FOREIGN KEY (version_id) REFERENCES hub_agent_versions(version_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_versions_agent ON hub_agent_versions(agent_id);
 CREATE INDEX IF NOT EXISTS idx_health_agent_version ON hub_health_checks(agent_id, version_id, checked_at);
 CREATE INDEX IF NOT EXISTS idx_audit_agent ON hub_audit_events(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_invocations_agent ON hub_invocations(agent_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_conformance_version ON hub_conformance_runs(version_id, completed_at);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON hub_rate_limits(window_start);
 """
 
 
@@ -141,6 +177,18 @@ def connect(path: Path) -> sqlite3.Connection:
 def init_db(path: Path) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        invocation_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(hub_invocations)").fetchall()
+        }
+        if "usage_json" not in invocation_columns:
+            conn.execute("ALTER TABLE hub_invocations ADD COLUMN usage_json TEXT NOT NULL DEFAULT '{}'")
+        version_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(hub_agent_versions)").fetchall()
+        }
+        if "featured_approved" not in version_columns:
+            conn.execute(
+                "ALTER TABLE hub_agent_versions ADD COLUMN featured_approved INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
 
 

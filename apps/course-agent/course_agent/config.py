@@ -75,6 +75,7 @@ class Settings:
     session_secret: str = os.getenv(
         "COURSE_AGENT_SESSION_SECRET", "dev-only-change-before-shared-deployment"
     )
+    session_https_only: bool = _as_bool(os.getenv("COURSE_AGENT_SESSION_HTTPS_ONLY"), False)
     llm_api_key: str = os.getenv("COURSE_AGENT_LLM_API_KEY", "")
     llm_base_url: str = os.getenv("COURSE_AGENT_LLM_BASE_URL", "")
     llm_model: str = os.getenv("COURSE_AGENT_LLM_MODEL", "gpt-5.6-sol")

@@ -5,6 +5,7 @@ import json
 import secrets
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import jwt
@@ -24,35 +25,75 @@ _PASSWORD_HASHER = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1,
 class IdentityService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._private_key = self._load_private_key(settings.jwt_private_key_pem)
+        self._private_key = self._load_private_key(
+            settings.jwt_private_key_pem,
+            settings.jwt_private_key_file,
+        )
         self._public_key = self._private_key.public_key()
 
     @staticmethod
-    def _load_private_key(pem: str | None) -> Ed25519PrivateKey:
+    def _load_private_key(pem: str | None, key_file: Path | None) -> Ed25519PrivateKey:
         if pem:
             key = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
             if not isinstance(key, Ed25519PrivateKey):
                 raise RuntimeError("HUB_JWT_PRIVATE_KEY_PEM must be an Ed25519 private key")
             return key
-        return Ed25519PrivateKey.generate()
+        if key_file is None:
+            return Ed25519PrivateKey.generate()
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            encoded = key_file.read_bytes()
+        except FileNotFoundError:
+            generated = Ed25519PrivateKey.generate()
+            encoded = generated.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+            try:
+                with key_file.open("xb") as handle:
+                    handle.write(encoded)
+                key_file.chmod(0o600)
+            except FileExistsError:
+                encoded = key_file.read_bytes()
+            except OSError:
+                if not key_file.exists():
+                    raise
+        key = serialization.load_pem_private_key(encoded, password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise RuntimeError("HUB_JWT_PRIVATE_KEY_FILE must contain an Ed25519 private key")
+        return key
 
     def jwks(self) -> dict[str, Any]:
         raw_public = self._public_key.public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw,
         )
-        return {
-            "keys": [
-                {
-                    "kty": "OKP",
-                    "crv": "Ed25519",
-                    "kid": self.settings.jwt_kid,
-                    "use": "sig",
-                    "alg": "EdDSA",
-                    "x": b64url(raw_public),
-                }
-            ]
-        }
+        keys = [
+            {
+                "kty": "OKP",
+                "crv": "Ed25519",
+                "kid": self.settings.jwt_kid,
+                "use": "sig",
+                "alg": "EdDSA",
+                "x": b64url(raw_public),
+            }
+        ]
+        if self.settings.jwt_previous_public_jwk_json:
+            previous = json.loads(self.settings.jwt_previous_public_jwk_json)
+            if (
+                not isinstance(previous, dict)
+                or previous.get("kty") != "OKP"
+                or previous.get("crv") != "Ed25519"
+                or previous.get("alg") != "EdDSA"
+                or not isinstance(previous.get("kid"), str)
+                or not isinstance(previous.get("x"), str)
+                or "d" in previous
+                or previous["kid"] == self.settings.jwt_kid
+            ):
+                raise RuntimeError("HUB_JWT_PREVIOUS_PUBLIC_JWK_JSON must be a distinct public Ed25519 JWK")
+            keys.append(previous)
+        return {"keys": keys}
 
     def sign_agent_token(
         self,
@@ -105,7 +146,24 @@ def state_hash(state: str) -> str:
     return sha256_text(state)
 
 
-def create_agent_credential(conn: sqlite3.Connection, agent_id: str) -> dict[str, str]:
+def create_agent_credential(
+    conn: sqlite3.Connection,
+    agent_id: str,
+    *,
+    rotation_window_seconds: int = 300,
+) -> dict[str, str]:
+    rotation_deadline = datetime.now(UTC) + timedelta(seconds=max(0, rotation_window_seconds))
+    conn.execute(
+        """
+        UPDATE hub_agent_credentials
+        SET status = 'rotating', rotates_at = ?
+        WHERE agent_id = ? AND status = 'active'
+        """,
+        (
+            rotation_deadline.isoformat(timespec="seconds").replace("+00:00", "Z"),
+            agent_id,
+        ),
+    )
     secret = random_token(32)
     credential_id = new_id("cred")
     conn.execute(
@@ -138,14 +196,61 @@ def authenticate_client_secret_basic(conn: sqlite3.Connection, request: Request)
 
     rows = conn.execute(
         """
-        SELECT secret_hash FROM hub_agent_credentials
+        SELECT secret_hash, status, rotates_at FROM hub_agent_credentials
         WHERE agent_id = ? AND status IN ('active','rotating')
         """,
         (client_id,),
     ).fetchall()
-    if not any(verify_secret(row["secret_hash"], client_secret) for row in rows):
+    now = datetime.now(UTC)
+    valid_rows = []
+    for row in rows:
+        if row["status"] == "active":
+            valid_rows.append(row)
+            continue
+        rotates_at = row["rotates_at"]
+        if rotates_at and datetime.fromisoformat(rotates_at.replace("Z", "+00:00")) >= now:
+            valid_rows.append(row)
+    if not any(verify_secret(row["secret_hash"], client_secret) for row in valid_rows):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"error": "invalid_client"})
     return client_id
+
+
+def update_agent_credential_status(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    credential_id: str,
+    new_status: str,
+    rotation_window_seconds: int = 300,
+) -> None:
+    if new_status not in {"rotating", "revoked"}:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"error": "invalid_credential_status"})
+    now = now_iso()
+    if new_status == "revoked":
+        updated = conn.execute(
+            """
+            UPDATE hub_agent_credentials
+            SET status = 'revoked', revoked_at = ?
+            WHERE agent_id = ? AND credential_id = ? AND status IN ('active','rotating')
+            """,
+            (now, agent_id, credential_id),
+        ).rowcount
+    else:
+        rotation_deadline = datetime.now(UTC) + timedelta(seconds=max(0, rotation_window_seconds))
+        updated = conn.execute(
+            """
+            UPDATE hub_agent_credentials
+            SET status = 'rotating', rotates_at = ?
+            WHERE agent_id = ? AND credential_id = ? AND status = 'active'
+            """,
+            (
+                rotation_deadline.isoformat(timespec="seconds").replace("+00:00", "Z"),
+                agent_id,
+                credential_id,
+            ),
+        ).rowcount
+    if not updated:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "credential_not_active"})
 
 
 def create_auth_code(
@@ -207,6 +312,16 @@ def consume_auth_code(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_grant"})
     expires_at = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
     if expires_at < datetime.now(UTC):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_grant"})
+    agent = conn.execute(
+        "SELECT status, active_version_id FROM hub_agents WHERE agent_id = ?",
+        (client_id,),
+    ).fetchone()
+    if (
+        agent is None
+        or agent["status"] != "active"
+        or agent["active_version_id"] != row["version_id"]
+    ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_grant"})
 
     conn.execute("UPDATE hub_auth_codes SET used_at = ? WHERE code_hash = ?", (now_iso(), digest))

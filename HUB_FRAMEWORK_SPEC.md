@@ -111,6 +111,7 @@ agent status: pending -> active -> suspended -> active
 
 - 同一 Agent 可以提交多个语义化版本；
 - 批准新版本时原子切换活动版本，旧版本变为 `superseded`；
+- 提交后自动执行并保存 URL、启动页、健康、协议和图标检查，最新机器检查未通过时不得批准；
 - 管理员可以暂停、恢复和回滚；
 - 只有 `active` 且存在活动版本的 Agent 对普通用户可见和可调用；
 - Featured 必须是 Connected，具有回调地址和 `full-workspace` 能力。
@@ -138,6 +139,8 @@ Featured 流程：
 
 Client secret 只在创建时返回一次，Hub 只保存 Argon2id 哈希。部署脚本把 secret 写入运行时卷，不进入 Git、浏览器、Manifest 或日志。
 
+Client secret 支持短窗口轮换和立即撤销；Hub Ed25519 私钥默认保存在运行时 volume，重启后保持稳定，并可通过当前与上一把 JWK 完成显式公钥轮换。
+
 `X-Hub-User` 只允许在显式 `HUB_DEMO_MODE=true` 时用于比赛 Demo；默认关闭。公开部署必须替换为可信登录会话或统一身份提供方，并关闭前端演示身份切换。
 
 ## 7. URL 与数据安全
@@ -147,6 +150,8 @@ Client secret 只在创建时返回一次，Hub 只保存 Argon2id 哈希。部�
 - 第一方内部 Endpoint 只允许管理员提交，并要求服务端精确 origin 白名单；
 - 公共 Agent API 使用白名单字段输出，隐藏聊天、健康、回调端点和 Registry 元数据；
 - Gateway 不接受浏览器传入的目标 URL、API Key 或任意模型地址；
+- Gateway 使用持久化的每用户/每 Agent 限流、请求/响应大小上限和缓存健康状态准入；
+- 外部图标由 Hub 下载并校验类型、大小与文件签名，浏览器不直连图标源站；
 - Agent 输出、Markdown、链接、文件和错误信息都按不可信输入处理；
 - 审计只保存必要元数据，不保存明文凭据、完整私人文件或完整私人聊天正文。
 
@@ -159,10 +164,12 @@ Client secret 只在创建时返回一次，Hub 只保存 Argon2id 哈希。部�
 | GET | `/api/agents/{agent_id}` | Agent 公开详情 |
 | GET | `/api/admin/agents` | 管理员查看全部 Agent 与版本 |
 | POST | `/api/admin/agents/{id}/versions/{version}/review` | 批准或拒绝版本 |
+| POST | `/api/admin/agents/{id}/versions/{version}/checks` | 重跑版本级自动验收 |
 | POST | `/api/admin/agents/{id}/suspend` | 暂停 Agent |
 | POST | `/api/admin/agents/{id}/restore` | 恢复 Agent |
 | POST | `/api/admin/agents/{id}/rollback` | 回滚活动版本 |
 | POST | `/api/admin/agents/{id}/credentials` | 创建一次可见的 Agent 凭据 |
+| POST | `/api/admin/agents/{id}/credentials/{credential}/status` | 轮换或撤销凭据 |
 | POST | `/api/gateway/agents/{id}/runs` | 统一 AG-UI Gateway |
 | POST | `/api/agents/{id}/workspace/start` | 发起 Featured 工作台授权 |
 | POST | `/oauth/token` | 服务端授权码兑换 |

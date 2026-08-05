@@ -4,7 +4,7 @@
 
 本项目参加中国科学技术大学“一〇七”杯算力与智能体开发大赛本科生组智能体赛道。当前方案先把“课程资料整理与复习 Agent”做深，再把它的接入方式沉淀为统一 Contract、Registry、Gateway 和 Agent Portal，让其他独立校园 Agent 能以插件形式接入同一平台。
 
-> 当前状态：Campus Agent Hub、瀚海行 `v0.8.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、Registry、审核治理、Gateway、Agent Portal、统一聊天和 Featured 工作台授权；瀚海行保留数学分析 B1 知识库、引用、OCR 资料和完整工作台。
+> 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.8.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、统一聊天和 Featured 工作台授权；瀚海行保留数学分析 B1 知识库、引用、OCR 资料和完整工作台。
 
 > 新电脑部署：安装 Docker 后运行 `./deploy/run-demo.ps1`，即可构建三项服务、注册并审核两个 Agent、生成运行时凭据并导入 25 份数学分析资料。模型 API 只填写在本地 `.env`，不得提交到 Git。
 
@@ -139,6 +139,15 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 
 归档版本只用于回溯设计演进，不再作为当前实现依据。需要恢复时可从归档标签创建新分支，不应直接把旧文档复制回 `main`。
 
+### 2026-08-06 平台治理加固
+
+- Manifest 提交后自动保存版本级机器验收证据；管理员批准前必须通过 URL、启动页、健康与聊天 Contract 检查，并可在管理页重跑检查；
+- Gateway 增加请求/响应大小上限、SQLite 持久限流、连续健康失败准入、AG-UI 生命周期校验、取消状态和 usage 元数据审计；
+- Featured client secret 支持轮换和撤销，旧 secret 仅在短轮换窗口内有效；旧版本授权码在版本切换后立即失效；
+- 外部图标由 Hub 下载并校验 MIME、大小和文件签名，浏览器只加载 Hub 安全副本；
+- Hub Ed25519 私钥默认保存在忽略的运行时目录，服务重启不再静默更换签名身份；
+- 独立 Conformance Runner 与固定 Demo 验收脚本均已实测；两种聊天协议、Featured 工作台和授权码防重放连续 10/10 轮通过。
+
 ### 语义化版本
 
 本项目遵循 [Semantic Versioning 2.0.0](https://semver.org/lang/zh-CN/) 规范，版本号格式为 `v<主版本>.<次版本>.<修订号>`。
@@ -174,7 +183,8 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 2. 已完成：Contract v1、Registry、审核治理、Gateway、Portal 和统一聊天容器。
 3. 已完成：瀚海行原生 AG-UI 接入与独立 `simple-chat` Agent 接入，Gateway 无 Agent 业务分支。
 4. 已完成：Featured 工作台一次性授权码、EdDSA JWT/JWKS 和运行时凭据注入。
-5. 当前重点：固化部署、浏览器验收、契约/安全回归和比赛演示脚本。
+5. 已完成：一键部署、浏览器验收、契约/安全回归和 10 轮比赛演示验收脚本。
+6. 后续生产化：接入真实登录、配置公网 HTTPS 与受控出站网络；这些不是本地比赛 Demo 的前置条件。
 
 首个演示课程已冻结为数学分析 B1，共享模型采用邀请制学习小组；公开资料通过已实现的订阅知识库广场发布。评课社区分析仍作为后续 Agent 或 Link App 预留，不进入本轮核心闭环。
 

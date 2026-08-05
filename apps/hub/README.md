@@ -32,7 +32,9 @@ Compose 会 seed 瀚海行和校园助手 Demo、完成审核、创建 Featured 
 - `POST /api/registry/agents`：提交版本化 Manifest。请求体可以是纯 Contract Manifest，也可以是 `{ "manifest": {...}, "trust_level": "first_party_internal" }`，其中 `trust_level` 是 Hub 私有注册元数据，不写入 Manifest；
 - `GET /api/agents`：普通用户可见的 active Agent 广场数据；
 - `POST /api/admin/agents/{agent_id}/versions/{version_id}/review`：管理员审核并原子切换活动版本；
-- `POST /api/admin/agents/{agent_id}/suspend|restore|rollback`：治理状态操作；
+- `POST /api/admin/agents/{agent_id}/versions/{version_id}/checks`：重跑并保存版本级自动验收；
+- `POST /api/admin/agents/{agent_id}/suspend|restore|rollback|deprecate`：治理状态操作；
+- `POST /api/admin/agents/{agent_id}/credentials` 与凭据状态接口：创建、轮换或撤销 Featured 服务凭据；
 - `GET /.well-known/jwks.json`：Ed25519/EdDSA JWT 公钥；
 - `POST /api/gateway/agents/{agent_id}/runs`：按 Registry 目标转发 AG-UI 或 simple-chat；
 - `POST /api/agents/{agent_id}/workspace/start` 与 `POST /oauth/token`：Featured Agent 工作台一次性授权码启动。
@@ -45,11 +47,24 @@ Compose 会 seed 瀚海行和校园助手 Demo、完成审核、创建 Featured 
 |---|---|---|
 | `HUB_DEMO_MODE` | `false` | 仅比赛 Demo 设为 `true`，启用 `X-Hub-User` 演示身份 |
 | `HUB_DATABASE_PATH` | `var/hub/hub.sqlite3` | 独立 Registry 数据库 |
+| `HUB_ASSET_CACHE_DIR` | `var/hub/assets` | 审核通过的外部图标安全副本 |
 | `HUB_PUBLIC_BASE_URL` | `http://127.0.0.1:8100` | JWT issuer 相关公共入口 |
 | `HUB_INTERNAL_URL_ALLOWLIST` | 本地瀚海行和 Demo 精确 origin | 第一方内部 Endpoint 白名单 |
 | `HUB_JWT_TTL_SECONDS` | `120` | Gateway / workspace JWT 有效期 |
 | `HUB_AUTH_CODE_TTL_SECONDS` | `60` | Featured 一次性授权码有效期 |
-| `HUB_JWT_PRIVATE_KEY_PEM` | 运行时生成 | 可选的持久 Ed25519 私钥，不得提交 Git |
+| `HUB_JWT_PRIVATE_KEY_FILE` | `var/hub/jwt-ed25519.pem` | 默认持久化的 Ed25519 私钥文件，不得提交 Git |
+| `HUB_JWT_PRIVATE_KEY_PEM` | 空 | 可选的外部 Secret 注入，设置后优先于私钥文件 |
+| `HUB_JWT_PREVIOUS_PUBLIC_JWK_JSON` | 空 | 轮换窗口内同时发布的上一把公钥 |
+| `HUB_AUTOMATIC_CHECKS_ENABLED` | `true` | Manifest 提交后异步执行版本验收 |
+| `HUB_REQUIRE_PASSING_CHECKS` | `true` | 管理员批准前强制要求最新验收通过 |
+| `HUB_MAX_REQUEST_BYTES` | `262144` | Gateway JSON 请求体上限 |
+| `HUB_MAX_RESPONSE_BYTES` | `1048576` | Agent 响应上限 |
+| `HUB_RATE_LIMIT_REQUESTS` | `20` | 每用户、每 Agent、每窗口请求数 |
+| `HUB_RATE_LIMIT_WINDOW_SECONDS` | `60` | 持久限流窗口秒数 |
+| `HUB_HEALTH_FAILURE_THRESHOLD` | `3` | 连续失败达到该值后阻止新调用 |
+| `HUB_HEALTH_POLL_INTERVAL_SECONDS` | `30` | 后台健康轮询间隔；小于等于 0 时关闭 |
+
+运行时 Ed25519 私钥、SQLite、图标缓存、日志和 Agent client secret 都必须放在忽略目录或 Secret/volume 中。正式公网部署仍需用真实认证替换 Demo 身份，并通过出站代理或网络策略闭合 DNS 解析与连接之间的 rebinding 风险。
 
 测试：
 

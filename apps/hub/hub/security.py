@@ -63,6 +63,9 @@ def validate_url_safety(url: str, trust_level: str, settings: Settings) -> None:
 
 def sanitize_public_manifest(source: dict) -> dict:
     manifest = dict(source)
+    icon = manifest.get("icon")
+    if isinstance(icon, str) and urlparse(icon).scheme in {"http", "https"}:
+        manifest.pop("icon", None)
     integration = dict(manifest.get("integration", {}))
     for key in ("chat_endpoint", "health_endpoint", "callback_urls"):
         integration.pop(key, None)

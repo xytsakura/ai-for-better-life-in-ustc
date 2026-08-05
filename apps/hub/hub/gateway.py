@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -13,7 +14,8 @@ from fastapi.responses import StreamingResponse
 from .audit import record_audit
 from .config import Settings
 from .identity import IdentityService
-from .registry import get_active_version
+from .limits import enforce_rate_limit
+from .registry import ensure_health_allows_invocation, get_active_version
 from .schemas import RunAgentInput
 from .security import validate_url_safety
 from .utils import new_id, now_iso
@@ -87,6 +89,7 @@ def _record_invocation_end(
     status_value: str,
     error_code: str | None,
     duration_ms: int,
+    usage: dict[str, Any] | None = None,
 ) -> None:
     from .db import database
 
@@ -94,10 +97,17 @@ def _record_invocation_end(
         conn.execute(
             """
             UPDATE hub_invocations
-            SET status = ?, error_code = ?, duration_ms = ?, completed_at = ?
+            SET status = ?, error_code = ?, duration_ms = ?, usage_json = ?, completed_at = ?
             WHERE invocation_id = ?
             """,
-            (status_value, error_code, duration_ms, now_iso(), invocation_id),
+            (
+                status_value,
+                error_code,
+                duration_ms,
+                json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
+                now_iso(),
+                invocation_id,
+            ),
         )
 
 
@@ -112,6 +122,18 @@ async def gateway_stream(
     identity: IdentityService,
 ) -> StreamingResponse:
     _, version = get_active_version(conn, agent_id)
+    ensure_health_allows_invocation(
+        conn,
+        agent_id=agent_id,
+        version_id=version["version_id"],
+        settings=settings,
+    )
+    enforce_rate_limit(
+        conn,
+        user_id=user["user_id"],
+        agent_id=agent_id,
+        settings=settings,
+    )
     manifest = version["manifest"]
     integration = manifest["integration"]
     if integration["mode"] != "connected":
@@ -120,7 +142,7 @@ async def gateway_stream(
     try:
         run_input = RunAgentInput.model_validate(payload)
     except Exception as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"error": "invalid_run_input"}) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail={"error": "invalid_run_input"}) from exc
 
     chat_endpoint = integration.get("chat_endpoint")
     if not chat_endpoint:
@@ -197,6 +219,10 @@ async def _agui_proxy_stream(
 ) -> AsyncIterator[bytes]:
     start = time.perf_counter()
     terminal_seen = False
+    event_count = 0
+    open_messages: set[str] = set()
+    known_tools: set[str] = set()
+    usage: dict[str, Any] = {}
     error_code: str | None = None
     status_value = "finished"
     try:
@@ -228,7 +254,14 @@ async def _agui_proxy_stream(
                     status_value = "error"
                     yield agui_run_error(run_input.runId, error_code)
                     return
+                response_bytes = 0
                 async for line in response.aiter_lines():
+                    response_bytes += len(line.encode("utf-8")) + 1
+                    if response_bytes > settings.max_response_bytes:
+                        error_code = "protocol_error"
+                        status_value = "error"
+                        yield agui_run_error(run_input.runId, "response_too_large")
+                        return
                     if await request.is_disconnected():
                         status_value = "cancelled"
                         error_code = "client_cancelled"
@@ -238,14 +271,55 @@ async def _agui_proxy_stream(
                         if data:
                             try:
                                 event = json.loads(data)
-                                if event.get("type") in TERMINAL_EVENTS:
+                                event_type = event.get("type") if isinstance(event, dict) else None
+                                if not isinstance(event_type, str):
+                                    raise ValueError("missing event type")
+                                if event_count == 0 and event_type != "RUN_STARTED":
+                                    raise ValueError("RUN_STARTED must be first")
+                                if event_count > 0 and event_type == "RUN_STARTED":
+                                    raise ValueError("RUN_STARTED may only occur once")
+                                if terminal_seen:
+                                    raise ValueError("event received after terminal event")
+                                if event_type == "TEXT_MESSAGE_START":
+                                    message_id = event.get("messageId")
+                                    if not isinstance(message_id, str) or not message_id:
+                                        raise ValueError("missing messageId")
+                                    if message_id in open_messages:
+                                        raise ValueError("message already open")
+                                    open_messages.add(message_id)
+                                elif event_type in {"TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END"}:
+                                    message_id = event.get("messageId")
+                                    if message_id not in open_messages:
+                                        raise ValueError("unknown messageId")
+                                    if event_type == "TEXT_MESSAGE_CONTENT" and not isinstance(event.get("delta"), str):
+                                        raise ValueError("missing delta")
+                                    if event_type == "TEXT_MESSAGE_END":
+                                        open_messages.remove(message_id)
+                                elif event_type == "TOOL_CALL_START":
+                                    tool_id = event.get("toolCallId")
+                                    if not isinstance(tool_id, str) or not tool_id or tool_id in known_tools:
+                                        raise ValueError("invalid toolCallId")
+                                    known_tools.add(tool_id)
+                                elif event_type in {"TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_RESULT"}:
+                                    if event.get("toolCallId") not in known_tools:
+                                        raise ValueError("unknown toolCallId")
+                                if event_type in TERMINAL_EVENTS:
+                                    if open_messages:
+                                        raise ValueError("message not closed")
                                     terminal_seen = True
-                            except json.JSONDecodeError:
+                                    if isinstance(event.get("usage"), dict):
+                                        usage = event["usage"]
+                                event_count += 1
+                            except (json.JSONDecodeError, ValueError):
                                 error_code = "protocol_error"
                                 status_value = "error"
+                                yield agui_run_error(run_input.runId, error_code)
+                                return
                     yield (line + "\n").encode("utf-8")
                     if line == "":
                         yield b""
+                        if terminal_seen:
+                            return
                 if status_value == "finished" and not terminal_seen:
                     error_code = "protocol_error"
                     status_value = "error"
@@ -258,6 +332,10 @@ async def _agui_proxy_stream(
         error_code = "agent_unavailable"
         status_value = "error"
         yield agui_run_error(run_input.runId, error_code)
+    except asyncio.CancelledError:
+        error_code = "client_cancelled"
+        status_value = "cancelled"
+        raise
     finally:
         duration_ms = int((time.perf_counter() - start) * 1000)
         _record_invocation_end(
@@ -266,6 +344,7 @@ async def _agui_proxy_stream(
             status_value=status_value,
             error_code=error_code,
             duration_ms=duration_ms,
+            usage=usage,
         )
 
 
@@ -283,6 +362,7 @@ async def _simple_chat_stream(
     start = time.perf_counter()
     status_value = "finished"
     error_code: str | None = None
+    usage: dict[str, Any] = {}
     try:
         if await request.is_disconnected():
             status_value = "cancelled"
@@ -333,6 +413,11 @@ async def _simple_chat_stream(
             yield agui_run_error(run_input.runId, error_code)
             return
         body = response.json()
+        if len(json.dumps(body, ensure_ascii=False).encode("utf-8")) > settings.max_response_bytes:
+            status_value = "error"
+            error_code = "protocol_error"
+            yield agui_run_error(run_input.runId, "response_too_large")
+            return
         message = body.get("message")
         content = message.get("content") if isinstance(message, dict) else None
         role = message.get("role") if isinstance(message, dict) else None
@@ -364,6 +449,10 @@ async def _simple_chat_stream(
         status_value = "error"
         error_code = "agent_unavailable"
         yield agui_run_error(run_input.runId, error_code)
+    except asyncio.CancelledError:
+        status_value = "cancelled"
+        error_code = "client_cancelled"
+        raise
     finally:
         _record_invocation_end(
             settings.database_path,
@@ -371,4 +460,5 @@ async def _simple_chat_stream(
             status_value=status_value,
             error_code=error_code,
             duration_ms=int((time.perf_counter() - start) * 1000),
+            usage=usage,
         )

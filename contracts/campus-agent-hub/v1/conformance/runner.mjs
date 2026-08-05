@@ -7,6 +7,7 @@ import addFormats from 'ajv-formats';
 import { EventSchemas, RunAgentInputSchema } from '@ag-ui/core';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const MAX_RESPONSE_BYTES = 1_048_576;
 
 function parseArgs(argv) {
   const args = {};
@@ -68,6 +69,42 @@ function parseSseFrames(text) {
   return events;
 }
 
+function validateAguiSequence(events) {
+  if (!events.length || events[0].type !== 'RUN_STARTED') {
+    throw new Error('RUN_STARTED must be the first event');
+  }
+  const terminal = events
+    .map((event, index) => ({ type: event.type, index }))
+    .filter(item => item.type === 'RUN_FINISHED' || item.type === 'RUN_ERROR');
+  if (terminal.length !== 1 || terminal[0].index !== events.length - 1) {
+    throw new Error('Exactly one terminal event must be last');
+  }
+  const openMessages = new Set();
+  const knownTools = new Set();
+  for (const event of events) {
+    if (event.type === 'TEXT_MESSAGE_START') openMessages.add(event.messageId);
+    if (event.type === 'TEXT_MESSAGE_CONTENT' && !openMessages.has(event.messageId)) {
+      throw new Error('TEXT_MESSAGE_CONTENT references an unopened message');
+    }
+    if (event.type === 'TEXT_MESSAGE_END') {
+      if (!openMessages.delete(event.messageId)) throw new Error('TEXT_MESSAGE_END references an unopened message');
+    }
+    if (event.type === 'TOOL_CALL_START') knownTools.add(event.toolCallId);
+    if (['TOOL_CALL_ARGS', 'TOOL_CALL_END', 'TOOL_CALL_RESULT'].includes(event.type) && !knownTools.has(event.toolCallId)) {
+      throw new Error(`${event.type} references an unknown tool call`);
+    }
+  }
+  if (openMessages.size) throw new Error('A message stream ended before TEXT_MESSAGE_END');
+}
+
+async function responseTextBounded(response) {
+  const advertised = Number(response.headers.get('content-length') || 0);
+  if (advertised > MAX_RESPONSE_BYTES) throw new Error('Response is too large');
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength > MAX_RESPONSE_BYTES) throw new Error('Response is too large');
+  return new TextDecoder().decode(bytes);
+}
+
 async function run() {
   const args = parseArgs(process.argv.slice(2));
   const manifestPath = resolve(args.manifest);
@@ -126,6 +163,38 @@ async function run() {
       if (args.token) headers.authorization = `Bearer ${args.token}`;
       const chatUrl = endpointFor(manifest.integration.chat_endpoint, args['base-url']);
 
+      if (args.token) {
+        started = Date.now();
+        try {
+          const unauthorized = await timedFetch(chatUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(manifest.integration.protocol === 'ag-ui' ? {
+              threadId: `identity-${randomUUID()}`,
+              runId: randomUUID(),
+              state: {},
+              messages: [{ id: randomUUID(), role: 'user', content: 'identity check' }],
+              tools: [],
+              context: [],
+              forwardedProps: {},
+            } : {
+              thread_id: `identity-${randomUUID()}`,
+              run_id: randomUUID(),
+              messages: [{ id: randomUUID(), role: 'user', content: 'identity check' }],
+              context: {},
+            }),
+          }, 5_000);
+          if (![401, 403].includes(unauthorized.status)) {
+            throw new Error(`Expected 401/403, received HTTP ${unauthorized.status}`);
+          }
+          checks.push(check('identity_rejection', 'passed', started));
+        } catch (error) {
+          checks.push(check('identity_rejection', 'failed', started, 'identity_not_enforced', String(error.message)));
+        }
+      } else {
+        checks.push(check('identity_rejection', 'skipped', Date.now(), null, 'Provide --token to verify rejection and acceptance'));
+      }
+
       if (manifest.integration.protocol === 'ag-ui') {
         started = Date.now();
         try {
@@ -149,14 +218,10 @@ async function run() {
           if (!contentType.toLowerCase().startsWith('text/event-stream')) {
             throw new Error(`Unexpected content-type: ${contentType}`);
           }
-          const events = parseSseFrames(await response.text());
+          const events = parseSseFrames(await responseTextBounded(response));
           if (!events.length) throw new Error('Empty SSE stream');
           for (const event of events) EventSchemas.parse(event);
-          const types = events.map(event => event.type);
-          if (!types.includes('RUN_STARTED')) throw new Error('RUN_STARTED is missing');
-          if (!types.some(type => type === 'RUN_FINISHED' || type === 'RUN_ERROR')) {
-            throw new Error('Terminal run event is missing');
-          }
+          validateAguiSequence(events);
           checks.push(check('ag_ui_stream', 'passed', started, null, `${events.length} events`));
         } catch (error) {
           checks.push(check('ag_ui_stream', 'failed', started, 'protocol_error', String(error.message)));
@@ -176,7 +241,7 @@ async function run() {
             body: JSON.stringify(request),
           }, 30_000);
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const payload = await response.json();
+          const payload = JSON.parse(await responseTextBounded(response));
           if (!validateSimpleResponse(payload)) {
             throw new Error(ajv.errorsText(validateSimpleResponse.errors, { separator: '; ' }));
           }
@@ -197,7 +262,7 @@ async function run() {
     started_at: startedAt,
     completed_at: new Date().toISOString(),
     checks,
-    overall_status: checks.length > 0 && checks.every(item => item.status === 'passed') ? 'passed' : 'failed',
+    overall_status: checks.length > 0 && checks.every(item => item.status === 'passed' || item.status === 'skipped') ? 'passed' : 'failed',
   };
 
   const output = args.output ? resolve(args.output) : null;

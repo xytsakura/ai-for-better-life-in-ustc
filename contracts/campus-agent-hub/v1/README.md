@@ -21,6 +21,8 @@ npm test
 
 `-BaseUrl` 只用于本地测试，将 Manifest Endpoint 的 origin 替换为指定地址。生产审核必须使用 Registry 中保存并通过 SSRF 校验的真实 Endpoint。
 
+Runner 会限制响应大小并检查 AG-UI 的开始、消息、工具和唯一终止顺序。提供 `-Token` 时还会验证缺少身份令牌必须被 Agent 拒绝；不提供时该项明确标记为 `skipped`，不伪装成已验证。
+
 ## 接入等级
 
 - `integration.mode=link`：只要求 `launch_url`。

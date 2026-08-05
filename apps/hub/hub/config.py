@@ -12,16 +12,28 @@ def _split_csv(value: str) -> list[str]:
 @dataclass(frozen=True)
 class Settings:
     database_path: Path
+    asset_cache_dir: Path | None = None
     demo_mode: bool = False
     issuer: str = "campus-agent-hub"
     public_base_url: str = "http://127.0.0.1:8100"
     jwt_kid: str = "hub-dev-ed25519"
     jwt_private_key_pem: str | None = None
+    jwt_private_key_file: Path | None = None
+    jwt_previous_public_jwk_json: str | None = None
     jwt_ttl_seconds: int = 120
     auth_code_ttl_seconds: int = 60
     request_timeout_seconds: float = 30.0
     connect_timeout_seconds: float = 5.0
     health_timeout_seconds: float = 5.0
+    max_request_bytes: int = 262_144
+    max_response_bytes: int = 1_048_576
+    rate_limit_requests: int = 20
+    rate_limit_window_seconds: int = 60
+    health_failure_threshold: int = 3
+    health_poll_interval_seconds: float = 30.0
+    automatic_checks_enabled: bool = True
+    require_passing_checks: bool = True
+    credential_rotation_window_seconds: int = 300
     internal_url_allowlist: tuple[str, ...] = (
         "http://127.0.0.1:8002",
         "http://127.0.0.1:8101",
@@ -38,11 +50,18 @@ class Settings:
         cors = os.getenv("HUB_CORS_ALLOW_ORIGINS")
         return cls(
             database_path=database_path,
+            asset_cache_dir=Path(
+                os.getenv("HUB_ASSET_CACHE_DIR", str(runtime_dir / "assets"))
+            ),
             demo_mode=os.getenv("HUB_DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"},
             issuer=os.getenv("HUB_ISSUER", cls.issuer),
             public_base_url=os.getenv("HUB_PUBLIC_BASE_URL", cls.public_base_url).rstrip("/"),
             jwt_kid=os.getenv("HUB_JWT_KID", cls.jwt_kid),
             jwt_private_key_pem=os.getenv("HUB_JWT_PRIVATE_KEY_PEM"),
+            jwt_private_key_file=Path(
+                os.getenv("HUB_JWT_PRIVATE_KEY_FILE", str(runtime_dir / "jwt-ed25519.pem"))
+            ),
+            jwt_previous_public_jwk_json=os.getenv("HUB_JWT_PREVIOUS_PUBLIC_JWK_JSON"),
             jwt_ttl_seconds=int(os.getenv("HUB_JWT_TTL_SECONDS", str(cls.jwt_ttl_seconds))),
             auth_code_ttl_seconds=int(
                 os.getenv("HUB_AUTH_CODE_TTL_SECONDS", str(cls.auth_code_ttl_seconds))
@@ -55,6 +74,34 @@ class Settings:
             ),
             health_timeout_seconds=float(
                 os.getenv("HUB_HEALTH_TIMEOUT_SECONDS", str(cls.health_timeout_seconds))
+            ),
+            max_request_bytes=int(os.getenv("HUB_MAX_REQUEST_BYTES", str(cls.max_request_bytes))),
+            max_response_bytes=int(os.getenv("HUB_MAX_RESPONSE_BYTES", str(cls.max_response_bytes))),
+            rate_limit_requests=int(
+                os.getenv("HUB_RATE_LIMIT_REQUESTS", str(cls.rate_limit_requests))
+            ),
+            rate_limit_window_seconds=int(
+                os.getenv("HUB_RATE_LIMIT_WINDOW_SECONDS", str(cls.rate_limit_window_seconds))
+            ),
+            health_failure_threshold=int(
+                os.getenv("HUB_HEALTH_FAILURE_THRESHOLD", str(cls.health_failure_threshold))
+            ),
+            health_poll_interval_seconds=float(
+                os.getenv("HUB_HEALTH_POLL_INTERVAL_SECONDS", str(cls.health_poll_interval_seconds))
+            ),
+            automatic_checks_enabled=os.getenv("HUB_AUTOMATIC_CHECKS_ENABLED", "true")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"},
+            require_passing_checks=os.getenv("HUB_REQUIRE_PASSING_CHECKS", "true")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"},
+            credential_rotation_window_seconds=int(
+                os.getenv(
+                    "HUB_CREDENTIAL_ROTATION_WINDOW_SECONDS",
+                    str(cls.credential_rotation_window_seconds),
+                )
             ),
             internal_url_allowlist=tuple(_split_csv(allowlist))
             if allowlist is not None

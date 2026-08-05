@@ -8,6 +8,7 @@ services:
       HUB_HOST: 0.0.0.0
       HUB_PORT: 8100
       HUB_DATABASE_PATH: /app/var/hub/hub.sqlite3
+      HUB_HEALTH_POLL_INTERVAL_SECONDS: "30"
       HUB_PUBLIC_BASE_URL: http://127.0.0.1:${HUB_PUBLIC_PORT:-8100}
       HUB_INTERNAL_URL_ALLOWLIST: >-
         http://course-agent:8000,
@@ -54,6 +55,7 @@ services:
     environment:
       COURSE_AGENT_DEMO_MODE: "true"
       COURSE_AGENT_SESSION_SECRET: local-compose-course-session-change-before-shared-deployment
+      COURSE_AGENT_SESSION_HTTPS_ONLY: "false"
       COURSE_AGENT_RUNTIME_DIR: /app/var/course-agent
       COURSE_AGENT_ADMIN_USER_IDS: demo-a
       COURSE_AGENT_LLM_API_KEY: ${COURSE_AGENT_LLM_API_KEY:-}

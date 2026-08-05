@@ -24,11 +24,13 @@ def main() -> None:
     patch_demo_manifest(demo)
 
     hanhai_version = submit_manifest(hanhai)
-    review_version("hanhai-course-agent", hanhai_version, featured=True)
     credential = create_credential("hanhai-course-agent")
     write_course_agent_secret(credential["client_secret"])
-
     demo_version = submit_manifest(demo)
+
+    wait_for_conformance("hanhai-course-agent", hanhai_version)
+    wait_for_conformance("campus-helper-demo", demo_version)
+    review_version("hanhai-course-agent", hanhai_version, featured=True)
     review_version("campus-helper-demo", demo_version, featured=False)
     skip_health_check = os.getenv("HUB_BOOTSTRAP_SKIP_HEALTH_CHECK", "0") == "1"
     if not skip_health_check:
@@ -60,6 +62,22 @@ def wait_for_agent_health(agent_id: str, timeout_seconds: int = 120) -> None:
             pass
         time.sleep(1)
     raise RuntimeError(f"Agent did not become healthy in time: {agent_id}")
+
+
+def wait_for_conformance(agent_id: str, version_id: str, timeout_seconds: int = 180) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            result = api_post(
+                f"/api/admin/agents/{agent_id}/versions/{version_id}/checks",
+                {},
+            )
+            if result.get("overall_status") == "passed":
+                return
+        except RuntimeError:
+            pass
+        time.sleep(2)
+    raise RuntimeError(f"Agent did not pass conformance in time: {agent_id}@{version_id}")
 
 
 def load_manifest(name: str) -> dict[str, Any]:

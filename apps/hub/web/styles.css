@@ -805,6 +805,24 @@ a:focus-visible {
   padding: 0 14px 14px;
 }
 
+.citation-list {
+  align-self: flex-start;
+  width: min(760px, 92%);
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-soft);
+}
+
+.citation-list h3 {
+  margin: 0 0 6px;
+  font-size: 0.9rem;
+}
+
+.citation-list ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
 .composer {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -816,6 +834,8 @@ a:focus-visible {
 }
 
 .composer textarea {
+  width: 100%;
+  min-width: 0;
   min-height: 48px;
   max-height: 160px;
   resize: vertical;
@@ -1140,7 +1160,38 @@ a:focus-visible {
   }
 
   .composer {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .chat-shell {
+    grid-template-rows: auto minmax(280px, calc(100dvh - 430px)) auto;
+  }
+
+  .chat-header {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'back workspace'
+      'icon copy';
+    align-items: center;
+  }
+
+  .chat-header > a {
+    grid-area: back;
+    justify-self: start;
+  }
+
+  .chat-header > .agent-icon {
+    grid-area: icon;
+  }
+
+  .chat-header__copy {
+    grid-area: copy;
+  }
+
+  .chat-header > [data-workspace] {
+    grid-area: workspace;
+    justify-self: end;
   }
 
   .message {

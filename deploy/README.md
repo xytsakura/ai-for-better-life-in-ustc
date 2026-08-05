@@ -44,4 +44,17 @@ bootstrap 行为：
 7. 瀚海行启动时幂等初始化数据库，并导入 `math-analysis-b1.yaml` 中的 25 份 OCR 课程资料；
 8. 等待两个 Agent 服务就绪并自动执行健康检查，应用广场首次打开即可显示当前状态。
 
+Hub 的 Ed25519 签名私钥默认保存在 `hub-data` volume 中，容器重启后继续使用同一签名身份；Featured client secret 仍单独保存在 `hub-secrets` volume。两者都不进入 Git。
+
+启动完成后，从仓库根目录运行固定比赛流程验收：
+
+```powershell
+python .\deploy\verify_demo.py `
+  --iterations 10 `
+  --minimum-success 9 `
+  --output .\var\demo-acceptance.json
+```
+
+每轮会验证广场同时显示两个 Agent、`simple-chat` 与原生 AG-UI 均正常终止、Featured 工作台可进入且同一授权码不可重放。结果只保存状态、耗时和事件数量，不保存聊天正文、JWT、授权码或 Cookie。
+
 凭据不会写入 Git 文件、Compose 文件或日志。若重复运行，Hub 会保留旧 active credential 并生成新的运行时 secret；这适合本地演示，正式共享部署前应清理 volume 或实现显式轮换策略。

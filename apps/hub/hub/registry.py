@@ -45,7 +45,7 @@ def parse_submission(raw_submission: dict[str, Any], settings: Settings) -> tupl
             submission = AgentSubmission.model_validate(raw_submission)
         except ValidationError as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=exc.errors(include_context=False),
             ) from exc
         manifest = submission.manifest
@@ -55,7 +55,7 @@ def parse_submission(raw_submission: dict[str, Any], settings: Settings) -> tupl
             manifest = AgentManifest.model_validate(raw_submission)
         except ValidationError as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=exc.errors(include_context=False),
             ) from exc
         trust_level = "third_party_external"
@@ -152,6 +152,7 @@ def submit_manifest(
 def _version_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["manifest"] = json.loads(item.pop("manifest_json"))
+    item["featured_approved"] = bool(item.get("featured_approved"))
     return item
 
 
@@ -170,9 +171,39 @@ def get_agent(conn: sqlite3.Connection, agent_id: str, *, include_private: bool 
             (agent_id,),
         ).fetchall()
     ]
+    if include_private:
+        for version in versions:
+            run = conn.execute(
+                """
+                SELECT run_id, overall_status, checks_json, started_at, completed_at
+                FROM hub_conformance_runs
+                WHERE version_id = ?
+                ORDER BY completed_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (version["version_id"],),
+            ).fetchone()
+            if run:
+                version["check_run_id"] = run["run_id"]
+                version["check_status"] = run["overall_status"]
+                version["checks"] = json.loads(run["checks_json"] or "[]")
+                version["checks_started_at"] = run["started_at"]
+                version["checks_completed_at"] = run["completed_at"]
     active_version = next(
         (version for version in versions if version["version_id"] == agent["active_version_id"]), None
     )
+    if active_version and not include_private:
+        icon_asset = conn.execute(
+            """
+            SELECT file_path FROM hub_version_assets
+            WHERE version_id = ? AND asset_type = 'icon'
+            """,
+            (active_version["version_id"],),
+        ).fetchone()
+        if icon_asset:
+            active_version["manifest"]["icon"] = (
+                f"/api/assets/agent-icons/{active_version['version_id']}"
+            )
     latest_health = None
     if active_version:
         health = conn.execute(
@@ -241,6 +272,7 @@ def review_version(
     decision: str,
     notes: str,
     checks: dict[str, Any],
+    settings: Settings,
     featured: bool = False,
 ) -> dict[str, Any]:
     agent = conn.execute("SELECT * FROM hub_agents WHERE agent_id = ?", (agent_id,)).fetchone()
@@ -252,6 +284,21 @@ def review_version(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"error": "agent_not_found"})
     if version["review_status"] != "pending":
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "version_already_reviewed"})
+    if decision == "approved" and settings.require_passing_checks:
+        conformance = conn.execute(
+            """
+            SELECT overall_status FROM hub_conformance_runs
+            WHERE version_id = ?
+            ORDER BY completed_at DESC, rowid DESC
+            LIMIT 1
+            """,
+            (version_id,),
+        ).fetchone()
+        if conformance is None or conformance["overall_status"] != "passed":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={"error": "conformance_checks_not_passed"},
+            )
     manifest = json.loads(version["manifest_json"])
     integration = manifest.get("integration", {})
     if featured and (
@@ -301,10 +348,10 @@ def review_version(
         conn.execute(
             """
             UPDATE hub_agent_versions
-            SET review_status = 'approved', deployment_status = 'active', updated_at = ?
+            SET review_status = 'approved', deployment_status = 'active', featured_approved = ?, updated_at = ?
             WHERE version_id = ?
             """,
-            (now, version_id),
+            (1 if featured else 0, now, version_id),
         )
         conn.execute(
             """
@@ -354,6 +401,44 @@ def restore_agent(conn: sqlite3.Connection, *, agent_id: str, actor: str, reason
     return get_agent(conn, agent_id, include_private=True)
 
 
+def deprecate_agent(conn: sqlite3.Connection, *, agent_id: str, actor: str, reason: str) -> dict[str, Any]:
+    updated = conn.execute(
+        """
+        UPDATE hub_agents SET status = 'deprecated', updated_at = ?
+        WHERE agent_id = ? AND status IN ('active','suspended')
+        """,
+        (now_iso(), agent_id),
+    ).rowcount
+    if not updated:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "agent_not_deprecatable"})
+    record_audit(conn, "agent_deprecated", actor=actor, agent_id=agent_id, reason=reason)
+    return get_agent(conn, agent_id, include_private=True)
+
+
+def ensure_health_allows_invocation(
+    conn: sqlite3.Connection,
+    *,
+    agent_id: str,
+    version_id: str,
+    settings: Settings,
+) -> None:
+    threshold = max(1, settings.health_failure_threshold)
+    rows = conn.execute(
+        """
+        SELECT status FROM hub_health_checks
+        WHERE agent_id = ? AND version_id = ?
+        ORDER BY checked_at DESC, rowid DESC
+        LIMIT ?
+        """,
+        (agent_id, version_id, threshold),
+    ).fetchall()
+    if len(rows) >= threshold and all(row["status"] != "ok" for row in rows):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "agent_unavailable"},
+        )
+
+
 def rollback_agent(
     conn: sqlite3.Connection,
     *,
@@ -392,10 +477,10 @@ def rollback_agent(
     conn.execute(
         """
         UPDATE hub_agents
-        SET status = 'active', active_version_id = ?, previous_active_version_id = ?, updated_at = ?
+        SET status = 'active', active_version_id = ?, previous_active_version_id = ?, featured = ?, updated_at = ?
         WHERE agent_id = ?
         """,
-        (target, current, now, agent_id),
+        (target, current, version["featured_approved"], now, agent_id),
     )
     record_audit(conn, "agent_rollback", actor=actor, agent_id=agent_id, version_id=target, reason=reason)
     return get_agent(conn, agent_id, include_private=True)

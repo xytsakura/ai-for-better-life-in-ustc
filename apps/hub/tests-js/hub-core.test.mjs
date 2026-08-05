@@ -62,7 +62,7 @@ test('agent CTA contract distinguishes link launch from connected chat', () => {
   const featured = normalizeAgent({ id: 'full', featured: true, integration: { mode: 'connected' } });
 
   assert.equal(ACCESS_LEVELS[normalizeAccessLevel(link)].primary, '打开应用');
-  assert.match(getAgentPrimaryHref(link), /^https:\/\/example\.edu\.cn|\/api\/agents\/map\/launch/);
+  assert.equal(getAgentPrimaryHref(link), '/api/agents/map/launch');
   assert.equal(getAgentPrimaryHref(connected), '/hub/agents/chat/chat');
   assert.equal(getAgentPrimaryHref(featured), '/hub/agents/full/chat');
   assert.equal(getAgentSecondaryHref(featured), '');

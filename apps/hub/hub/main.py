@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import uvicorn
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .audit import list_audit, record_audit
 from .config import DEMO_USERS, Settings
+from .conformance import resolve_safe_launch_url, run_version_checks
 from .db import database, init_db
 from .gateway import gateway_stream
 from .health import check_agent_health
@@ -23,8 +26,11 @@ from .identity import (
     consume_auth_code,
     create_agent_credential,
     create_auth_code,
+    update_agent_credential_status,
 )
+from .limits import read_json_limited
 from .registry import (
+    deprecate_agent,
     get_active_version,
     get_agent,
     list_agents,
@@ -34,7 +40,13 @@ from .registry import (
     submit_manifest,
     suspend_agent,
 )
-from .schemas import ReviewRequest, RollbackRequest, StatusChangeRequest, WorkspaceStartRequest
+from .schemas import (
+    CredentialStatusRequest,
+    ReviewRequest,
+    RollbackRequest,
+    StatusChangeRequest,
+    WorkspaceStartRequest,
+)
 
 
 def create_app(settings: Settings | None = None, identity: IdentityService | None = None) -> FastAPI:
@@ -42,7 +54,47 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     init_db(settings.database_path)
     identity = identity or IdentityService(settings)
 
-    app = FastAPI(title="Campus Agent Hub", version="0.1.0")
+    async def monitor_health() -> None:
+        while True:
+            with database(settings.database_path) as conn:
+                agent_ids = [
+                    row["agent_id"]
+                    for row in conn.execute(
+                        """
+                        SELECT a.agent_id
+                        FROM hub_agents a
+                        JOIN hub_agent_versions v ON v.version_id = a.active_version_id
+                        WHERE a.status = 'active'
+                          AND json_extract(v.manifest_json, '$.integration.mode') = 'connected'
+                        """
+                    ).fetchall()
+                ]
+            for agent_id in agent_ids:
+                try:
+                    with database(settings.database_path) as conn:
+                        await check_agent_health(conn, agent_id=agent_id, settings=settings)
+                except Exception:
+                    continue
+            await asyncio.sleep(settings.health_poll_interval_seconds)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        task = None
+        if settings.health_poll_interval_seconds > 0:
+            task = asyncio.create_task(monitor_health())
+            app.state.health_monitor_task = task
+        try:
+            yield
+        finally:
+            if task is None:
+                return
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    app = FastAPI(title="Campus Agent Hub", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.identity = identity
     app.add_middleware(
@@ -72,6 +124,30 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"error": "admin_required"})
         return user
 
+    async def run_checks_background(agent_id: str, version_id: str) -> None:
+        try:
+            with database(settings.database_path) as conn:
+                result = await run_version_checks(
+                    conn,
+                    agent_id=agent_id,
+                    version_id=version_id,
+                    settings=settings,
+                    identity=identity,
+                )
+                record_audit(
+                    conn,
+                    "agent_conformance_checked",
+                    actor="hub-automatic-checker",
+                    agent_id=agent_id,
+                    version_id=version_id,
+                    safe_detail={
+                        "run_id": result["run_id"],
+                        "overall_status": result["overall_status"],
+                    },
+                )
+        except Exception:
+            return
+
     @app.get("/healthz", include_in_schema=False)
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -84,20 +160,47 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     def jwks() -> dict[str, Any]:
         return identity.jwks()
 
+    @app.get("/api/assets/agent-icons/{version_id}", include_in_schema=False)
+    def agent_icon(version_id: str) -> FileResponse:
+        with database(settings.database_path) as conn:
+            row = conn.execute(
+                """
+                SELECT file_path, media_type FROM hub_version_assets
+                WHERE version_id = ? AND asset_type = 'icon'
+                """,
+                (version_id,),
+            ).fetchone()
+        if row is None or not Path(row["file_path"]).is_file():
+            raise HTTPException(status.HTTP_404_NOT_FOUND)
+        return FileResponse(
+            row["file_path"],
+            media_type=row["media_type"],
+            headers={"Cache-Control": "public, max-age=86400, immutable"},
+        )
+
     @app.post("/api/registry/agents", status_code=201)
-    def submit_agent(
+    async def submit_agent(
         manifest: dict[str, Any],
+        background_tasks: BackgroundTasks,
         user: dict[str, str] = Depends(current_user),
     ) -> dict[str, Any]:
         if manifest.get("trust_level") == "first_party_internal" and user["role"] != "admin":
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"error": "admin_required"})
         with database(settings.database_path) as conn:
-            return submit_manifest(
+            record = submit_manifest(
                 conn,
                 raw_manifest=manifest,
                 submitted_by=user["user_id"],
                 settings=settings,
             )
+            version_id = record["versions"][0]["version_id"]
+            if settings.automatic_checks_enabled:
+                background_tasks.add_task(
+                    run_checks_background,
+                    record["agent_id"],
+                    version_id,
+                )
+            return get_agent(conn, record["agent_id"], include_private=True)
 
     @app.get("/api/agents")
     def public_agents() -> dict[str, Any]:
@@ -130,6 +233,23 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
         user: dict[str, str] = Depends(require_admin),
     ) -> dict[str, Any]:
         with database(settings.database_path) as conn:
+            conformance = conn.execute(
+                """
+                SELECT run_id, overall_status FROM hub_conformance_runs
+                WHERE version_id = ?
+                ORDER BY completed_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (version_id,),
+            ).fetchone()
+            review_checks = {"manual_review": review.decision}
+            if conformance:
+                review_checks.update(
+                    {
+                        "conformance_run_id": conformance["run_id"],
+                        "conformance_status": conformance["overall_status"],
+                    }
+                )
             return review_version(
                 conn,
                 agent_id=agent_id,
@@ -137,9 +257,34 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 reviewer=user["user_id"],
                 decision=review.decision,
                 notes=review.notes,
+                settings=settings,
                 featured=review.featured,
-                checks={"manual_review": review.decision},
+                checks=review_checks,
             )
+
+    @app.post("/api/admin/agents/{agent_id}/versions/{version_id}/checks")
+    async def admin_run_checks(
+        agent_id: str,
+        version_id: str,
+        user: dict[str, str] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            result = await run_version_checks(
+                conn,
+                agent_id=agent_id,
+                version_id=version_id,
+                settings=settings,
+                identity=identity,
+            )
+            record_audit(
+                conn,
+                "agent_conformance_checked",
+                actor=user["user_id"],
+                agent_id=agent_id,
+                version_id=version_id,
+                safe_detail={"run_id": result["run_id"], "overall_status": result["overall_status"]},
+            )
+            return result
 
     @app.post("/api/admin/agents/{agent_id}/suspend")
     def admin_suspend(
@@ -158,6 +303,15 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     ) -> dict[str, Any]:
         with database(settings.database_path) as conn:
             return restore_agent(conn, agent_id=agent_id, actor=user["user_id"], reason=body.reason)
+
+    @app.post("/api/admin/agents/{agent_id}/deprecate")
+    def admin_deprecate(
+        agent_id: str,
+        body: StatusChangeRequest,
+        user: dict[str, str] = Depends(require_admin),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            return deprecate_agent(conn, agent_id=agent_id, actor=user["user_id"], reason=body.reason)
 
     @app.post("/api/admin/agents/{agent_id}/rollback")
     def admin_rollback(
@@ -181,7 +335,11 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     ) -> dict[str, str]:
         with database(settings.database_path) as conn:
             get_agent(conn, agent_id, include_private=True)
-            result = create_agent_credential(conn, agent_id)
+            result = create_agent_credential(
+                conn,
+                agent_id,
+                rotation_window_seconds=settings.credential_rotation_window_seconds,
+            )
             record_audit(
                 conn,
                 "agent_credential_created",
@@ -190,6 +348,31 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 safe_detail={"credential_id": result["credential_id"]},
             )
             return result
+
+    @app.post("/api/admin/agents/{agent_id}/credentials/{credential_id}/status")
+    def admin_credential_status(
+        agent_id: str,
+        credential_id: str,
+        body: CredentialStatusRequest,
+        user: dict[str, str] = Depends(require_admin),
+    ) -> dict[str, str]:
+        with database(settings.database_path) as conn:
+            update_agent_credential_status(
+                conn,
+                agent_id=agent_id,
+                credential_id=credential_id,
+                new_status=body.status,
+                rotation_window_seconds=settings.credential_rotation_window_seconds,
+            )
+            record_audit(
+                conn,
+                "agent_credential_status_changed",
+                actor=user["user_id"],
+                agent_id=agent_id,
+                reason=body.reason,
+                safe_detail={"credential_id": credential_id, "status": body.status},
+            )
+            return {"credential_id": credential_id, "status": body.status}
 
     @app.get("/api/admin/audit")
     def admin_audit(
@@ -200,14 +383,32 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
             return {"events": list_audit(conn, agent_id)}
 
     @app.get("/api/agents/{agent_id}/launch")
-    def launch_link_app(
+    async def launch_link_app(
         agent_id: str,
         user: dict[str, str] = Depends(current_user),
     ) -> RedirectResponse:
         with database(settings.database_path) as conn:
             _, version = get_active_version(conn, agent_id)
             manifest = version["manifest"]
+            if manifest["integration"]["mode"] != "link":
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={"error": "agent_not_link_app"},
+                )
             url = manifest["integration"]["launch_url"]
+            trust_level = version.get("trust_level", "third_party_external")
+        try:
+            target = await resolve_safe_launch_url(
+                url,
+                trust_level=trust_level,
+                settings=settings,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "agent_unavailable"},
+            ) from exc
+        with database(settings.database_path) as conn:
             record_audit(
                 conn,
                 "agent_launch",
@@ -216,7 +417,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 version_id=version["version_id"],
                 safe_detail={"mode": manifest["integration"]["mode"]},
             )
-            return RedirectResponse(url, status_code=302)
+        return RedirectResponse(target, status_code=302)
 
     @app.post("/api/agents/{agent_id}/workspace/start")
     def start_workspace(
@@ -312,7 +513,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
         request: Request,
         user: dict[str, str] = Depends(current_user),
     ):
-        payload = await request.json()
+        payload = await read_json_limited(request, settings)
         with database(settings.database_path) as conn:
             return await gateway_stream(
                 conn,
@@ -330,7 +531,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
         request: Request,
         user: dict[str, str] = Depends(current_user),
     ):
-        payload = await request.json()
+        payload = await read_json_limited(request, settings)
         with database(settings.database_path) as conn:
             return await gateway_stream(
                 conn,

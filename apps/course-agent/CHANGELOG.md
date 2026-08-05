@@ -2,6 +2,15 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-08-06：Campus Agent Hub 治理与交付验收
+
+- Hub 升级到 `v0.2.0`：Manifest 提交后自动生成版本级验收证据，管理员批准前必须通过 URL、启动页、健康与聊天 Contract 检查。
+- Gateway 增加请求/响应大小限制、SQLite 持久限流、连续健康失败准入、严格 AG-UI 生命周期校验、客户端取消状态和 usage 元数据审计。
+- Featured client secret 支持轮换与撤销；版本切换后旧授权码立即失效；Ed25519 私钥持久化到忽略的运行时目录，修复 Hub 重启后 Agent 因 JWKS 缓存旧密钥而返回 401 的问题。
+- 外部 Agent 图标改由 Hub 下载并校验 MIME、大小和文件签名，浏览器只加载平台安全副本。
+- 新增固定比赛验收脚本，真实调用独立 `simple-chat` Demo、瀚海行原生 AG-UI 和 Featured 工作台，并验证授权码防重放；2026-08-06 实测 10/10 轮成功。
+- 自动化验证更新为 Hub Python 26 项、瀚海行 Python 86 项、Demo Agent Python 6 项、两组 JavaScript 各 8 项和 Contract 5 项，共 139 项。
+
 ## 2026-08-05：Campus Agent Hub 三服务闭环
 
 - 新增独立 Campus Agent Hub：实现版本化 Manifest、注册审核、暂停恢复与回滚、健康检查、审计日志、应用广场、统一聊天和开发者接入页面；Hub 使用自己的 SQLite 数据库，不导入瀚海行业务代码。

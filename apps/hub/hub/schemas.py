@@ -103,17 +103,22 @@ ManifestAdapter = TypeAdapter(AgentManifest)
 
 class ReviewRequest(BaseModel):
     decision: Literal["approved", "rejected"]
-    notes: str = ""
+    notes: str = Field(min_length=1, max_length=1000)
     featured: bool = False
 
 
 class StatusChangeRequest(BaseModel):
-    reason: str = ""
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class RollbackRequest(BaseModel):
     version_id: str | None = None
-    reason: str = ""
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class CredentialStatusRequest(BaseModel):
+    status: Literal["rotating", "revoked"]
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class WorkspaceStartRequest(BaseModel):

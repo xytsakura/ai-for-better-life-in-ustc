@@ -639,7 +639,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         SessionMiddleware,
         secret_key=settings.session_secret,
         session_cookie="course_agent_session",
-        https_only=False,
+        https_only=settings.session_https_only,
         same_site="lax",
     )
 

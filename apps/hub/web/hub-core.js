@@ -8,8 +8,10 @@ export const HUB_API = Object.freeze({
   adminAgents: '/api/admin/agents',
   adminAgent: (id) => `/api/admin/agents/${encodeURIComponent(id)}`,
   reviewVersion: (id, versionId) => `/api/admin/agents/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/review`,
+  checkVersion: (id, versionId) => `/api/admin/agents/${encodeURIComponent(id)}/versions/${encodeURIComponent(versionId)}/checks`,
   suspend: (id) => `/api/admin/agents/${encodeURIComponent(id)}/suspend`,
   restore: (id) => `/api/admin/agents/${encodeURIComponent(id)}/restore`,
+  deprecate: (id) => `/api/admin/agents/${encodeURIComponent(id)}/deprecate`,
   rollback: (id) => `/api/admin/agents/${encodeURIComponent(id)}/rollback`,
   launch: (id) => `/api/agents/${encodeURIComponent(id)}/launch`,
   workspaceStart: (id) => `/api/agents/${encodeURIComponent(id)}/workspace/start`,
@@ -50,6 +52,9 @@ export const ERROR_MESSAGES = Object.freeze({
   protocol_error: 'Agent 返回的协议事件不完整或格式不正确。',
   rate_limited: '请求过于频繁，请稍后再试。',
   upstream_error: 'Agent 服务返回异常，请稍后重试。',
+  conformance_checks_not_passed: '机器验收尚未通过，不能批准这个版本。',
+  request_too_large: '本次请求超过平台允许的大小。',
+  response_too_large: 'Agent 返回内容超过平台允许的大小。',
 });
 
 export const DEMO_USERS = Object.freeze([
@@ -118,7 +123,7 @@ export function normalizeHealth(health) {
 
 export function getAgentPrimaryHref(agent) {
   const level = normalizeAccessLevel(agent);
-  if (level === 'link') return agent.integration?.launch_url || HUB_API.launch(agent.id);
+  if (level === 'link') return HUB_API.launch(agent.id);
   return `/hub/agents/${encodeURIComponent(agent.id)}/chat`;
 }
 
