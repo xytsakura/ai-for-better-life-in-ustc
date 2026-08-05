@@ -677,6 +677,13 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         if user_id not in (app.state.settings.admin_user_ids or set()):
             raise HTTPException(status_code=403, detail=_error("admin_required", "需要管理员权限"))
 
+    def require_can_configure_llm(user_id: str) -> None:
+        # 演示模式下允许任意已登录用户配置模型服务（个人本地工具场景）；
+        # 正式部署仍要求管理员权限。
+        if app.state.settings.demo_mode:
+            return
+        require_admin(user_id)
+
     def catalog_error(exc: ModelCatalogError, status_code: int = 422) -> HTTPException:
         return HTTPException(
             status_code=status_code,
@@ -1934,7 +1941,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/settings")
     def update_settings(payload: SettingsUpdate, user_id: str = Depends(current_user)) -> dict:
-        require_admin(user_id)
+        require_can_configure_llm(user_id)
         incoming = payload.model_dump(exclude_unset=True)
         old_base_url = app.state.settings.llm_base_url
         new_base_url = str(incoming.get("llm_base_url", old_base_url) or "").strip()
@@ -1977,6 +1984,14 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         cached = app.state.model_catalog.get_cached()
         if cached:
             return cached.as_dict()
+        # 尚未配置默认模型时，返回空目录而非报错，允许前端正常渲染并让用户自行填写。
+        if not (app.state.settings.llm_model or "").strip():
+            return {
+                "models": [],
+                "discovery_source": None,
+                "cached": False,
+                "reasoning_efforts": list(SUPPORTED_REASONING_EFFORTS),
+            }
         try:
             default_info = app.state.model_catalog.model_for_query(app.state.settings.llm_model)
         except ModelCatalogError as exc:
@@ -1990,7 +2005,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/models/discover")
     def discover_models(user_id: str = Depends(current_user)) -> dict:
-        require_admin(user_id)
+        require_can_configure_llm(user_id)
         try:
             return app.state.model_catalog.discover(force=True).as_dict()
         except ModelCatalogError as exc:
@@ -1998,7 +2013,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/settings/test")
     def test_settings(user_id: str = Depends(current_user)) -> dict:
-        require_admin(user_id)
+        require_can_configure_llm(user_id)
         adapter = LLMAdapter(app.state.settings)
         result = adapter.generate_direct("你好，请回复“配置测试成功”即可。")
         return {

@@ -501,7 +501,7 @@ body.resizing * {
   min-height: 0;
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: minmax(0, 760px) minmax(190px, 260px);
+  grid-template-columns: minmax(0, 920px);
   justify-content: center;
   gap: clamp(20px, 3vw, 48px);
   padding: 0 clamp(16px, 2.5vw, 32px) 20px;
@@ -527,19 +527,21 @@ body.resizing * {
 .home-agent-avatar-dock {
   --home-avatar-drag-x: 0px;
   --home-avatar-drag-y: 0px;
-  --home-avatar-scale: 1;
+  --home-avatar-scale: 0.8;
   --home-avatar-control-half-width: 110px;
   --home-avatar-speech-left: 0px;
   --home-avatar-speech-top: 0px;
   --home-avatar-speech-min-width: 64px;
   --home-avatar-speech-max-width: 200px;
   --home-avatar-speech-tail-top: 50%;
-  position: relative;
-  z-index: 2;
+  position: fixed;
+  right: clamp(16px, 2.5vw, 40px);
+  bottom: clamp(110px, 16vh, 180px);
+  z-index: 40;
+  width: clamp(150px, 14vw, 210px);
   min-width: 0;
   min-height: 0;
-  height: min(100%, 640px);
-  align-self: end;
+  height: min(520px, 64vh);
   padding: 18px 0 0;
   display: grid;
   grid-template-rows: 74px minmax(0, 1fr);
@@ -3163,21 +3165,19 @@ body.document-reader-open .library-chat { display: none; }
 @media (max-width: 1100px) {
   .home-workspace {
     grid-template-columns: minmax(0, 760px);
-    grid-template-rows: 280px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 0;
     padding: 0 20px 16px;
   }
-  .home-chat-column { grid-row: 2; }
+  .home-chat-column { grid-row: 1; }
   .home-workspace.home-avatar-disabled {
     grid-template-rows: minmax(0, 1fr);
   }
   .home-workspace.home-avatar-disabled .home-chat-column { grid-row: 1; }
+  .home-chat-column .home-input-wrap { padding-right: clamp(240px, 26vw, 280px); }
   .home-agent-avatar-dock {
-    grid-row: 1;
     width: min(240px, 100%);
     height: 272px;
-    justify-self: end;
-    align-self: start;
     padding: 8px 0 4px;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 74px minmax(0, 1fr);
@@ -3271,12 +3271,12 @@ body.document-reader-open .library-chat { display: none; }
   .history-section, .sidebar-bottom { display: none; }
   .app-main { height: calc(100vh - 62px); }
   .home-workspace {
-    grid-template-rows: 246px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     padding: 0 12px 12px;
   }
   .home-chat-column .home-toolbar { padding-top: 8px; }
   .home-chat-column .home-conversation { padding: 12px 0 10px; }
-  .home-chat-column .home-input-wrap { padding-top: 8px; }
+  .home-chat-column .home-input-wrap { padding-top: 8px; padding-right: clamp(220px, 26vw, 260px); }
   .home-agent-avatar-dock {
     width: min(220px, 100%);
     height: 238px;
@@ -3284,7 +3284,6 @@ body.document-reader-open .library-chat { display: none; }
     grid-template-rows: 72px minmax(0, 1fr);
     gap: 0;
     padding-top: 4px;
-    justify-self: center;
   }
   .home-agent-avatar-stage { height: auto; }
   .home-agent-avatar-button { height: 130px; max-height: 130px; }
