@@ -263,8 +263,10 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'aria-describedby="feature-avatar-status"' in html
     assert 'aria-controls="feature-avatar-character-options"' in html
     assert 'id="feature-avatar-character-options"' in html
-    assert 'name="avatar-character" value="male" checked' in html
+    assert 'name="avatar-character" value="bichon" checked' in html
+    assert 'name="avatar-character" value="male"' in html
     assert 'name="avatar-character" value="female"' in html
+    assert '<span>小比熊</span>' in html
     assert '<span>男生</span>' in html
     assert '<span>女生</span>' in html
     assert 'id="feature-avatar-action-schedule-toggle"' in html
@@ -286,8 +288,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=markdown-table-v3' in html
-    assert '/assets/app.js?v=course-streaming-v1' in html
+    assert '/assets/styles.css?v=bichon-avatar-v1' in html
+    assert '/assets/app.js?v=bichon-avatar-v1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles

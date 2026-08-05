@@ -16,7 +16,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=markdown-table-v3">
+  <link rel="stylesheet" href="/assets/styles.css?v=bichon-avatar-v1">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -198,6 +198,16 @@
                 draggable="false"
                 decoding="async"
               >
+              <video
+                class="home-agent-avatar-video"
+                id="home-agent-avatar-video"
+                muted
+                playsinline
+                preload="metadata"
+                poster="/assets/avatar-preview/bichon/xiaobai.jpg"
+                aria-hidden="true"
+                hidden
+              ></video>
             </button>
             <div class="home-agent-avatar-actions" id="home-agent-avatar-actions" role="group" aria-label="虚拟形象快捷功能">
               <div class="home-agent-avatar-action-group home-agent-avatar-action-group-left" data-avatar-control-boundary>
@@ -691,7 +701,11 @@
                     <legend class="feature-avatar-character-label">形象选择</legend>
                     <div class="segment-control feature-avatar-character-control">
                       <label class="segment-option">
-                        <input type="radio" name="avatar-character" value="male" checked>
+                        <input type="radio" name="avatar-character" value="bichon" checked>
+                        <span>小比熊</span>
+                      </label>
+                      <label class="segment-option">
+                        <input type="radio" name="avatar-character" value="male">
                         <span>男生</span>
                       </label>
                       <label class="segment-option">
@@ -1013,6 +1027,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=course-streaming-v1" defer></script>
-  <script src="/assets/app.js?v=course-streaming-v1" defer></script>
+  <script src="/assets/app.js?v=bichon-avatar-v1" defer></script>
 </body>
 </html>

@@ -17,6 +17,7 @@ ASSET_NAMES = (
     "agent-reading.png",
 )
 FEMALE_ASSET_NAMES = tuple(f"female/{name}" for name in ASSET_NAMES)
+BICHON_ASSET_NAMES = ("idle.webm", "eat.webm", "sleep.webm", "alert.webm", "play.webm", "out_of_view.webm")
 
 STUDY_QUOTES = (
     "《论语》：学而不思则罔，思而不学则殆。",
@@ -152,6 +153,25 @@ def test_avatar_preview_pose_assets_are_consistent_transparent_pngs(tmp_path):
     assert headers == [(378, 887, 6)] * (len(ASSET_NAMES) + len(FEMALE_ASSET_NAMES))
 
 
+def test_bichon_video_assets_and_attribution_are_packaged(tmp_path):
+    client = make_client(tmp_path)
+
+    for name in BICHON_ASSET_NAMES:
+        response = client.get(f"/assets/avatar-preview/bichon/{name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "video/webm"
+        assert response.content.startswith(b"\x1aE\xdf\xa3")
+
+    poster = client.get("/assets/avatar-preview/bichon/xiaobai.jpg")
+    assert poster.status_code == 200
+    assert poster.headers["content-type"] == "image/jpeg"
+    assert poster.content.startswith(b"\xff\xd8\xff")
+    assert "MIT License" in client.get("/assets/avatar-preview/bichon/LICENSE").text
+    source = client.get("/assets/avatar-preview/bichon/SOURCE.md").text
+    assert "xytsakura/PetPresence-public" in source
+    assert "78a94cd480c23a485df9e172370df5a25d9ff342" in source
+
+
 def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     client = make_client(tmp_path)
 
@@ -161,6 +181,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'class="home-agent-avatar-dock feature-preferences-pending"' in html
     assert 'id="home-agent-avatar-button"' in html
     assert 'id="home-agent-avatar-image"' in html
+    assert 'id="home-agent-avatar-video"' in html
+    assert 'poster="/assets/avatar-preview/bichon/xiaobai.jpg"' in html
     assert 'id="home-agent-avatar-speech"' in html
     assert 'id="home-agent-avatar-actions"' in html
     assert 'data-avatar-action="schedule"' in html
@@ -179,8 +201,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=markdown-table-v3' in html
-    assert '/assets/app.js?v=course-streaming-v1' in html
+    assert '/assets/styles.css?v=bichon-avatar-v1' in html
+    assert '/assets/app.js?v=bichon-avatar-v1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles
@@ -203,6 +225,9 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
         assert quote in script
     assert "const HOME_AGENT_AVATAR_QUOTES = Object.freeze([" in script
     assert "const HOME_AGENT_AVATAR_POSE_SETS = {" in script
+    assert "const HOME_AGENT_AVATAR_BICHON_POSES = {" in script
+    for name in ("idle.webm", "alert.webm", "play.webm", "eat.webm"):
+        assert f"/assets/avatar-preview/bichon/{name}" in script
     assert "function normalizeHomeAgentAvatarCharacter(value)" in script
     assert "function activeHomeAgentAvatarPoses()" in script
     assert "function syncHomeAgentAvatarSource()" in script
@@ -211,6 +236,9 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert "function startHomeAgentAvatarWave()" in script
     assert "function startHomeAgentAvatarReading()" in script
     assert "function handleHomeAgentAvatarInteraction(event)" in script
+    assert "function handleHomeAgentAvatarWheel(event)" in script
+    assert "button.addEventListener('wheel', handleHomeAgentAvatarWheel, { passive: false });" in script
+    assert "HOME_AGENT_AVATAR_WHEEL_SCALE_STEP" in script
     interaction_start = script.index("function handleHomeAgentAvatarInteraction(event)")
     interaction_end = script.index("function initHomeAgentAvatar()", interaction_start)
     interaction_script = script[interaction_start:interaction_end]

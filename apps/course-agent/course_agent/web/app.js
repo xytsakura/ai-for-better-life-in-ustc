@@ -123,7 +123,7 @@ const state = {
   features: {
     schedule: true,
     avatar: true,
-    avatarCharacter: 'male',
+    avatarCharacter: 'bichon',
     avatarScale: 1,
     avatarActions: { schedule: true, weather: true, literature: true, exams: true },
     literatureDirection: 'ai',
@@ -189,6 +189,7 @@ const HOME_AGENT_AVATAR_KEYBOARD_FAST_STEP_PX = 32;
 const HOME_AGENT_AVATAR_SCALE_MIN = 0.67;
 const HOME_AGENT_AVATAR_SCALE_MAX = 1.33;
 const HOME_AGENT_AVATAR_SCALE_STEP = 0.05;
+const HOME_AGENT_AVATAR_WHEEL_SCALE_STEP = 0.05;
 const HOME_AGENT_AVATAR_ACTION_DURATION_MS = 0;
 const HOME_AGENT_AVATAR_POSE_SETS = {
   male: {
@@ -206,6 +207,17 @@ const HOME_AGENT_AVATAR_POSE_SETS = {
     read: '/assets/avatar-preview/female/agent-reading.png',
   },
 };
+const HOME_AGENT_AVATAR_BICHON_POSES = {
+  idle: { source: '/assets/avatar-preview/bichon/idle.webm', loop: true, durationMs: 5042 },
+  thinking: { source: '/assets/avatar-preview/bichon/alert.webm', loop: true, durationMs: 5042 },
+  wave: { source: '/assets/avatar-preview/bichon/play.webm', loop: false, durationMs: 5042 },
+  read: { source: '/assets/avatar-preview/bichon/eat.webm', loop: false, durationMs: 5042 },
+};
+const HOME_AGENT_AVATAR_CHARACTER_LABELS = Object.freeze({
+  bichon: '小比熊',
+  male: '男生',
+  female: '女生',
+});
 const HOME_AGENT_AVATAR_LABELS = {
   idle: '待机',
   thinking: '思考中',
@@ -213,10 +225,10 @@ const HOME_AGENT_AVATAR_LABELS = {
   read: '阅读中',
 };
 const HOME_AGENT_AVATAR_ARIA_LABELS = {
-  idle: '虚拟形象，可拖动，点击互动；使用方向键移动，Home 键复位',
-  thinking: '虚拟形象正在思考，可拖动；使用方向键移动，Home 键复位',
-  wave: '虚拟形象正在挥手，可拖动；使用方向键移动，Home 键复位',
-  read: '虚拟形象正在看书，可拖动；使用方向键移动，Home 键复位',
+  idle: '虚拟形象，可拖动，点击互动，滚轮缩放；使用方向键移动，Home 键复位',
+  thinking: '虚拟形象正在思考，可拖动、滚轮缩放；使用方向键移动，Home 键复位',
+  wave: '虚拟形象正在互动，可拖动、滚轮缩放；使用方向键移动，Home 键复位',
+  read: '虚拟形象正在陪伴学习，可拖动、滚轮缩放；使用方向键移动，Home 键复位',
 };
 const HOME_AGENT_AVATAR_QUOTES = Object.freeze([
   '《论语》：学而不思则罔，思而不学则殆。',
@@ -354,7 +366,13 @@ function normalizeAvatar(value) {
 }
 
 function normalizeHomeAgentAvatarCharacter(value) {
-  return value === 'female' ? 'female' : 'male';
+  return Object.prototype.hasOwnProperty.call(HOME_AGENT_AVATAR_CHARACTER_LABELS, value)
+    ? value
+    : 'bichon';
+}
+
+function homeAgentAvatarCharacterLabel(value) {
+  return HOME_AGENT_AVATAR_CHARACTER_LABELS[normalizeHomeAgentAvatarCharacter(value)];
 }
 
 function normalizeHomeAgentAvatarScale(value) {
@@ -1201,7 +1219,39 @@ function clearHomeAgentAvatarSecondClickWindow() {
 
 function setHomeAgentAvatarSource(source) {
   const image = $('#home-agent-avatar-image');
-  if (image && image.getAttribute('src') !== source) image.setAttribute('src', source);
+  const video = $('#home-agent-avatar-video');
+  const button = $('#home-agent-avatar-button');
+  if (video) {
+    video.pause();
+    video.hidden = true;
+  }
+  if (image) {
+    image.hidden = false;
+    if (image.getAttribute('src') !== source) image.setAttribute('src', source);
+  }
+  if (button) button.dataset.character = normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter);
+}
+
+function setHomeAgentAvatarVideo(asset) {
+  const image = $('#home-agent-avatar-image');
+  const video = $('#home-agent-avatar-video');
+  const button = $('#home-agent-avatar-button');
+  if (!video || !asset) return;
+  const sourceChanged = video.getAttribute('src') !== asset.source;
+  if (image) image.hidden = true;
+  video.hidden = false;
+  video.loop = Boolean(asset.loop);
+  if (sourceChanged) {
+    video.setAttribute('src', asset.source);
+    video.load();
+  }
+  if (button) button.dataset.character = 'bichon';
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    video.pause();
+    if (sourceChanged) video.currentTime = 0;
+    return;
+  }
+  video.play().catch(() => {});
 }
 
 function activeHomeAgentAvatarPoses() {
@@ -1210,12 +1260,22 @@ function activeHomeAgentAvatarPoses() {
 }
 
 function syncHomeAgentAvatarSource() {
-  const poses = activeHomeAgentAvatarPoses();
   const avatar = state.homeAgentAvatar;
+  const character = normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter);
+  if (character === 'bichon') {
+    setHomeAgentAvatarVideo(HOME_AGENT_AVATAR_BICHON_POSES[avatar.mode]);
+    return;
+  }
+  const poses = activeHomeAgentAvatarPoses();
   const source = avatar.mode === 'wave'
     ? (avatar.waveFrameIsA ? poses.waveA : poses.waveB)
     : poses[avatar.mode];
   if (source) setHomeAgentAvatarSource(source);
+}
+
+function homeAgentAvatarModeDuration(mode, fallback) {
+  if (normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter) !== 'bichon') return fallback;
+  return HOME_AGENT_AVATAR_BICHON_POSES[mode]?.durationMs || fallback;
 }
 
 function setHomeAgentAvatarMode(mode) {
@@ -1483,7 +1543,10 @@ function startHomeAgentAvatarWave() {
   avatar.waveFrameIsA = true;
   setHomeAgentAvatarMode('wave');
 
-  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+  if (
+    normalizeHomeAgentAvatarCharacter(state.features.avatarCharacter) !== 'bichon'
+    && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ) {
     avatar.waveFrameTimer = window.setInterval(() => {
       avatar.waveFrameIsA = !avatar.waveFrameIsA;
       syncHomeAgentAvatarSource();
@@ -1494,7 +1557,7 @@ function startHomeAgentAvatarWave() {
   showHomeAgentAvatarSpeech(`你好呀，${name}`, HOME_AGENT_AVATAR_GREETING_DURATION_MS);
   avatar.poseTimer = window.setTimeout(
     () => returnHomeAgentAvatarToIdle('wave'),
-    HOME_AGENT_AVATAR_WAVE_DURATION_MS,
+    homeAgentAvatarModeDuration('wave', HOME_AGENT_AVATAR_WAVE_DURATION_MS),
   );
 }
 
@@ -1513,7 +1576,7 @@ function startHomeAgentAvatarReading() {
   showHomeAgentAvatarSpeech(nextHomeAgentAvatarQuote(), HOME_AGENT_AVATAR_QUOTE_DURATION_MS);
   avatar.poseTimer = window.setTimeout(
     () => returnHomeAgentAvatarToIdle('read'),
-    HOME_AGENT_AVATAR_READING_DURATION_MS,
+    homeAgentAvatarModeDuration('read', HOME_AGENT_AVATAR_READING_DURATION_MS),
   );
 }
 
@@ -1815,6 +1878,21 @@ function handleHomeAgentAvatarInteraction(event) {
   startHomeAgentAvatarWave();
 }
 
+function handleHomeAgentAvatarWheel(event) {
+  if (
+    state.features.avatar === false
+    || state.currentView !== 'home'
+    || !Number.isFinite(event.deltaY)
+    || event.deltaY === 0
+  ) return;
+  event.preventDefault();
+  const direction = event.deltaY < 0 ? 1 : -1;
+  persistHomeAgentAvatarScale(
+    state.features.avatarScale + direction * HOME_AGENT_AVATAR_WHEEL_SCALE_STEP,
+  );
+  setHomeAgentAvatarControlsOpen(true);
+}
+
 function initHomeAgentAvatar() {
   Object.values(HOME_AGENT_AVATAR_POSE_SETS).flatMap(Object.values).forEach(source => {
     const image = new Image();
@@ -1838,7 +1916,13 @@ function initHomeAgentAvatar() {
   button.addEventListener('pointercancel', endHomeAgentAvatarDrag);
   button.addEventListener('lostpointercapture', endHomeAgentAvatarDrag);
   button.addEventListener('keydown', handleHomeAgentAvatarKeydown);
+  button.addEventListener('wheel', handleHomeAgentAvatarWheel, { passive: false });
   button.addEventListener('click', handleHomeAgentAvatarInteraction);
+  $('#home-agent-avatar-video')?.addEventListener('ended', () => {
+    if (state.homeAgentAvatar.mode === 'wave' || state.homeAgentAvatar.mode === 'read') {
+      returnHomeAgentAvatarToIdle(state.homeAgentAvatar.mode);
+    }
+  });
   $('#home-agent-avatar-actions')?.addEventListener('click', handleHomeAgentAvatarAction);
   $('#home-agent-avatar-speech-dismiss')?.addEventListener('click', () => {
     hideHomeAgentAvatarSpeech({ clearText: true });
@@ -5672,7 +5756,7 @@ function renderFeatureSettings() {
   if (avatarStatus) {
     const actionCount = Object.values(avatarActions).filter(Boolean).length;
     avatarStatus.textContent = avatarEnabled
-      ? `已启用 · ${avatarCharacter === 'female' ? '女生' : '男生'} · ${actionCount} 项快捷功能`
+      ? `已启用 · ${homeAgentAvatarCharacterLabel(avatarCharacter)} · ${actionCount} 项快捷功能`
       : '已停用，首页将隐藏';
   }
   if (avatarCharacterOptions) {
@@ -5744,7 +5828,7 @@ function updateAvatarCharacter(value) {
   if (!saveFeaturePreferences(nextFeatures)) return;
   syncHomeAgentAvatarSource();
   renderFeatureSettings();
-  toast(`已切换为${avatarCharacter === 'female' ? '女生' : '男生'}虚拟形象`, 'success');
+  toast(`已切换为${homeAgentAvatarCharacterLabel(avatarCharacter)}虚拟形象`, 'success');
 }
 
 function updateAvatarActionPreference(action, enabled) {
