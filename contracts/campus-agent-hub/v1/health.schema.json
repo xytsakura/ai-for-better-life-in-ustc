@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-for-better-life-in-ustc.local/contracts/campus-agent-hub/v1/health.schema.json",
+  "title": "Campus Agent Hub Health v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["status", "version", "contract_version", "capabilities"],
+  "properties": {
+    "status": { "enum": ["ok", "degraded"] },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "contract_version": { "const": "1.0" },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,63}$" }
+    },
+    "checked_at": { "type": "string", "format": "date-time" }
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-for-better-life-in-ustc.local/contracts/campus-agent-hub/v1/manifest.schema.json",
+  "title": "Campus Agent Hub Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "description",
+    "version",
+    "owner",
+    "category",
+    "tags",
+    "integration",
+    "capabilities",
+    "data_policy"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+    },
+    "owner": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "contact": { "type": "string", "format": "email", "maxLength": 254 },
+    "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "tags": {
+      "type": "array",
+      "maxItems": 12,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 32 }
+    },
+    "icon": { "type": "string", "format": "uri-reference", "maxLength": 2048 },
+    "integration": {
+      "$ref": "#/$defs/integration"
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9-]{1,63}$"
+      }
+    },
+    "data_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receives_user_identity",
+        "receives_files",
+        "stores_conversation"
+      ],
+      "properties": {
+        "receives_user_identity": { "type": "boolean" },
+        "receives_files": { "type": "boolean" },
+        "stores_conversation": { "type": "boolean" },
+        "privacy_url": { "type": "string", "format": "uri", "maxLength": 2048 }
+      }
+    }
+  },
+  "$defs": {
+    "integration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "launch_url"],
+          "properties": {
+            "mode": { "const": "link" },
+            "launch_url": { "type": "string", "format": "uri", "maxLength": 2048 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "protocol", "launch_url", "chat_endpoint", "health_endpoint"],
+          "properties": {
+            "mode": { "const": "connected" },
+            "protocol": { "enum": ["ag-ui", "simple-chat"] },
+            "launch_url": { "type": "string", "format": "uri", "maxLength": 2048 },
+            "chat_endpoint": { "type": "string", "format": "uri", "maxLength": 2048 },
+            "health_endpoint": { "type": "string", "format": "uri", "maxLength": 2048 },
+            "callback_urls": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": { "type": "string", "format": "uri", "maxLength": 2048 }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

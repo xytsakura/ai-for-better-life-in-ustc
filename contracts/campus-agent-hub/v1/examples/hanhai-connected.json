@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "id": "hanhai-course-agent",
+  "name": "瀚海行",
+  "description": "课程资料整理、知识库问答与期末复习助手",
+  "version": "0.8.0",
+  "owner": "AI for better life In ustc",
+  "category": "学习助手",
+  "tags": ["课程资料", "知识库", "期末复习"],
+  "integration": {
+    "mode": "connected",
+    "protocol": "ag-ui",
+    "launch_url": "http://127.0.0.1:8002/",
+    "chat_endpoint": "http://127.0.0.1:8002/api/hub/chat",
+    "health_endpoint": "http://127.0.0.1:8002/api/health",
+    "callback_urls": ["http://127.0.0.1:8002/api/hub/callback"]
+  },
+  "capabilities": ["streaming", "citations", "knowledge-base", "file-preview", "full-workspace"],
+  "data_policy": {
+    "receives_user_identity": true,
+    "receives_files": false,
+    "stores_conversation": true
+  }
+}

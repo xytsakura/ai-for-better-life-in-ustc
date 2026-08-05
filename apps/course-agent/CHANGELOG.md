@@ -2,6 +2,17 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-08-05：Campus Agent Hub 三服务闭环
+
+- 新增独立 Campus Agent Hub：实现版本化 Manifest、注册审核、暂停恢复与回滚、健康检查、审计日志、应用广场、统一聊天和开发者接入页面；Hub 使用自己的 SQLite 数据库，不导入瀚海行业务代码。
+- 冻结 `USTC-Agent-Hub Contract v1`：统一 Manifest、Health 和 `simple-chat` Schema；标准 Agent 使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput` 与 SSE 事件，轻量 Agent 通过通用适配器接入。
+- 瀚海行新增独立 Hub 适配端点：使用 EdDSA JWT、`kid`、JWKS 和请求 ID 校验 Gateway 调用；Featured 完整工作台通过 60 秒一次性授权码与 `client_secret_basic` 建立本地会话。
+- 新增独立校园助手 Demo Agent，证明第二个 Agent 只需注册 Manifest 与标准端点即可接入，Gateway 不增加 Agent 专属业务分支。
+- 新增 Docker Compose 演示编排：自动启动三项服务、注册并审核两个 Agent、生成仅存在于运行时卷的 Featured 凭据，并导入 25 份数学分析 B1 OCR 资料；模型凭据只从未跟踪的本地 `.env` 注入。
+- 修复 Hub 深层聊天地址刷新后脚本和样式从错误相对路径加载的问题，并修复 Featured 工作台在异步授权后被浏览器弹窗策略拦截的问题。
+- 安全审计后收紧默认边界：Hub 仅在显式 Demo 模式下接受演示身份头；第三方域名解析到私网地址时拒绝访问；两个 Agent 都校验 JWT scope，瀚海行 Hub 端点默认要求鉴权；Featured secret 改为权限收紧的运行时文件注入，不进入命令行或普通环境变量。
+- 自动化验证覆盖 Hub 后端 10 项、Hub 前端 8 项、瀚海行 Python 86 项、瀚海行 JavaScript 8 项、Demo Agent 6 项和 Contract 5 项；真实浏览器另外验证两个 Agent 对话、Featured 工作台授权、开发者表单及桌面/手机布局。
+
 ## 2026-08-05：PetPresence 小比熊虚拟形象
 
 - 从团队自有的 MIT 开源项目 `xytsakura/PetPresence-public` 引入经过公开资源审计的小比熊 Demo：六个透明 WebM 动作和一张播放失败海报均保留来源提交与许可证。

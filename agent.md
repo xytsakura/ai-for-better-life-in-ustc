@@ -20,7 +20,7 @@
 
 ## 当前产品基线
 
-当前实施依据是 2026 年 7 月 23 日更新后的 `项目产品文档.md`。产品仍由两部分组成，但当前交付优先聚焦第一部分：
+当前实施依据是 2026 年 8 月 5 日更新后的 `HUB_FRAMEWORK_SPEC.md` 和 Hub 顶层设计。产品由平台与标杆 Agent 两部分组成，当前比赛交付以平台闭环为主：
 
 1. **课程资料整理与复习 Agent**：把个人、共享和订阅第三方三类知识空间做成权限隔离、来源可追踪、可更新和可删除的课程知识库闭环。
 2. **插件化 Agent 接入平台**：用 Contract、Registry、Review、Gateway、Agent Portal 和统一交互容器接入独立校园 Agent。
@@ -33,8 +33,11 @@
 - Agent 之间相互独立，不互相发现、调用、协作或递归委派；
 - 课程资料 Agent 是首个第一方参考实现；
 - 另接一个独立进程的极简第三方 Agent，证明接入新 Agent 时 Gateway 业务路由代码修改为 0 行；
-- MVP 采用最小 `platform-chat-v1`，AG-UI 适配器和 MCP 模板只作为条件增强；
-- 数学分析 B1 Demo v0.1 已可运行，代码位于 `apps/course-agent`；完整插件平台仍是后续阶段。
+- Contract v1 锁定 `@ag-ui/core@0.0.57`；原生 Connected Agent 使用 AG-UI，轻量 Agent 可使用 `simple-chat` 通用适配器；
+- Campus Agent Hub、瀚海行与独立校园助手 Demo 已形成三服务闭环，代码分别位于 `apps/hub`、`apps/course-agent` 和 `apps/demo-agent`；
+- Hub 使用独立 `hub.sqlite3`，不 import 瀚海行业务代码，也不复用其数据库和 Session；
+- Featured 工作台使用 60 秒一次性授权码、`client_secret_basic` 和 `workspace:enter` EdDSA JWT；Gateway 调用使用 `chat:invoke`；
+- 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 两个 Agent 并幂等导入 25 份数学分析资料。
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
 - 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
 
@@ -64,15 +67,25 @@
 
 - Agent 内部可以使用任意框架，平台只依赖公开且版本化的接入契约。
 - Contract 至少覆盖 Manifest、请求、流式事件、错误、文件引用、认证声明、健康检查和兼容规则。
-- 只有 `accepted + enabled` 的 Agent 才能在 Portal 展示。
+- 只有 `active` 且存在活动版本的 Agent 才能在 Portal 展示。
 - Gateway 只做身份验证、Schema 校验、状态检查、文件鉴权、限流、超时、取消、事件转发和审计。
 - 第三方 endpoint、Agent 输出、网页和文件都按不可信输入处理。
 - 第三方 Agent 不得获得其他 Agent 的数据、状态或凭据。
 - 第三方 Agent 接入验收必须包含 Schema、连通性、SSRF、危险重定向、恶意响应、限流和超时测试。
+- 第三方外部 Endpoint 必须使用公网 HTTPS；第一方本地或内部 Endpoint 只允许管理员提交，并使用服务端精确 origin 白名单。
+- 公共 Registry 输出必须隐藏聊天、健康、回调 Endpoint 和私有治理元数据。
+- Hub JWT 固定使用 Ed25519/EdDSA、`kid` 和 JWKS；有效期不超过 120 秒，时钟偏差不超过 30 秒。
 
 ## 数据、安全与合规经验
 
 - 不在仓库中保存 API key、密码、Cookie、CSRF token、个人敏感信息或未脱敏数据。
+- Hub 的 Demo 身份模式默认关闭；`X-Hub-User` 只在显式启用 Demo 模式时生效，不能作为生产认证方案。
+- 容器存活检查使用无需身份的 `/healthz`，不能依赖 `/api/session` 等业务认证接口。
+- 外部 Endpoint 在注册和调用前都要解析 DNS，并拒绝任一私网、回环、链路本地、保留或未指定地址；生产部署还应通过出站代理或网络策略绑定允许的目的地址，闭合 DNS rebinding 的解析与连接时序风险。
+- Agent 必须校验 Hub JWT 的 issuer、audience、签名、`chat:invoke`/`workspace:enter` scope 和最长 120 秒有效期，不能只校验签名。
+- Featured Agent 的客户端密钥通过运行时只读 secret 文件注入，不写入命令行、普通环境变量、日志或仓库。
+- Agent 健康响应必须严格满足 Contract（包括 `status: "ok"` 与 `contract_version: "1.0"`），不能只以 HTTP 200 判定兼容。
+- 文档不得把尚未实现的能力写成现状；当前持久化限流仍是生产化待办。
 - 日志、事件和 Manifest 不记录明文密钥、完整私人文件正文或完整私人聊天正文。
 - 平台模型 provider 和 `base_url` 必须受控；不允许普通用户向任意 URL 发送私人资料。
 - `file_ref` 必须由服务端按当前用户和目标 Agent 重新鉴权。

@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "id": "campus-helper-demo",
+  "name": "校园助手 Demo",
+  "description": "用于演示从外链应用升级为标准接入 Agent 的独立服务",
+  "version": "1.0.0",
+  "owner": "Demo Team",
+  "category": "校园生活",
+  "tags": ["演示", "校园生活"],
+  "integration": {
+    "mode": "link",
+    "launch_url": "http://127.0.0.1:8101/"
+  },
+  "capabilities": ["external-workspace"],
+  "data_policy": {
+    "receives_user_identity": false,
+    "receives_files": false,
+    "stores_conversation": false
+  }
+}

@@ -4,13 +4,15 @@
 
 本项目参加中国科学技术大学“一〇七”杯算力与智能体开发大赛本科生组智能体赛道。当前方案先把“课程资料整理与复习 Agent”做深，再把它的接入方式沉淀为统一 Contract、Registry、Gateway 和 Agent Portal，让其他独立校园 Agent 能以插件形式接入同一平台。
 
-> 当前状态：课程 Agent `v0.8.0` 已可本地运行，包含数学分析 B1 资料、结构化引用分支、免费的订阅知识库广场，以及主问答和独立解释分支的真实流式输出。完整插件平台仍按后续阶段推进。
+> 当前状态：Campus Agent Hub、瀚海行 `v0.8.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、Registry、审核治理、Gateway、Agent Portal、统一聊天和 Featured 工作台授权；瀚海行保留数学分析 B1 知识库、引用、OCR 资料和完整工作台。
 
-> 新电脑部署：代码、前端、KaTeX、测试、Manifest 与课程 PDF 均已纳入仓库。队友或代码 Agent 请直接按照[课程复习 Agent 部署与审计指南](./docs/COURSE_AGENT_DEPLOYMENT.md)从零复现。
+> 新电脑部署：安装 Docker 后运行 `./deploy/run-demo.ps1`，即可构建三项服务、注册并审核两个 Agent、生成运行时凭据并导入 25 份数学分析资料。模型 API 只填写在本地 `.env`，不得提交到 Git。
+
+> 身份说明：当前 `demo-a`、`demo-b`、`demo-c` 和 `X-Hub-User` 只用于比赛演示与权限流程验收，不是生产登录方案。若部署到公开网络，必须先接入真实身份认证并移除浏览器端演示身份切换。
 
 ## 一句话定位
 
-一个有真实课程知识库能力的 Agent，加上一套能复用其接入方式的校园 Agent 插件平台。
+一个可注册、审核、展示和统一调用独立校园 Agent 的应用广场；瀚海行是首个 Featured 标杆 Agent。
 
 ## 当前产品方案
 
@@ -23,7 +25,7 @@
 
 - 用户先在 Agent Portal 查看已审核并启用的 Agent；
 - 用户主动进入某个 Agent 的详情页和统一交互容器；
-- Gateway 根据用户已选择的 `agent_id` 做确定性代理、鉴权、限流、超时和审计；
+- Gateway 根据用户已选择的 `agent_id` 做确定性代理、鉴权、超时、取消和审计；
 - 每个 Agent 独立运行，拥有自己的业务逻辑、知识库和运行边界；
 - 平台不设置 Main Agent，不自动进行语义路由，也不允许 Agent 之间相互调用。
 
@@ -81,11 +83,11 @@ flowchart LR
 | Contract | 定义 Manifest、交互事件、错误、文件引用、健康检查和版本规则 |
 | Registry | 保存 Agent 版本、分类、状态和审核记录 |
 | Review | 执行 Schema、连通性、协议与基础安全验收 |
-| Gateway | 按已选择的 `agent_id` 代理请求，并处理鉴权、限流、超时、取消和日志 |
+| Gateway | 按已选择的 `agent_id` 代理请求，并处理鉴权、超时、取消和日志 |
 | Agent Portal | 展示已审核并启用的 Agent，支持筛选和主动选择 |
 | 统一交互容器 | 提供消息、流式输出、文件、引用、状态、取消和错误展示 |
 
-MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事件，并保留普通 JSON 降级路径。AG-UI 适配器和 MCP 接入模板属于条件增强，不是首轮硬依赖。
+Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput` 与 SSE 事件。能力完整的 Agent 直接实现 AG-UI；简单 Agent 可实现 `simple-chat` JSON，由 Gateway 通用适配成 AG-UI。MCP 只用于 Agent 内部连接工具或知识源，不是 Hub 的必需协议；A2A 和跨 Agent 编排不在 v1 范围内。
 
 ## MVP 成功标准
 
@@ -100,6 +102,7 @@ MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事�
 - 平台具备版本化 Manifest、交互协议、注册审核和确定性 Gateway；
 - 一个独立进程的极简第三方 Agent 能按同一 Contract 接入并自动出现在门户；
 - 接入新 Agent 时 Gateway 业务路由代码修改为 0 行；
+- Featured Agent 通过 60 秒一次性授权码进入独立工作台，授权码不可重放；
 - 固定评测和安全测试能够复现结果。
 
 ## 当前不做
@@ -114,13 +117,16 @@ MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事�
 ## 文档导航
 
 - [项目产品文档](./项目产品文档.md)：当前产品定义、架构边界、MVP、评测、分工和风险，是现阶段实施依据。
+- [Hub 顶层设计](./docs/superpowers/specs/2026-08-05-campus-agent-hub-top-level-design.md)：当前实现的安全边界、身份协议与三种接入等级。
+- [USTC-Agent-Hub Contract v1](./contracts/campus-agent-hub/v1/README.md)：Manifest、Health、simple-chat Schema、示例和契约测试。
+- [一键演示部署](./deploy/README.md)：Hub、瀚海行、示例 Agent 的 Docker Compose 启动与运行时 seed。
 - [课程复习 Agent 部署与审计指南](./docs/COURSE_AGENT_DEPLOYMENT.md)：面向新电脑、队友和代码 Agent 的逐步安装、配置、资料导入、验收、Docker 与排障说明。
 - [订阅知识库广场设计](./docs/superpowers/specs/2026-08-04-subscription-library-marketplace-design.md)：投稿快照、审核状态机、权限矩阵、版本切换和 API 契约。
 - [统一 OCR 处理链路状态与后续待办](./docs/OCR_PIPELINE_TODO.md)：记录 DeepSeek-OCR-2 sidecar 接入、全量回填结果、运行方式和后续产品化任务。
 - [比赛要求](./比赛要求.md)：官方比赛信息的本地整理，最终以组委会最新通知为准。
 - [agent.md](./agent.md)：本工作目录的协作约定、已确认决策和安全经验。
 
-当前仓库已经交付数学分析 B1 Demo v0.1；启动、导入和测试命令见 [`apps/course-agent/README.md`](./apps/course-agent/README.md)。
+当前仓库已经交付 Hub 平台闭环与数学分析 B1 Demo；单独调试瀚海行时，启动、导入和测试命令见 [`apps/course-agent/README.md`](./apps/course-agent/README.md)。
 
 ## 方案版本与归档
 
@@ -164,13 +170,13 @@ MVP 使用最小自定义协议 `platform-chat-v1`，通过 SSE 传递流式事�
 
 ## 实施顺序
 
-1. 冻结三类知识空间、`AgentManifest`、`platform-chat-v1` 和错误码。
-2. 用一个课程跑通知识导入、权限、检索、引用和删除失效闭环。
-3. 建立 Registry、审核状态、Gateway、Portal 和统一交互容器。
-4. 接入课程 Agent 与一个极简第三方 Agent，验证 Gateway 业务代码零修改。
-5. 固化检索质量、权限隔离、协议兼容和恶意响应测试，再制作演示与答辩材料。
+1. 已完成：数学分析 B1 的知识导入、权限、检索、引用、OCR 和删除失效闭环。
+2. 已完成：Contract v1、Registry、审核治理、Gateway、Portal 和统一聊天容器。
+3. 已完成：瀚海行原生 AG-UI 接入与独立 `simple-chat` Agent 接入，Gateway 无 Agent 业务分支。
+4. 已完成：Featured 工作台一次性授权码、EdDSA JWT/JWKS 和运行时凭据注入。
+5. 当前重点：固化部署、浏览器验收、契约/安全回归和比赛演示脚本。
 
-首个演示课程已冻结为数学分析 B1，共享模型采用邀请制学习小组；公开资料通过已实现的订阅知识库广场发布。外部网站自动抓取型来源、完整插件协议和比赛部署条件仍在进入对应阶段前由团队冻结。
+首个演示课程已冻结为数学分析 B1，共享模型采用邀请制学习小组；公开资料通过已实现的订阅知识库广场发布。评课社区分析仍作为后续 Agent 或 Link App 预留，不进入本轮核心闭环。
 
 ## 轻量协作方式
 

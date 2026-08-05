@@ -1,0 +1,110 @@
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: apps/hub/Dockerfile
+    environment:
+      HUB_DEMO_MODE: ${HUB_DEMO_MODE:-true}
+      HUB_HOST: 0.0.0.0
+      HUB_PORT: 8100
+      HUB_DATABASE_PATH: /app/var/hub/hub.sqlite3
+      HUB_PUBLIC_BASE_URL: http://127.0.0.1:${HUB_PUBLIC_PORT:-8100}
+      HUB_INTERNAL_URL_ALLOWLIST: >-
+        http://course-agent:8000,
+        http://demo-agent:8101,
+        http://127.0.0.1:${COURSE_AGENT_PUBLIC_PORT:-8002},
+        http://127.0.0.1:${DEMO_AGENT_PUBLIC_PORT:-8101}
+      HUB_CORS_ALLOW_ORIGINS: >-
+        http://127.0.0.1:${HUB_PUBLIC_PORT:-8100},
+        http://localhost:${HUB_PUBLIC_PORT:-8100}
+    ports:
+      - "${HUB_PUBLIC_PORT:-8100}:8100"
+    volumes:
+      - hub-data:/app/var/hub
+
+  hub-bootstrap:
+    image: python:3.12-slim
+    working_dir: /workspace
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      HUB_URL: http://hub:8100
+      HUB_ADMIN_USER: demo-a
+      HUB_PUBLIC_URL: http://127.0.0.1:${HUB_PUBLIC_PORT:-8100}
+      COURSE_AGENT_PUBLIC_URL: http://127.0.0.1:${COURSE_AGENT_PUBLIC_PORT:-8002}
+      COURSE_AGENT_INTERNAL_URL: http://course-agent:8000
+      DEMO_AGENT_PUBLIC_URL: http://127.0.0.1:${DEMO_AGENT_PUBLIC_PORT:-8101}
+      DEMO_AGENT_INTERNAL_URL: http://demo-agent:8101
+      COURSE_AGENT_SECRET_PATH: /run/hub-secrets/course-agent.secret
+    volumes:
+      - ../contracts:/workspace/contracts:ro
+      - ./bootstrap_demo.py:/workspace/deploy/bootstrap_demo.py:ro
+      - hub-secrets:/run/hub-secrets
+    command: ["python", "/workspace/deploy/bootstrap_demo.py"]
+    restart: "no"
+
+  course-agent:
+    build:
+      context: ..
+      dockerfile: apps/course-agent/Dockerfile
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      COURSE_AGENT_DEMO_MODE: "true"
+      COURSE_AGENT_SESSION_SECRET: local-compose-course-session-change-before-shared-deployment
+      COURSE_AGENT_RUNTIME_DIR: /app/var/course-agent
+      COURSE_AGENT_ADMIN_USER_IDS: demo-a
+      COURSE_AGENT_LLM_API_KEY: ${COURSE_AGENT_LLM_API_KEY:-}
+      COURSE_AGENT_LLM_BASE_URL: ${COURSE_AGENT_LLM_BASE_URL:-}
+      COURSE_AGENT_LLM_MODEL: ${COURSE_AGENT_LLM_MODEL:-gpt-5.6-sol}
+      COURSE_AGENT_BRANCH_LLM_MODEL: ${COURSE_AGENT_BRANCH_LLM_MODEL:-gpt-5.6-sol}
+      COURSE_AGENT_HUB_AGENT_ID: hanhai-course-agent
+      COURSE_AGENT_HUB_CONTRACT_VERSION: "1.0"
+      COURSE_AGENT_HUB_ISSUER: campus-agent-hub
+      COURSE_AGENT_HUB_JWKS_URL: http://hub:8100/.well-known/jwks.json
+      COURSE_AGENT_HUB_AUTH_REQUIRED: "true"
+      COURSE_AGENT_HUB_TOKEN_ENDPOINT: http://hub:8100/oauth/token
+      COURSE_AGENT_HUB_CLIENT_ID: hanhai-course-agent
+      COURSE_AGENT_HUB_CLIENT_SECRET_FILE: /run/hub-secrets/course-agent.secret
+      COURSE_AGENT_HUB_WORKSPACE_REDIRECT_URI: http://127.0.0.1:${COURSE_AGENT_PUBLIC_PORT:-8002}/api/hub/callback
+      COURSE_AGENT_HUB_RETURN_URL: http://127.0.0.1:${HUB_PUBLIC_PORT:-8100}/
+      COURSE_AGENT_HUB_USER_MAP: demo-a:demo-a,demo-b:demo-b,demo-c:demo-c
+    ports:
+      - "${COURSE_AGENT_PUBLIC_PORT:-8002}:8000"
+    volumes:
+      - course-agent-data:/app/var/course-agent
+      - hub-secrets:/run/hub-secrets:ro
+    command:
+      - /bin/sh
+      - -c
+      - |
+        course-agent init-db
+        course-agent import-manifest /app/repository/data/manifests/math-analysis-b1.yaml
+        until [ -f /run/hub-secrets/course-agent.secret ]; do
+          sleep 1
+        done
+        exec uvicorn course_agent.main:app --host 0.0.0.0 --port 8000
+
+  demo-agent:
+    build:
+      context: ../apps/demo-agent
+      dockerfile: Dockerfile
+    depends_on:
+      hub:
+        condition: service_healthy
+    environment:
+      DEMO_AGENT_HOST: 0.0.0.0
+      DEMO_AGENT_PORT: 8101
+      DEMO_AGENT_REQUIRE_HUB_TOKEN: "1"
+      DEMO_AGENT_HUB_JWKS_URL: http://hub:8100/.well-known/jwks.json
+      DEMO_AGENT_HUB_AUDIENCE: campus-helper-demo
+      DEMO_AGENT_HUB_ISSUER: campus-agent-hub
+    ports:
+      - "${DEMO_AGENT_PUBLIC_PORT:-8101}:8101"
+
+volumes:
+  hub-data:
+  hub-secrets:
+  course-agent-data:

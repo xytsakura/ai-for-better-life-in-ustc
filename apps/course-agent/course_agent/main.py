@@ -15,7 +15,7 @@ import fitz
 import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.middleware.sessions import SessionMiddleware
@@ -37,6 +37,17 @@ from .ingestion import (
     write_prepared_pdf_ingestion,
 )
 from .llm import LLMAdapter, LLMResult, LLMStreamComplete, LLMStreamDelta, LLMStreamError
+from .hub import (
+    HubJwtVerifier,
+    HubWorkspaceExchangeRequest,
+    RunAgentInput,
+    VerifiedHubIdentity,
+    agui_event,
+    course_query_options,
+    exchange_workspace_code,
+    extract_question_and_history,
+    new_message_id,
+)
 from .model_catalog import (
     ModelCatalog,
     ModelCatalogError,
@@ -610,6 +621,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
+    app.state.hub_jwt_verifier = HubJwtVerifier(settings)
     page_image_cache: OrderedDict[tuple[str, int, int, int], bytes] = OrderedDict()
     page_image_cache_lock = Lock()
     page_image_render_slots = BoundedSemaphore(value=2)
@@ -1141,8 +1153,30 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
         return {
             **healthcheck(settings),
+            "status": "ok",
             "llm_configured": settings.llm_configured,
             "version": __version__,
+            "contract_version": settings.hub_contract_version,
+            "capabilities": [
+                "streaming",
+                "citations",
+                "knowledge-base",
+                "file-preview",
+                "full-workspace",
+            ],
+            "hub": {
+                "agent_id": settings.hub_agent_id,
+                "protocol": "ag-ui",
+                "chat_path": "/api/hub/chat",
+                "workspace_callback_path": "/api/hub/callback",
+                "auth": {
+                    "type": "jwt",
+                    "alg": "EdDSA",
+                    "issuer": settings.hub_issuer,
+                    "audience": settings.hub_agent_id,
+                    "required": settings.hub_auth_required,
+                },
+            },
         }
 
     @app.get("/api/users")
@@ -2251,6 +2285,208 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             close = getattr(stream, "aclose", None)
             if close:
                 await close()
+
+    async def _hub_identity(request: Request, required_scope: str) -> VerifiedHubIdentity:
+        verified = await app.state.hub_jwt_verifier.verify_request(
+            request,
+            required_scope=required_scope,
+        )
+        if verified is not None:
+            return verified
+        user_id = str(request.session.get("user_id") or "demo-c")
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, display_name FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            user_id = "demo-c"
+            display_name = "Hub Demo User"
+        else:
+            display_name = str(row["display_name"])
+        return VerifiedHubIdentity(
+            hub_sub=user_id,
+            course_user_id=user_id,
+            display_name=display_name,
+            scopes={required_scope},
+            jti="local-demo",
+            claims={},
+        )
+
+    def _hub_query_request(payload: RunAgentInput) -> tuple[QueryRequest, str]:
+        question, history = extract_question_and_history(payload)
+        options = course_query_options(payload)
+        query_payload = QueryRequest(
+            question=question,
+            messages=[ChatMessage(**message) for message in history],
+            mode=options["mode"],
+            scope=options["scope"],
+            space_id=options["space_id"],
+            document_ids=options["document_ids"],
+            top_k=options["top_k"],
+            model=options["model"],
+            reasoning_effort=options["reasoning_effort"],
+        )
+        return query_payload, question
+
+    async def _hub_agui_events(
+        request: Request,
+        payload: RunAgentInput,
+        prepared: PreparedQuery,
+    ) -> AsyncIterator[bytes]:
+        message_id = new_message_id()
+        yield agui_event(
+            "RUN_STARTED",
+            threadId=payload.threadId,
+            runId=payload.runId,
+            parentRunId=payload.parentRunId,
+        )
+        yield agui_event(
+            "TEXT_MESSAGE_START",
+            messageId=message_id,
+            role="assistant",
+        )
+        stream = (
+            app.state.llm.stream_direct(
+                prepared.question,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+            if prepared.mode == "direct"
+            else app.state.llm.stream(
+                prepared.question,
+                prepared.retrieval_results,
+                history=prepared.history,
+                system=prepared.system,
+                preference_context=prepared.preference_context,
+                reference_context=prepared.reference_context,
+                model=prepared.selected_model,
+                reasoning_effort=prepared.selected_reasoning,
+            )
+        )
+        terminal_sent = False
+        try:
+            async for event in stream:
+                if await request.is_disconnected():
+                    break
+                if isinstance(event, LLMStreamDelta):
+                    yield agui_event(
+                        "TEXT_MESSAGE_CONTENT",
+                        messageId=message_id,
+                        delta=event.text,
+                    )
+                    continue
+                if isinstance(event, LLMStreamComplete):
+                    yield agui_event("TEXT_MESSAGE_END", messageId=message_id)
+                    yield agui_event(
+                        "RUN_FINISHED",
+                        threadId=payload.threadId,
+                        runId=payload.runId,
+                        result=_query_result_payload(prepared, event.result),
+                    )
+                    terminal_sent = True
+                    break
+                if isinstance(event, LLMStreamError):
+                    error = _stream_error_payload(event)
+                    yield agui_event("TEXT_MESSAGE_END", messageId=message_id)
+                    yield agui_event(
+                        "RUN_ERROR",
+                        message=error["message"],
+                        code=error["code"],
+                        rawEvent=error,
+                    )
+                    terminal_sent = True
+                    break
+        finally:
+            close = getattr(stream, "aclose", None)
+            if close:
+                await close()
+        if not terminal_sent and not await request.is_disconnected():
+            yield agui_event(
+                "RUN_ERROR",
+                message="Agent stream ended before a terminal event.",
+                code="protocol_error",
+                rawEvent={
+                    "code": "protocol_error",
+                    "message": "Agent stream ended before a terminal event.",
+                    "retryable": True,
+                    "partial": True,
+                },
+            )
+
+    @app.post("/api/hub/chat")
+    async def hub_chat(payload: RunAgentInput, request: Request) -> StreamingResponse:
+        identity = await _hub_identity(request, "chat:invoke")
+        query_payload, _question = _hub_query_request(payload)
+        prepared = prepare_query(query_payload, identity.course_user_id)
+        return StreamingResponse(
+            _hub_agui_events(request, payload, prepared),
+            media_type="text/event-stream; charset=utf-8",
+            headers=_sse_headers(),
+        )
+
+    @app.post("/api/hub/workspace/exchange")
+    async def hub_workspace_exchange(
+        payload: HubWorkspaceExchangeRequest,
+        request: Request,
+    ) -> dict:
+        token_response = await exchange_workspace_code(settings, payload)
+        identity = await app.state.hub_jwt_verifier.verify_token(
+            token_response["access_token"],
+            required_scope="workspace:enter",
+        )
+        request.session["user_id"] = identity.course_user_id
+        request.session["hub_sub"] = identity.hub_sub
+        with get_db() as conn:
+            row = conn.execute(
+                "SELECT id, display_name, is_demo FROM users WHERE id = ?",
+                (identity.course_user_id,),
+            ).fetchone()
+        return {
+            "user": dict(row) if row else {"id": identity.course_user_id, "display_name": identity.display_name},
+            "hub": {
+                "sub": identity.hub_sub,
+                "mapped_user_id": identity.course_user_id,
+                "return_url": settings.hub_return_url,
+            },
+        }
+
+    @app.get("/api/hub/callback")
+    async def hub_workspace_callback(
+        code: str,
+        state: str,
+        request: Request,
+        redirect_uri: str | None = None,
+    ) -> RedirectResponse:
+        payload = HubWorkspaceExchangeRequest(
+            code=code,
+            state=state,
+            redirect_uri=redirect_uri,
+        )
+        token_response = await exchange_workspace_code(settings, payload)
+        identity = await app.state.hub_jwt_verifier.verify_token(
+            token_response["access_token"],
+            required_scope="workspace:enter",
+        )
+        request.session["user_id"] = identity.course_user_id
+        request.session["hub_sub"] = identity.hub_sub
+        return RedirectResponse(url="/?from=hub")
+
+    @app.get("/api/hub/context")
+    def hub_context(request: Request) -> dict:
+        user_id = request.session.get("user_id")
+        mapped_from = request.session.get("hub_sub")
+        return {
+            "agent_id": settings.hub_agent_id,
+            "contract_version": settings.hub_contract_version,
+            "return_url": settings.hub_return_url,
+            "user_id": user_id,
+            "hub_sub": mapped_from,
+        }
 
     @app.post("/api/query")
     def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:

@@ -26,6 +26,21 @@ def _csv_set(value: str | None) -> set[str]:
     return {item.strip() for item in value.split(",") if item.strip()}
 
 
+def _csv_mapping(value: str | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not value:
+        return result
+    for item in value.split(","):
+        if ":" not in item:
+            continue
+        source, target = item.split(":", 1)
+        source = source.strip()
+        target = target.strip()
+        if source and target:
+            result[source] = target
+    return result
+
+
 def _runtime_dir() -> Path:
     configured = os.getenv("COURSE_AGENT_RUNTIME_DIR")
     if not configured:
@@ -34,6 +49,22 @@ def _runtime_dir() -> Path:
     if not path.is_absolute():
         path = APP_DIR / path
     return path.resolve()
+
+
+def _secret_from_env_or_file(value_name: str, file_name: str) -> str:
+    direct = os.getenv(value_name, "")
+    if direct:
+        return direct
+    configured_path = os.getenv(file_name, "")
+    if not configured_path:
+        return ""
+    path = Path(configured_path)
+    if not path.is_absolute():
+        path = APP_DIR / path
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 @dataclass
@@ -57,6 +88,27 @@ class Settings:
     llm_allow_local_base_urls: bool = _as_bool(
         os.getenv("COURSE_AGENT_ALLOW_LOCAL_LLM_BASE_URLS"), False
     )
+    hub_agent_id: str = os.getenv("COURSE_AGENT_HUB_AGENT_ID", "hanhai-course-agent")
+    hub_contract_version: str = os.getenv("COURSE_AGENT_HUB_CONTRACT_VERSION", "1.0")
+    hub_issuer: str = os.getenv("COURSE_AGENT_HUB_ISSUER", "campus-agent-hub")
+    hub_jwks_url: str = os.getenv(
+        "COURSE_AGENT_HUB_JWKS_URL",
+        "http://127.0.0.1:8100/.well-known/jwks.json",
+    )
+    hub_jwks_json: str = os.getenv("COURSE_AGENT_HUB_JWKS_JSON", "")
+    hub_auth_required: bool = _as_bool(os.getenv("COURSE_AGENT_HUB_AUTH_REQUIRED"), True)
+    hub_token_endpoint: str = os.getenv("COURSE_AGENT_HUB_TOKEN_ENDPOINT", "")
+    hub_client_id: str = os.getenv("COURSE_AGENT_HUB_CLIENT_ID", "hanhai-course-agent")
+    hub_client_secret: str = _secret_from_env_or_file(
+        "COURSE_AGENT_HUB_CLIENT_SECRET",
+        "COURSE_AGENT_HUB_CLIENT_SECRET_FILE",
+    )
+    hub_workspace_redirect_uri: str = os.getenv(
+        "COURSE_AGENT_HUB_WORKSPACE_REDIRECT_URI",
+        "http://127.0.0.1:8002/api/hub/callback",
+    )
+    hub_return_url: str = os.getenv("COURSE_AGENT_HUB_RETURN_URL", "http://127.0.0.1:8100/")
+    hub_user_mapping: dict[str, str] | None = None
     llm_config_generation: int = 0
     max_upload_bytes: int = 50 * 1024 * 1024
 
@@ -79,6 +131,8 @@ class Settings:
             if not configured and self.demo_mode:
                 configured = {"demo-a"}
             self.admin_user_ids = configured
+        if self.hub_user_mapping is None:
+            self.hub_user_mapping = _csv_mapping(os.getenv("COURSE_AGENT_HUB_USER_MAP"))
 
     def to_safe_dict(self) -> dict[str, Any]:
         """Return settings suitable for the frontend.

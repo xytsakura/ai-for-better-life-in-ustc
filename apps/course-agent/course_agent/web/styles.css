@@ -412,6 +412,21 @@ body.resizing * {
   border-top: 1px solid var(--border-1);
 }
 
+.hub-return-link {
+  display: block;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  color: var(--accent);
+  font-size: 0.78rem;
+  text-align: center;
+}
+.hub-return-link:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .user-card {
   width: 100%;
   display: flex;

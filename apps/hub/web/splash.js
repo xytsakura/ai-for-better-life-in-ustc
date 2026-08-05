@@ -2,16 +2,10 @@
  * Splash Screen — AI for better Life 启动动画
  * 
  * 控制全屏启动动画的时序，页面加载时播放，
- * 通过 sessionStorage 避免 SPA 路由切换时重复播放。
+ * SPA 路由不会重新执行本脚本；整页刷新时重新播放。
  */
 
 (function () {
-  const STORAGE_KEY = 'hub_splash_shown';
-
-  // SPA 内部路由切换不重复播放；刷新页面重新播放
-  if (sessionStorage.getItem(STORAGE_KEY)) return;
-  sessionStorage.setItem(STORAGE_KEY, '1');
-
   // 检查 DOM 中是否存在 splash 元素
   const splash = document.querySelector('.splash');
   if (!splash) return;
