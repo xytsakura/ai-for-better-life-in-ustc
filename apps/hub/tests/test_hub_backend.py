@@ -504,6 +504,7 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert 'href="./styles.css?' not in deep_link.text
     assert 'src="./' not in deep_link.text
     assert client.get("/app.js").status_code == 200
+    assert client.get("/starfield.js").status_code == 200
     assert client.get("/assets/ustc-emblem.jpg").status_code == 200
 
 

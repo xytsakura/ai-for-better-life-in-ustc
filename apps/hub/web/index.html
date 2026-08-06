@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,7 +8,7 @@
       name="description"
       content="面向校园场景的 Agent 应用广场、统一聊天、开发者接入和管理审核工作台。"
     />
-    <link rel="stylesheet" href="/styles.css?v=20260806-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260806-3" />
   </head>
   <body>
     <div class="splash" aria-hidden="true">
@@ -23,7 +23,7 @@
     <div id="app" class="hub-shell" data-route="portal">
       <aside class="hub-sidebar" aria-label="Hub 导航">
         <a class="brand" href="/hub" data-link>
-          <span class="brand__mark">科</span>
+          <span class="brand__mark"><img src="/assets/ustc-emblem.jpg" alt="" /></span>
           <span>
             <span class="brand__title">AI for better Life</span>
             <span class="brand__subtitle">Campus Agent Hub</span>
@@ -31,15 +31,21 @@
         </a>
 
         <nav class="hub-nav">
-          <a href="/hub" data-link data-nav="portal">Agent 广场</a>
-          <a href="/hub/recent" data-link data-nav="recent">我的最近使用</a>
-          <a href="/hub/submit" data-link data-nav="submit">开发者接入</a>
-          <a href="/hub/admin" data-link data-nav="admin" data-admin-only>管理审核</a>
+          <a href="/hub" data-link data-nav="portal"><span aria-hidden="true">✦</span>Agent 广场</a>
+          <a href="/hub/recent" data-link data-nav="recent"><span aria-hidden="true">◷</span>最近使用</a>
+          <a href="/hub/submit" data-link data-nav="submit"><span aria-hidden="true">＋</span>开发者接入</a>
+          <a href="/hub/admin" data-link data-nav="admin" data-admin-only><span aria-hidden="true">◇</span>管理审核</a>
         </nav>
+
+        <section class="hub-recents" aria-label="最近使用">
+          <span class="hub-recents__label">最近使用</span>
+          <a href="/hub/recent" data-link>数学分析期末复习</a>
+          <a href="/hub/recent" data-link>课程知识库整理</a>
+        </section>
 
         <div class="hub-sidebar__foot">
           <button id="themeToggle" class="ghost-button" type="button">切换主题</button>
-          <p>浏览器不会把任意目标 URL 传给 Gateway；所有调用由服务端 Registry 决定。</p>
+          <span>Campus Agent Hub · Demo</span>
         </div>
       </aside>
 
@@ -47,7 +53,7 @@
         <header class="hub-topbar">
           <button class="mobile-nav-toggle" type="button" aria-label="打开导航">☰</button>
           <label class="hub-search" aria-label="搜索 Agent">
-            <span>⌕</span>
+            <span aria-hidden="true">⌕</span>
             <input id="globalSearch" type="search" placeholder="搜索 Agent、能力或维护者" autocomplete="off" />
           </label>
           <label class="identity-switcher">
@@ -70,6 +76,6 @@
     </template>
 
     <script src="/splash.js?v=20260805-3" defer></script>
-    <script type="module" src="/app.js?v=20260805-4"></script>
+    <script type="module" src="/app.js?v=20260806-5"></script>
   </body>
 </html>

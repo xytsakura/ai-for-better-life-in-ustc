@@ -15,6 +15,7 @@ import {
   safeUrl,
   validateManifest,
 } from './hub-core.js';
+import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
   theme: 'hub_theme',
@@ -45,6 +46,7 @@ const identitySelect = document.querySelector('#identitySelect');
 const userAvatar = document.querySelector('#userAvatar');
 const themeToggle = document.querySelector('#themeToggle');
 const mobileNavToggle = document.querySelector('.mobile-nav-toggle');
+let portalStarfield = null;
 
 init();
 
@@ -73,11 +75,12 @@ function bindGlobalEvents() {
 
   searchInput?.addEventListener('input', () => {
     state.query = searchInput.value;
-    if (state.route.name !== 'portal' && state.route.name !== 'recent') {
+    if (state.route.name !== 'portal') {
       navigate('/hub');
       return;
     }
-    renderPortal();
+    syncSearchInputs(searchInput);
+    updateAgentGrid();
   });
 
   identitySelect?.addEventListener('change', () => {
@@ -90,24 +93,20 @@ function bindGlobalEvents() {
   });
 
   themeToggle?.addEventListener('click', () => {
-    const current = document.documentElement.dataset.theme || 'system';
+    const current = document.documentElement.dataset.theme || 'dark';
     const next = current === 'dark' ? 'light' : current === 'light' ? 'system' : 'dark';
-    if (next === 'system') {
-      localStorage.removeItem(STORAGE.theme);
-      delete document.documentElement.dataset.theme;
-    } else {
-      localStorage.setItem(STORAGE.theme, next);
-      document.documentElement.dataset.theme = next;
-    }
+    localStorage.setItem(STORAGE.theme, next);
+    document.documentElement.dataset.theme = next;
     themeToggle.textContent = next === 'dark' ? '深色模式' : next === 'light' ? '浅色模式' : '跟随系统';
+    if (state.route.name === 'portal') mountPortalEffects();
   });
 
   mobileNavToggle?.addEventListener('click', () => shell.classList.toggle('nav-open'));
 }
 
 function applyTheme() {
-  const theme = localStorage.getItem(STORAGE.theme);
-  if (theme) document.documentElement.dataset.theme = theme;
+  const theme = localStorage.getItem(STORAGE.theme) || 'dark';
+  document.documentElement.dataset.theme = theme;
   if (themeToggle) {
     themeToggle.textContent = theme === 'dark' ? '深色模式' : theme === 'light' ? '浅色模式' : '跟随系统';
   }
@@ -153,6 +152,7 @@ function parseRoute(pathname) {
 }
 
 function render() {
+  destroyPortalEffects();
   syncNav();
   if (!view) return;
   view.focus({ preventScroll: true });
@@ -179,13 +179,40 @@ function syncNav() {
   document.body.dataset.route = state.route.name;
 }
 
+function syncSearchInputs(source) {
+  [searchInput, document.querySelector('#portalSearch')].forEach((input) => {
+    if (input && input !== source && input.value !== state.query) input.value = state.query;
+  });
+}
+
+function isDarkSurface() {
+  const theme = document.documentElement.dataset.theme || 'dark';
+  if (theme === 'light') return false;
+  if (theme === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return true;
+}
+
+function mountPortalEffects() {
+  destroyPortalEffects();
+  const container = document.querySelector('[data-starfield]');
+  if (!container || !isDarkSurface()) return;
+  portalStarfield = mountStarfield(container, { seed: 20260806, density: 0.00042 });
+}
+
+function destroyPortalEffects() {
+  portalStarfield?.destroy?.();
+  portalStarfield = null;
+}
+
 async function renderPortal() {
   state.loading = true;
   view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', true);
+  mountPortalEffects();
   try {
     state.agents = await loadAgents();
   } catch (error) {
     view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
+    mountPortalEffects();
     document.querySelector('#agentGrid').innerHTML = errorState('Agent 列表加载失败', readableError(error), '重试');
     document.querySelector('[data-retry]')?.addEventListener('click', renderPortal);
     return;
@@ -193,6 +220,7 @@ async function renderPortal() {
     state.loading = false;
   }
   view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
+  mountPortalEffects();
   bindFilters();
   updateAgentGrid();
 }
@@ -229,38 +257,51 @@ function renderPortalShell(title, subtitle, loading) {
     return [...normalized.tags, ...normalized.capabilities].slice(0, 12);
   })).slice(0, 18)];
   return `
-    <section class="hero">
-      <div>
-        <p class="eyebrow">CAMPUS AGENT HUB</p>
-        <h1>${escapeHtml(title)}</h1>
-        <p class="lead">${escapeHtml(subtitle)} Link App 负责外部打开，Connected Agent 使用 Hub 统一聊天，Featured Agent 才显示独立完整工作台入口。</p>
-      </div>
-      <div class="stats">
-        <div class="stat"><strong>${agents.length}</strong><span>已展示 Agent</span></div>
-        <div class="stat"><strong>${agents.filter((a) => normalizeAccessLevel(a) !== 'link').length}</strong><span>标准聊天接入</span></div>
-        <div class="stat"><strong>${agents.filter((a) => normalizeAccessLevel(a) === 'featured').length}</strong><span>Featured</span></div>
-      </div>
-    </section>
-
-    <section class="filter-panel" aria-label="Agent 筛选">
-      <div class="hub-tabs" role="tablist" aria-label="分类">
-        ${categories.map((category) => `<button class="tab" type="button" data-category="${escapeAttr(category)}" aria-selected="${category === state.category}">${escapeHtml(category)}</button>`).join('')}
-      </div>
-      <div class="hub-filters" aria-label="接入等级与能力">
-        ${['全部', ACCESS_LEVELS.link.label, ACCESS_LEVELS.connected.label, ACCESS_LEVELS.featured.label].map((level) => `<button class="chip" type="button" data-level="${escapeAttr(level)}" aria-pressed="${level === state.level}">${escapeHtml(level)}</button>`).join('')}
-      </div>
-      <div class="hub-filters" aria-label="标签">
-        ${chips.map((chip) => `<button class="chip" type="button" data-chip="${escapeAttr(chip)}" aria-pressed="${chip === state.chip}">${escapeHtml(chip)}</button>`).join('')}
+    <section class="portal-stage" data-starfield>
+      <div class="portal-stage__content">
+        <p class="portal-kicker">AI FOR BETTER LIFE · USTC</p>
+        <h1>今天，想解决什么校园问题？</h1>
+        <p>从一个问题开始，由你选择最合适的专业 Agent。</p>
+        <label class="portal-search" aria-label="搜索校园 Agent">
+          <span class="portal-search__plus" aria-hidden="true">＋</span>
+          <input id="portalSearch" type="search" placeholder="搜索 Agent、课程或校园服务" value="${escapeAttr(state.query)}" autocomplete="off" />
+          <span class="portal-search__meta">校园 Agent</span>
+          <span class="portal-search__send" aria-hidden="true">↑</span>
+        </label>
       </div>
     </section>
 
-    <section id="agentGrid" class="hub-grid" aria-live="polite">
-      ${loading ? document.querySelector('#skeletonCards')?.innerHTML || '' : ''}
+    <section class="portal-directory" aria-label="${escapeAttr(title)}">
+      <header class="portal-directory__head">
+        <div><p class="eyebrow">CAMPUS AGENTS</p><h2>为你推荐</h2></div>
+        <span>${agents.length ? `${agents.length} 个 Agent 已通过平台验收` : escapeHtml(subtitle)}</span>
+      </header>
+      <details class="filter-panel" aria-label="Agent 筛选">
+        <summary>筛选 Agent</summary>
+        <div class="hub-tabs" role="tablist" aria-label="分类">
+          ${categories.map((category) => `<button class="tab" type="button" data-category="${escapeAttr(category)}" aria-selected="${category === state.category}">${escapeHtml(category)}</button>`).join('')}
+        </div>
+        <div class="hub-filters" aria-label="接入等级与能力">
+          ${['全部', ACCESS_LEVELS.link.label, ACCESS_LEVELS.connected.label, ACCESS_LEVELS.featured.label].map((level) => `<button class="chip" type="button" data-level="${escapeAttr(level)}" aria-pressed="${level === state.level}">${escapeHtml(level)}</button>`).join('')}
+        </div>
+        <div class="hub-filters" aria-label="标签">
+          ${chips.map((chip) => `<button class="chip" type="button" data-chip="${escapeAttr(chip)}" aria-pressed="${chip === state.chip}">${escapeHtml(chip)}</button>`).join('')}
+        </div>
+      </details>
+      <section id="agentGrid" class="hub-grid" aria-live="polite">
+        ${loading ? document.querySelector('#skeletonCards')?.innerHTML || '' : ''}
+      </section>
     </section>
   `;
 }
 
 function bindFilters() {
+  const portalSearch = document.querySelector('#portalSearch');
+  portalSearch?.addEventListener('input', () => {
+    state.query = portalSearch.value;
+    syncSearchInputs(portalSearch);
+    updateAgentGrid();
+  });
   document.querySelectorAll('[data-category]').forEach((button) => {
     button.addEventListener('click', () => {
       state.category = button.dataset.category;
@@ -313,7 +354,7 @@ function renderAgentCard(raw) {
   const meta = accessMeta(agent);
   const primaryHref = getAgentPrimaryHref(agent);
   return `
-    <article class="hub-card" data-id="${escapeAttr(agent.id)}" tabindex="0" aria-label="${escapeAttr(agent.name)}">
+    <article class="hub-card hub-card--${escapeAttr(normalizeAccessLevel(agent))}" data-id="${escapeAttr(agent.id)}" tabindex="0" aria-label="${escapeAttr(agent.name)}">
       <div class="hub-card__head">
         ${renderAgentIcon(agent)}
         <div class="hub-card__titleblock">
@@ -328,7 +369,7 @@ function renderAgentCard(raw) {
         ${agent.capabilities.length > 3 ? `<span class="tag">+${agent.capabilities.length - 3}</span>` : ''}
       </div>
       <div class="hub-card__foot">
-        <span>🔥 ${formatUsage(agent.usage_count)} 次使用</span>
+        <span>${formatUsage(agent.usage_count)} 次使用</span>
         <span>${healthBadge(agent.health)} <span class="tag">v${escapeHtml(agent.version)}</span></span>
       </div>
       <div class="action-row" style="margin-top:14px">

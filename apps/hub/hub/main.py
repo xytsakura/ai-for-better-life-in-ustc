@@ -551,7 +551,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
 
     @app.get("/{filename}", include_in_schema=False)
     def hub_static_file(filename: str) -> FileResponse:
-        if filename not in {"app.js", "hub-core.js", "splash.js", "styles.css"}:
+        if filename not in {"app.js", "hub-core.js", "splash.js", "starfield.js", "styles.css"}:
             raise HTTPException(status.HTTP_404_NOT_FOUND)
         return FileResponse(web_root / filename)
 
