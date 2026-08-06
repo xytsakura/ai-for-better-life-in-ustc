@@ -45,3 +45,5 @@ Desktop.ini
 *.db
 *.log
 var/
+# Local visual brainstorming previews
+.superpowers/
