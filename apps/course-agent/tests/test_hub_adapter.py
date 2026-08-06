@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -11,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from course_agent.config import Settings, _secret_from_env_or_file
-from course_agent.hub import map_hub_subject_to_demo_user
+from course_agent.hub import HubJwtVerifier, map_hub_subject_to_demo_user
 from course_agent.llm import FakeLLMAdapter
 from course_agent.main import create_app
 
@@ -107,6 +108,30 @@ def sign_hub_token(
     )
     signature = private_key.sign(signing_input.encode("ascii"))
     return signing_input + "." + b64url(signature)
+
+
+def test_hub_jwks_refreshes_once_when_same_kid_rotates(tmp_path: Path, monkeypatch) -> None:
+    old_key = Ed25519PrivateKey.generate()
+    current_key = Ed25519PrivateKey.generate()
+    verifier = HubJwtVerifier(Settings(runtime_dir=tmp_path, hub_jwks_url="http://hub.test/jwks"))
+    jwks_versions = [json.loads(jwks_for(old_key)), json.loads(jwks_for(current_key))]
+    load_count = 0
+
+    async def load_rotating_jwks() -> dict:
+        nonlocal load_count
+        if verifier._jwks_cache is not None:
+            return verifier._jwks_cache
+        verifier._jwks_cache = jwks_versions[min(load_count, len(jwks_versions) - 1)]
+        load_count += 1
+        return verifier._jwks_cache
+
+    monkeypatch.setattr(verifier, "_load_jwks", load_rotating_jwks)
+    token = sign_hub_token(current_key, sub="rotated-user")
+
+    identity = asyncio.run(verifier.verify_token(token, required_scope="chat:invoke"))
+
+    assert identity.hub_sub == "rotated-user"
+    assert load_count == 2
 
 
 def parse_agui_events(text: str) -> list[dict]:

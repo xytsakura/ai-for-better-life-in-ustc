@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   ACCESS_LEVELS,
   buildRunAgentInput,
+  errorFromAguiEvent,
   filterAgents,
   getAgentPrimaryHref,
   getAgentSecondaryHref,
@@ -105,6 +106,21 @@ test('SSE parser reads data JSON frames and reports protocol errors safely', () 
   assert.equal(parsed.events[1].delta, '你好');
   assert.equal(parsed.events[2].type, 'RUN_ERROR');
   assert.equal(parsed.rest, 'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"partial"}');
+});
+
+test('AG-UI run errors preserve a safe code for the chat failure state', () => {
+  const error = errorFromAguiEvent({
+    type: 'RUN_ERROR',
+    code: 'agent_timeout',
+    message: 'internal detail must not replace the public mapping',
+  });
+
+  assert.equal(error.code, 'agent_timeout');
+  assert.equal(error.message, 'internal detail must not replace the public mapping');
+
+  const malformed = errorFromAguiEvent({ type: 'RUN_ERROR', error: { code: 'protocol_error' } });
+  assert.equal(malformed.code, 'protocol_error');
+  assert.equal(malformed.message, 'Agent 返回的协议事件不完整或格式不正确。');
 });
 
 test('RunAgentInput preserves AG-UI field names and minimal identity context', () => {

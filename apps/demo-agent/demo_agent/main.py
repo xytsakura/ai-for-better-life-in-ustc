@@ -81,16 +81,14 @@ class HubTokenVerifier:
             header = jwt.get_unverified_header(token)
             kid = header.get("kid")
             jwk = next(item for item in self._load_jwks().get("keys", []) if item.get("kid") == kid)
-            key = jwt.PyJWK.from_dict(jwk).key
-            claims = jwt.decode(
-                token,
-                key=key,
-                algorithms=["EdDSA"],
-                audience=self.audience,
-                issuer=self.issuer,
-                leeway=30,
-                options={"require": ["exp", "iat", "iss", "aud", "sub"]},
-            )
+            try:
+                claims = self._decode_token(token, jwk)
+            except jwt.InvalidSignatureError:
+                self._jwks = None
+                refreshed_jwk = next(
+                    item for item in self._load_jwks().get("keys", []) if item.get("kid") == kid
+                )
+                claims = self._decode_token(token, refreshed_jwk)
         except (StopIteration, jwt.PyJWTError, httpx.HTTPError, ValueError) as error:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Hub access token") from error
         scopes = claims.get("scope", [])
@@ -107,6 +105,17 @@ class HubTokenVerifier:
         ):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Hub token lifetime")
         return claims
+
+    def _decode_token(self, token: str, jwk: dict[str, Any]) -> dict[str, Any]:
+        return jwt.decode(
+            token,
+            key=jwt.PyJWK.from_dict(jwk).key,
+            algorithms=["EdDSA"],
+            audience=self.audience,
+            issuer=self.issuer,
+            leeway=30,
+            options={"require": ["exp", "iat", "iss", "aud", "sub"]},
+        )
 
 
 @lru_cache(maxsize=1)

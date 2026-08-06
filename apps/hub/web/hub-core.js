@@ -292,6 +292,16 @@ export function parseSseBuffer(buffer) {
   return { events, rest };
 }
 
+export function errorFromAguiEvent(event) {
+  const nested = event?.error;
+  const detail = nested && typeof nested === 'object' ? nested : event || {};
+  const code = detail.code || event?.code || 'upstream_error';
+  const message = detail.message || event?.message || ERROR_MESSAGES[code] || ERROR_MESSAGES.upstream_error;
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 export function buildRunAgentInput({ agentId, user, threadId, runId, messages }) {
   return {
     threadId,

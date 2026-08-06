@@ -5,6 +5,7 @@ import {
   HUB_API,
   accessMeta,
   buildRunAgentInput,
+  errorFromAguiEvent,
   filterAgents,
   formatUsage,
   getAgentPrimaryHref,
@@ -14,7 +15,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js';
+} from './hub-core.js?v=20260806-6';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
@@ -508,6 +509,7 @@ function bindComposer(agent) {
   const cancel = document.querySelector('#cancelRun');
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (state.activeController) return;
     const text = prompt.value.trim();
     if (!text) return;
     prompt.value = '';
@@ -522,19 +524,23 @@ function bindComposer(agent) {
   cancel.addEventListener('click', () => {
     if (state.activeController) state.activeController.abort();
     cancel.disabled = true;
-    appendSystem('已取消本轮调用。');
   });
 }
 
 async function sendMessage(agent, text) {
+  if (state.activeController) return;
   const messages = document.querySelector('#messages');
   const cancel = document.querySelector('#cancelRun');
+  const send = document.querySelector('#sendRun');
+  const form = document.querySelector('#composer');
   const generation = state.generation;
   appendMessage('user', text);
   const agentMessage = appendMessage('agent', '');
   const controller = new AbortController();
   state.activeController = controller;
   cancel.disabled = false;
+  send.disabled = true;
+  form.setAttribute('aria-busy', 'true');
   const threadId = `thread-${agent.id}-${state.user.id}`;
   const runId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const body = buildRunAgentInput({
@@ -565,13 +571,18 @@ async function sendMessage(agent, text) {
       onEvent: (event) => applyAguiEvent(event, agentMessage),
     });
   } catch (error) {
-    if (error.name === 'AbortError') return;
     if (generation !== state.generation) return;
+    if (error.name === 'AbortError') {
+      renderMessageMarkdown(agentMessage, '已取消本轮调用。');
+      return;
+    }
     renderMessageMarkdown(agentMessage, '调用失败，本轮没有生成 Agent 回答。');
     appendError(readableError(error), () => sendMessage(agent, text));
   } finally {
-    if (generation === state.generation) {
+    if (generation === state.generation && state.activeController === controller) {
       cancel.disabled = true;
+      send.disabled = false;
+      form.removeAttribute('aria-busy');
       state.activeController = null;
       messages.scrollTop = messages.scrollHeight;
     }
@@ -584,7 +595,10 @@ async function consumeAguiStream(stream, handlers) {
   let buffer = '';
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      buffer += decoder.decode();
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
     const parsed = parseSseBuffer(buffer);
     buffer = parsed.rest;
@@ -592,6 +606,14 @@ async function consumeAguiStream(stream, handlers) {
       if (handlers.generation !== state.generation) return;
       handlers.onEvent(event);
     }
+  }
+  if (buffer.trim()) {
+    const parsed = parseSseBuffer(`${buffer}\n\n`);
+    for (const event of parsed.events) {
+      if (handlers.generation !== state.generation) return;
+      handlers.onEvent(event);
+    }
+    if (parsed.rest.trim()) throw errorFromAguiEvent({ code: 'protocol_error' });
   }
 }
 
@@ -615,7 +637,7 @@ function applyAguiEvent(event, agentMessage) {
     return;
   }
   if (type === 'RUN_ERROR') {
-    appendError(readableError(event.error || event), () => state.lastRun && sendMessage(state.lastRun.agent, state.lastRun.text));
+    throw errorFromAguiEvent(event);
   }
 }
 
@@ -1063,7 +1085,10 @@ function appendError(text, retry) {
   const node = document.createElement('div');
   node.className = 'message message--error';
   node.innerHTML = `<span>${escapeHtml(text)}</span> <button class="ghost-button" type="button">重试</button>`;
-  node.querySelector('button').addEventListener('click', retry);
+  node.querySelector('button').addEventListener('click', () => {
+    node.remove();
+    retry();
+  });
   document.querySelector('#messages')?.appendChild(node);
   node.scrollIntoView({ block: 'end' });
 }

@@ -97,17 +97,8 @@ class HubJwtVerifier:
             raise self._invalid("malformed_hub_token") from exc
         if header.get("alg") != "EdDSA" or not isinstance(header.get("kid"), str):
             raise self._invalid("invalid_hub_token_header")
-        key = await self._public_key_for_kid(header["kid"])
         try:
-            payload = jwt.decode(
-                token,
-                key=key,
-                algorithms=["EdDSA"],
-                audience=self.settings.hub_agent_id,
-                issuer=self.settings.hub_issuer,
-                leeway=JWT_CLOCK_SKEW_SECONDS,
-                options={"require": ["iss", "aud", "sub", "iat", "exp", "jti"]},
-            )
+            payload = await self._decode_with_jwks_refresh(token, header["kid"])
         except jwt.InvalidAudienceError as exc:
             raise self._invalid("invalid_hub_audience") from exc
         except jwt.InvalidIssuerError as exc:
@@ -128,6 +119,28 @@ class HubJwtVerifier:
             scopes=scopes,
             jti=str(payload["jti"]),
             claims=payload,
+        )
+
+    async def _decode_with_jwks_refresh(self, token: str, kid: str) -> dict[str, Any]:
+        key = await self._public_key_for_kid(kid)
+        try:
+            return self._decode_token(token, key)
+        except jwt.InvalidSignatureError:
+            # A Hub restart or emergency rotation may replace a key while a legacy
+            # deployment keeps the same kid. Refresh once before rejecting it.
+            self._jwks_cache = None
+            refreshed_key = await self._public_key_for_kid(kid)
+            return self._decode_token(token, refreshed_key)
+
+    def _decode_token(self, token: str, key: Any) -> dict[str, Any]:
+        return jwt.decode(
+            token,
+            key=key,
+            algorithms=["EdDSA"],
+            audience=self.settings.hub_agent_id,
+            issuer=self.settings.hub_issuer,
+            leeway=JWT_CLOCK_SKEW_SECONDS,
+            options={"require": ["iss", "aud", "sub", "iat", "exp", "jti"]},
         )
 
     def _validate_claims(self, payload: dict[str, Any]) -> None:

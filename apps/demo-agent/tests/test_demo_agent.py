@@ -128,3 +128,54 @@ def test_hub_token_rejects_overlong_lifetime() -> None:
         verifier.verify(f"Bearer {token}", "chat:invoke")
 
     assert exc_info.value.status_code == 401
+
+
+def test_hub_token_refreshes_jwks_once_when_same_kid_rotates(monkeypatch) -> None:
+    old_key = Ed25519PrivateKey.generate()
+    current_key = Ed25519PrivateKey.generate()
+    verifier = HubTokenVerifier()
+    verifier.required = True
+
+    def jwk_for(private_key: Ed25519PrivateKey) -> dict:
+        public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": base64.urlsafe_b64encode(public_key).rstrip(b"=").decode("ascii"),
+            "use": "sig",
+            "alg": "EdDSA",
+            "kid": "test-key",
+        }
+
+    verifier._jwks = {"keys": [jwk_for(old_key)]}
+    verifier._jwks_loaded_at = time.monotonic()
+    refresh_count = 0
+
+    def load_rotating_jwks() -> dict:
+        nonlocal refresh_count
+        if verifier._jwks is None:
+            verifier._jwks = {"keys": [jwk_for(current_key)]}
+            verifier._jwks_loaded_at = time.monotonic()
+            refresh_count += 1
+        return verifier._jwks
+
+    monkeypatch.setattr(verifier, "_load_jwks", load_rotating_jwks)
+    issued_at = int(time.time())
+    token = jwt.encode(
+        {
+            "iss": verifier.issuer,
+            "aud": verifier.audience,
+            "sub": "demo-c",
+            "scope": ["chat:invoke"],
+            "iat": issued_at,
+            "exp": issued_at + 120,
+        },
+        current_key,
+        algorithm="EdDSA",
+        headers={"kid": "test-key"},
+    )
+
+    claims = verifier.verify(f"Bearer {token}", "chat:invoke")
+
+    assert claims["sub"] == "demo-c"
+    assert refresh_count == 1
