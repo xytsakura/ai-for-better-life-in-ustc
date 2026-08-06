@@ -116,6 +116,7 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 
 ## 文档导航
 
+- [项目更新日志](./CHANGELOG.md)：按日期和提交号记录平台级功能、修复、验证和重要文档变化。
 - [项目产品文档](./项目产品文档.md)：当前产品定义、架构边界、MVP、评测、分工和风险，是现阶段实施依据。
 - [Hub 顶层设计](./docs/superpowers/specs/2026-08-05-campus-agent-hub-top-level-design.md)：当前实现的安全边界、身份协议与三种接入等级。
 - [USTC-Agent-Hub Contract v1](./contracts/campus-agent-hub/v1/README.md)：Manifest、Health、simple-chat Schema、示例和契约测试。
@@ -211,6 +212,7 @@ git push
 
 - 方向变化先在群内确认，再同步到产品文档和 README；
 - 提交信息说明“改了什么”，一次提交尽量只处理一个主题；
+- 功能、修复、重构和重要文档提交同步更新根目录 [`CHANGELOG.md`](./CHANGELOG.md)；
 - 推送前检查远程更新，冲突时保留并理解队友修改，不覆盖他人工作；
 - API key、密码、Cookie、CSRF token、个人敏感信息和未脱敏数据不得提交到仓库。
 
