@@ -10,6 +10,18 @@
   const splash = document.querySelector('.splash');
   if (!splash) return;
 
+  // 同一浏览器会话内只播放一次开屏动画（避免从子 Agent 返回 Hub 时重复播放）
+  const STORAGE_KEY = 'hub_splash_played';
+  try {
+    if (sessionStorage.getItem(STORAGE_KEY) === '1') {
+      splash.remove();
+      return;
+    }
+    sessionStorage.setItem(STORAGE_KEY, '1');
+  } catch {
+    // sessionStorage 不可用时忽略，正常播放
+  }
+
   // 检查用户是否偏好减少动画
   const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -50,7 +62,7 @@
     // 阶段 3: 校徽呼吸脉冲 (1600ms)
     setTimeout(function () {
       if (logo.style.animation) {
-        logo.style.animation = 'splashPulse 600ms ease-in-out';
+        logo.style.animation = 'splashPulse 600ms ease-in-out forwards';
       }
     }, 1600);
 
@@ -90,7 +102,7 @@
               title.style.animation = 'splashTitleIn 500ms ease-out forwards';
             }, 500);
             setTimeout(function () {
-              firstLogo.style.animation = 'splashPulse 600ms ease-in-out';
+              firstLogo.style.animation = 'splashPulse 600ms ease-in-out forwards';
             }, 1600);
             setTimeout(function () {
               splash.style.animation = 'splashFadeOut 400ms ease forwards';

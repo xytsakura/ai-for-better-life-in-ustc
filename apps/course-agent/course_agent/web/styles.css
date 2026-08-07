@@ -415,11 +415,12 @@ body.resizing * {
 .hub-return-link {
   display: block;
   margin-bottom: 8px;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border-1);
   border-radius: var(--radius-md);
   color: var(--accent);
-  font-size: 0.78rem;
+  font-size: 0.95rem;
+  font-weight: 600;
   text-align: center;
 }
 .hub-return-link:hover {
@@ -961,12 +962,12 @@ body.resizing * {
 }
 
 .home-logo-badge {
-  padding: 5px 12px;
+  padding: 7px 16px;
   border-radius: 999px;
   background: var(--bg-3);
   border: 1px solid var(--border-2);
   color: var(--accent);
-  font-size: 0.72rem;
+  font-size: 0.95rem;
   font-weight: 600;
 }
 

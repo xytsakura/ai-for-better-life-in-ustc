@@ -4130,9 +4130,7 @@ function updateHomeModelLabel() {
 
 function modelSelectOptions(selectedModel) {
   const eligible = chatEligibleModels();
-  const models = eligible.length
-    ? eligible
-    : [normalizeModelInfo({ id: selectedModel || state.settings.llm_model || 'gpt-5.6-sol', chat_eligible: true })].filter(Boolean);
+  const models = [...eligible];
   if (selectedModel && !models.some(model => model.id === selectedModel)) {
     models.unshift(normalizeModelInfo({ id: selectedModel, chat_eligible: true }));
   }
@@ -4142,21 +4140,29 @@ function modelSelectOptions(selectedModel) {
 }
 
 function renderModelControls() {
-  const selectedModel = state.currentModel || state.settings.llm_model || '';
-  const homeModel = $('#home-model-select');
+  const selectedModel = state.currentModel || '';
+  const homeModel = $('#home-model-input');
+  const homeModelList = $('#home-model-list');
   const settingModel = $('#setting-model');
-  const options = modelSelectOptions(selectedModel);
   if (homeModel) {
-    homeModel.innerHTML = options;
     homeModel.value = selectedModel;
-    homeModel.disabled = state.isQuerying || !selectedModel;
-    homeModel.title = selectedModel || '未配置模型';
+    homeModel.disabled = state.isQuerying;
+    homeModel.title = selectedModel || '请填写或选择模型';
+    homeModel.placeholder = '输入模型名，如 gpt-5';
+  }
+  if (homeModelList) {
+    const datalist = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
+    homeModelList.innerHTML = datalist;
   }
   if (settingModel) {
     const defaultModel = state.settings.llm_model || selectedModel;
-    settingModel.innerHTML = modelSelectOptions(defaultModel);
     settingModel.value = defaultModel;
+    settingModel.placeholder = '输入模型名，如 gpt-5';
     settingModel.disabled = !isCurrentUserAdmin();
+  }
+  const settingModelList = $('#setting-model-list');
+  if (settingModelList) {
+    settingModelList.innerHTML = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
   }
   renderReasoningControl();
   renderModelCatalogList();
@@ -4255,11 +4261,9 @@ function renderModelCatalogList() {
 
 function applyModelCatalog(payload) {
   state.modelCatalog = normalizeModelCatalog(payload);
+  // 去掉默认模型：用户需自行填写或选择模型名
   if (!state.currentModel) {
-    state.currentModel = state.settings.llm_model || chatEligibleModels()[0]?.id || '';
-  }
-  if (!findModelInfo(state.currentModel) && chatEligibleModels().length) {
-    state.currentModel = state.settings.llm_model || chatEligibleModels()[0].id;
+    state.currentModel = state.settings.llm_model || '';
   }
   if (!state.currentReasoningEffort) {
     state.currentReasoningEffort = defaultReasoningForModel();
@@ -4300,7 +4304,7 @@ async function discoverModels() {
 
 function setCurrentModel(modelId, { fromHistory = false } = {}) {
   const next = String(modelId || '').trim();
-  if (!next || next === state.currentModel) return;
+  if (next === state.currentModel) return;
   state.currentModel = next;
   state.modelName = next;
   state.currentReasoningEffort = defaultReasoningForModel(next);
@@ -4335,6 +4339,11 @@ function handleHomeSubmit(event) {
   const textarea = $('#home-question');
   const question = textarea.value.trim();
   if (!question) return;
+  if (!state.currentModel) {
+    toast('请先填写或选择模型名再发起对话', 'warn');
+    $('#home-model-input')?.focus();
+    return;
+  }
   query(question, state.homeMode, 'home');
   textarea.value = '';
   textarea.style.height = 'auto';
@@ -6022,7 +6031,7 @@ function initEventListeners() {
       handleHomeSubmit(e);
     }
   });
-  $('#home-model-select').addEventListener('change', event => setCurrentModel(event.currentTarget.value));
+  $('#home-model-input').addEventListener('input', event => setCurrentModel(event.currentTarget.value.trim()));
   $('#home-reasoning-effort').addEventListener('change', event => setCurrentReasoningEffort(event.currentTarget.value || null));
   $('#document-reader-close').addEventListener('click', closeReferenceViewer);
   $('#document-reader-prev').addEventListener('click', () => changeReferenceViewerPage(-1));

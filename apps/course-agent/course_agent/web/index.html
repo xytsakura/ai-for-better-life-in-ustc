@@ -1,9 +1,10 @@
+
 <!doctype html>
 <html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>瀚海行agent · 心游文瀚海，志上理云天</title>
+  <title>瀚海行agent · 真理如瀚海，求索亦行舟</title>
   <script>
     (() => {
       try {
@@ -16,7 +17,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=bichon-avatar-v1">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260807-3">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -63,7 +64,7 @@
 
     <div class="sidebar-bottom">
       <a class="hub-return-link" id="hub-return-link" href="http://127.0.0.1:8100/hub" rel="noopener">
-        返回 Campus Agent Hub 广场
+        返回广场
       </a>
       <button class="user-card" id="user-card" type="button" aria-label="切换演示身份">
         <div class="user-avatar" id="user-avatar">?</div>
@@ -100,7 +101,7 @@
             <div class="home-greeting" id="home-greeting">
               <div class="home-logo">
                 <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="瀚海行agent" width="72" height="72">
-                <div class="home-logo-badge">心游文瀚海，志上理云天</div>
+                <div class="home-logo-badge">真理如瀚海，求索亦行舟</div>
               </div>
             </div>
           </div>
@@ -135,9 +136,10 @@
                   </div>
                 </div>
                 <div class="home-input-actions">
-                  <label class="compact-field home-model-field" for="home-model-select">
+                  <label class="compact-field home-model-field" for="home-model-input">
                     <span class="visually-hidden">模型</span>
-                    <select id="home-model-select" aria-label="当前对话模型"></select>
+                    <input id="home-model-input" type="text" list="home-model-list" placeholder="输入模型名，如 gpt-5" autocomplete="off" aria-label="当前对话模型" />
+                    <datalist id="home-model-list"></datalist>
                   </label>
                   <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
                     <span class="visually-hidden">思考强度</span>
@@ -634,8 +636,9 @@
                 </label>
                 <label class="field">
                   <span>新对话默认模型</span>
-                  <select id="setting-model"></select>
-                  <span class="field-hint">只影响新对话；已有会话保留各自模型。</span>
+                  <input type="text" id="setting-model" list="setting-model-list" placeholder="输入模型名，如 gpt-5" autocomplete="off" />
+                  <datalist id="setting-model-list"></datalist>
+                  <span class="field-hint">只影响新对话；已有会话保留各自模型。也可直接填写模型名。</span>
                 </label>
                 <div class="settings-model-catalog">
                   <div class="settings-model-catalog-actions">
@@ -1030,6 +1033,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=course-streaming-v1" defer></script>
-  <script src="/assets/app.js?v=bichon-avatar-v1" defer></script>
+  <script src="/assets/app.js?v=20260807-4" defer></script>
 </body>
 </html>

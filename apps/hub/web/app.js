@@ -45,6 +45,7 @@ const shell = document.querySelector('#app');
 const searchInput = document.querySelector('#globalSearch');
 const identitySelect = document.querySelector('#identitySelect');
 const userAvatar = document.querySelector('#userAvatar');
+const userNickname = document.querySelector('#userNickname');
 const themeToggle = document.querySelector('#themeToggle');
 const mobileNavToggle = document.querySelector('.mobile-nav-toggle');
 let portalStarfield = null;
@@ -124,10 +125,26 @@ function setUser(user) {
   state.user = user;
   localStorage.setItem(STORAGE.user, user.id);
   if (identitySelect) identitySelect.value = user.id;
-  if (userAvatar) userAvatar.textContent = user.initials;
+  syncTopbarUser();
   document.querySelectorAll('[data-admin-only]').forEach((item) => {
     item.hidden = user.role !== 'admin';
   });
+}
+
+function renderUserAvatar(node, user, profile) {
+  const photo = profile?.avatarDataUrl;
+  if (photo) {
+    node.innerHTML = `<img src="${escapeAttr(photo)}" alt="${escapeAttr(user.name)}" />`;
+  } else {
+    node.textContent = user.initials;
+  }
+}
+
+function syncTopbarUser() {
+  if (!state.user) return;
+  const profile = loadProfile(state.user.id);
+  if (userAvatar) renderUserAvatar(userAvatar, state.user, profile);
+  if (userNickname) userNickname.textContent = profile.displayName?.trim() || state.user.name;
 }
 
 function navigate(path, { replace = false } = {}) {
@@ -145,24 +162,30 @@ function parseRoute(pathname) {
   if (segments[0] !== 'hub') return { name: 'portal' };
   if (segments.length === 1) return { name: 'portal' };
   if (segments[1] === 'recent') return { name: 'recent' };
-  if (segments[1] === 'submit') return { name: 'submit' };
-  if (segments[1] === 'admin') return { name: 'admin' };
   if (segments[1] === 'agents' && segments[2] && segments[3] === 'chat') return { name: 'chat', id: decodeURIComponent(segments[2]) };
   if (segments[1] === 'agents' && segments[2]) return { name: 'detail', id: decodeURIComponent(segments[2]) };
+  if (segments[1] === 'agents') return { name: 'directory' };
+  if (segments[1] === 'submit') return { name: 'submit' };
+  if (segments[1] === 'admin') return { name: 'admin' };
+  if (segments[1] === 'settings') return { name: 'settings' };
+  if (segments[1] === 'profile') return { name: 'profile' };
   return { name: 'portal' };
 }
 
 function render() {
   destroyPortalEffects();
   syncNav();
+  syncTopbarUser();
   if (!view) return;
   view.focus({ preventScroll: true });
   if (state.route.name === 'portal') return renderPortal();
-  if (state.route.name === 'recent') return renderRecent();
+  if (state.route.name === 'directory') return renderDirectory();
   if (state.route.name === 'detail') return renderDetail(state.route.id);
   if (state.route.name === 'chat') return renderChat(state.route.id);
   if (state.route.name === 'submit') return renderSubmit();
   if (state.route.name === 'admin') return renderAdmin();
+  if (state.route.name === 'settings') return renderSettings();
+  if (state.route.name === 'profile') return renderProfile();
 }
 
 function syncNav() {
@@ -170,9 +193,12 @@ function syncNav() {
     const key = item.getAttribute('data-nav');
     const active = (
       (state.route.name === 'portal' && key === 'portal') ||
+      (state.route.name === 'directory' && key === 'directory') ||
       (state.route.name === 'recent' && key === 'recent') ||
       (state.route.name === 'submit' && key === 'submit') ||
-      (state.route.name === 'admin' && key === 'admin')
+      (state.route.name === 'admin' && key === 'admin') ||
+      (state.route.name === 'settings' && key === 'settings') ||
+      (state.route.name === 'profile' && key === 'profile')
     );
     if (active) item.setAttribute('aria-current', 'page');
     else item.removeAttribute('aria-current');
@@ -207,50 +233,103 @@ function destroyPortalEffects() {
 
 async function renderPortal() {
   state.loading = true;
-  view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', true);
+  view.innerHTML = renderPortalStage();
+  mountPortalEffects();
+  bindPortalSearch();
+  try {
+    state.agents = await loadAgents();
+  } catch {
+    // 主页不展示 Agent 列表错误，静默忽略；用户可前往 Agent 广场查看
+  } finally {
+    state.loading = false;
+  }
+}
+
+function renderPortalStage() {
+  return `
+    <section class="portal-stage" data-starfield>
+      <div class="portal-stage__content">
+        <p class="portal-kicker">AI FOR USTCERS</p>
+        <h1>为科大学生服务的智能 <span class="latin">Agent</span></h1>
+        <label class="portal-search" aria-label="搜索校园 Agent">
+          <span class="portal-search__plus" aria-hidden="true">＋</span>
+          <input id="portalSearch" type="search" placeholder="搜索 Agent、课程或校园服务" value="${escapeAttr(state.query)}" autocomplete="off" />
+          <span class="portal-search__send" aria-hidden="true">↑</span>
+        </label>
+      </div>
+    </section>
+  `;
+}
+
+function renderPortalQuickRow() {
+  return `
+    <section class="portal-quickrow" aria-label="Agent 广场快捷入口">
+      <header class="portal-quickrow__head">
+        <div><p class="eyebrow">CAMPUS AGENTS</p><h2>为你推荐</h2></div>
+        <a class="portal-quickrow__more" href="/hub/agents" data-link>查看全部 Agent 广场 →</a>
+      </header>
+      <section id="quickRowGrid" class="hub-grid hub-grid--quick" aria-live="polite">
+        ${state.loading ? (document.querySelector('#skeletonCards')?.innerHTML || '') : renderQuickRowCards()}
+      </section>
+    </section>
+  `;
+}
+
+function renderQuickRowCards() {
+  const agents = state.agents.slice(0, 4);
+  if (!agents.length) return '<p class="portal-quickrow__empty">暂无可用 Agent。</p>';
+  return agents.map((agent) => {
+    const normalized = normalizeAgent(agent);
+    return `
+      <button class="hub-card hub-card--quick" type="button" data-agent-id="${escapeAttr(normalized.id)}">
+        ${renderAgentIcon(normalized)}
+        <div class="hub-card__body">
+          <h3 class="hub-card__name">${escapeHtml(normalized.name)}</h3>
+          <p class="hub-card__desc">${escapeHtml(normalized.description)}</p>
+        </div>
+        <span class="hub-card__chevron" aria-hidden="true">→</span>
+      </button>
+    `;
+  }).join('');
+}
+
+function bindPortalSearch() {
+  const portalSearch = document.querySelector('#portalSearch');
+  portalSearch?.addEventListener('input', () => {
+    state.query = portalSearch.value;
+    syncSearchInputs(portalSearch);
+    updateAgentGrid();
+  });
+}
+
+function bindQuickRowCards() {
+  document.querySelectorAll('#quickRowGrid [data-agent-id]').forEach((card) => {
+    card.addEventListener('click', () => navigate(`/hub/agents/${encodeURIComponent(card.dataset.agentId)}`));
+  });
+}
+
+async function renderDirectory() {
+  state.loading = true;
+  view.innerHTML = renderDirectoryShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', true);
   mountPortalEffects();
   try {
     state.agents = await loadAgents();
   } catch (error) {
-    view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
+    state.loading = false;
+    view.innerHTML = renderDirectoryShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
     mountPortalEffects();
     document.querySelector('#agentGrid').innerHTML = errorState('Agent 列表加载失败', readableError(error), '重试');
-    document.querySelector('[data-retry]')?.addEventListener('click', renderPortal);
+    document.querySelector('[data-retry]')?.addEventListener('click', renderDirectory);
     return;
   } finally {
     state.loading = false;
   }
-  view.innerHTML = renderPortalShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
-  mountPortalEffects();
+  view.innerHTML = renderDirectoryShell('应用广场', '发现、比较并使用通过平台治理的校园 Agent。', false);
   bindFilters();
   updateAgentGrid();
 }
 
-async function renderRecent() {
-  if (!state.agents.length) {
-    try {
-      state.agents = await loadAgents();
-    } catch (error) {
-      view.innerHTML = errorState('最近使用加载失败', readableError(error), '返回广场', '/hub');
-      return;
-    }
-  }
-  const recentIds = loadJson(STORAGE.recent, []);
-  const agents = state.agents.filter((agent) => recentIds.includes(agent.id));
-  view.innerHTML = `
-    <section class="hero">
-      <div>
-        <p class="eyebrow">RECENT</p>
-        <h1>我的最近使用</h1>
-        <p class="lead">这里保存当前浏览器身份下最近打开过的 Agent，不跨设备同步。</p>
-      </div>
-    </section>
-    <div class="hub-grid">${agents.length ? agents.map(renderAgentCard).join('') : emptyState('还没有最近使用记录', '从 Agent 广场打开一次 Agent 后会显示在这里。')}</div>
-  `;
-  bindAgentCardActions();
-}
-
-function renderPortalShell(title, subtitle, loading) {
+function renderDirectoryShell(title, subtitle, loading) {
   const agents = state.agents;
   const categories = ['全部', ...unique(agents.map((agent) => normalizeAgent(agent).category))];
   const chips = ['全部', ...unique(agents.flatMap((agent) => {
@@ -258,20 +337,6 @@ function renderPortalShell(title, subtitle, loading) {
     return [...normalized.tags, ...normalized.capabilities].slice(0, 12);
   })).slice(0, 18)];
   return `
-    <section class="portal-stage" data-starfield>
-      <div class="portal-stage__content">
-        <p class="portal-kicker">AI FOR BETTER LIFE · USTC</p>
-        <h1>今天，想解决什么校园问题？</h1>
-        <p>从一个问题开始，由你选择最合适的专业 Agent。</p>
-        <label class="portal-search" aria-label="搜索校园 Agent">
-          <span class="portal-search__plus" aria-hidden="true">＋</span>
-          <input id="portalSearch" type="search" placeholder="搜索 Agent、课程或校园服务" value="${escapeAttr(state.query)}" autocomplete="off" />
-          <span class="portal-search__meta">校园 Agent</span>
-          <span class="portal-search__send" aria-hidden="true">↑</span>
-        </label>
-      </div>
-    </section>
-
     <section class="portal-directory" aria-label="${escapeAttr(title)}">
       <header class="portal-directory__head">
         <div><p class="eyebrow">CAMPUS AGENTS</p><h2>为你推荐</h2></div>
@@ -297,12 +362,6 @@ function renderPortalShell(title, subtitle, loading) {
 }
 
 function bindFilters() {
-  const portalSearch = document.querySelector('#portalSearch');
-  portalSearch?.addEventListener('input', () => {
-    state.query = portalSearch.value;
-    syncSearchInputs(portalSearch);
-    updateAgentGrid();
-  });
   document.querySelectorAll('[data-category]').forEach((button) => {
     button.addEventListener('click', () => {
       state.category = button.dataset.category;
@@ -375,7 +434,6 @@ function renderAgentCard(raw) {
       </div>
       <div class="action-row" style="margin-top:14px">
         <a class="button" href="${escapeAttr(primaryHref)}" ${normalizeAccessLevel(agent) === 'link' ? 'target="_blank" rel="noopener noreferrer" data-external-launch' : 'data-link'} data-primary-action data-agent-id="${escapeAttr(agent.id)}">${escapeHtml(meta.primary)}</a>
-        <a class="ghost-button" href="/hub/agents/${encodeURIComponent(agent.id)}" data-link>查看详情</a>
       </div>
     </article>
   `;
@@ -392,7 +450,18 @@ function bindAgentCardActions() {
     });
   });
   document.querySelectorAll('[data-primary-action]').forEach((action) => {
-    action.addEventListener('click', () => rememberRecent(action.dataset.agentId));
+    action.addEventListener('click', async (event) => {
+      const id = action.dataset.agentId;
+      rememberRecent(id);
+      const agent = state.agents.find((item) => normalizeAgent(item).id === id);
+      if (!agent) return;
+      const level = normalizeAccessLevel(agent);
+      if (level === 'featured') {
+        event.preventDefault();
+        await openWorkspace(agent);
+      }
+      // link（target=_blank 默认外链）与 connected（href=/chat 默认进入聊天页）放行默认行为
+    });
   });
 }
 
@@ -681,6 +750,505 @@ function renderSubmit() {
     </section>
   `;
   bindSubmitForm();
+}
+
+function renderSettings() {
+  const saved = loadSettings();
+  view.innerHTML = `
+    <section class="hero">
+      <div>
+        <p class="eyebrow">SETTINGS</p>
+        <h1>模型配置</h1>
+        <p class="lead">在这里配置你自己的大模型 Key。配置后，Hub 主页面与所有 Hub 调度的子 Agent（如瀚海行、校园助手 Demo）都可以调用你的模型。前端先打通界面，后端持久化与透传将在后续接入。</p>
+      </div>
+    </section>
+    <section class="submit-layout">
+      <form id="settingsForm" class="form-grid">
+        <label class="field">
+          <span>默认模型厂商</span>
+          <select name="provider">
+            <option value="openai" ${saved.provider === 'openai' ? 'selected' : ''}>OpenAI 兼容（gpt-4o / gpt-5 等）</option>
+            <option value="anthropic" ${saved.provider === 'anthropic' ? 'selected' : ''}>Anthropic（claude 系列）</option>
+            <option value="custom" ${saved.provider === 'custom' ? 'selected' : ''}>自定义（自建 / 校园网关）</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>模型名称</span>
+          <input name="model" value="${escapeAttr(saved.model)}" placeholder="例如 gpt-4o-mini / claude-3.7-sonnet" />
+        </label>
+        <label class="field">
+          <span>API Base URL</span>
+          <input name="baseUrl" value="${escapeAttr(saved.baseUrl)}" placeholder="https://api.openai.com/v1" />
+        </label>
+        <label class="field">
+          <span>API Key</span>
+          <input name="apiKey" type="password" value="${escapeAttr(saved.apiKey)}" placeholder="sk-..." autocomplete="off" />
+        </label>
+        <label class="field">
+          <span>调用温度（temperature）</span>
+          <input name="temperature" type="number" min="0" max="2" step="0.1" value="${escapeAttr(saved.temperature ?? '0.7')}" />
+        </label>
+        <label class="field">
+          <span>最大输出 token</span>
+          <input name="maxTokens" type="number" min="64" max="32000" step="64" value="${escapeAttr(saved.maxTokens ?? '2048')}" />
+        </label>
+        <div class="action-row">
+          <button class="ghost-button" type="button" data-test-model>测试连通</button>
+          <button class="ghost-button" type="button" data-reset-model>清空</button>
+          <button class="button" type="submit">保存配置</button>
+        </div>
+      </form>
+      <aside class="panel">
+        <h2>说明</h2>
+        <p class="lead">目前仅在浏览器本地保存（localStorage），用于前端原型演示。后续会在 Hub 后端增加 <code>POST /api/settings</code> 持久化到用户档案，并由 Hub 网关按身份读取后在网关层注入到子 Agent 调用。</p>
+        <h3>生效范围</h3>
+        <ul class="validation-list">
+          <li>Hub 主页面搜索 / 问答（占位）</li>
+          <li>统一聊天页（Connected Agent，透传 <code>custom_llm</code> 字段）</li>
+          <li>完整工作台（Featured Agent，如瀚海行 Agent）</li>
+        </ul>
+        <h3>安全</h3>
+        <p class="lead">生产环境不允许把 Key 直接暴露给浏览器。请选择以下方式之一：</p>
+        <ul class="validation-list">
+          <li>由 Hub 在服务端持有 Key，网关层替换 <code>Authorization</code> 头；</li>
+          <li>改为走 SSO/校园统一身份，由网关签发短期访问令牌。</li>
+        </ul>
+      </aside>
+    </section>
+  `;
+  bindSettingsForm();
+}
+
+function bindSettingsForm() {
+  const form = document.querySelector('#settingsForm');
+  if (!form) return;
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const data = {
+      provider: fieldValue(form, 'provider'),
+      model: fieldValue(form, 'model').trim(),
+      baseUrl: fieldValue(form, 'baseUrl').trim(),
+      apiKey: fieldValue(form, 'apiKey').trim(),
+      temperature: fieldValue(form, 'temperature'),
+      maxTokens: fieldValue(form, 'maxTokens'),
+      savedAt: new Date().toISOString(),
+    };
+    saveSettings(data);
+    toast('已保存到本地（前端原型）。后续将打通 Hub 后端持久化。');
+  });
+  document.querySelector('[data-test-model]')?.addEventListener('click', () => {
+    const data = currentSettings(form);
+    if (!data.apiKey) {
+      toast('请先填写 API Key 再测试。');
+      return;
+    }
+    toast(`已记录 ${data.provider}/${data.model}。联通性验证接口待接入。`);
+  });
+  document.querySelector('[data-reset-model]')?.addEventListener('click', () => {
+    form.reset();
+    clearSettings();
+    toast('已清空本地模型配置。');
+  });
+}
+
+function currentSettings(form) {
+  return {
+    provider: fieldValue(form, 'provider'),
+    model: fieldValue(form, 'model').trim(),
+    baseUrl: fieldValue(form, 'baseUrl').trim(),
+    apiKey: fieldValue(form, 'apiKey').trim(),
+    temperature: fieldValue(form, 'temperature'),
+    maxTokens: fieldValue(form, 'maxTokens'),
+  };
+}
+
+const SETTINGS_KEY = 'hub_user_model_settings';
+function loadSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+function saveSettings(data) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
+}
+function clearSettings() {
+  localStorage.removeItem(SETTINGS_KEY);
+}
+
+async function renderProfile() {
+  if (!state.agents.length) {
+    try { state.agents = await loadAgents(); } catch { state.agents = []; }
+  }
+  const profile = loadProfile(state.user.id);
+  const recentAgents = pickRecentAgents(state.agents, profile.pinnedAgentIds);
+  view.innerHTML = `
+    <section class="hero">
+      <div>
+        <p class="eyebrow">PROFILE</p>
+        <h1>个人主页</h1>
+        <p class="lead">在这里管理你的头像、签名和常用 Agent。后续将由 Hub 后端持久化到用户档案。</p>
+      </div>
+    </section>
+    <section class="profile-layout">
+      <form id="profileForm" class="form-grid">
+        <div class="profile-avatar">
+          <div class="profile-avatar__preview" id="avatarPreview">
+            ${profile.avatarDataUrl ? `<img src="${escapeAttr(profile.avatarDataUrl)}" alt="${escapeAttr(state.user.name)}" />` : escapeHtml(state.user.initials)}
+          </div>
+          <label class="ghost-button profile-avatar__upload">
+            上传头像
+            <input type="file" accept="image/png,image/jpeg,image/webp" hidden data-avatar-input />
+          </label>
+          <button class="link-button" type="button" data-reset-avatar>使用默认</button>
+        </div>
+        <label class="field">
+          <span>显示名</span>
+          <input name="displayName" value="${escapeAttr(profile.displayName ?? state.user.name)}" />
+        </label>
+        <label class="field">
+          <span>个性签名（一句话）</span>
+          <input name="signature" maxlength="60" value="${escapeAttr(profile.signature ?? '')}" placeholder="例如：USTC 2024 级 · 想做出有用的 Agent" />
+        </label>
+        <label class="field">
+          <span>个人简介（最多 280 字）</span>
+          <textarea name="bio" maxlength="280" rows="5" placeholder="一句话介绍你自己，感兴趣的方向，做过的项目…">${escapeHtml(profile.bio ?? '')}</textarea>
+        </label>
+        <div class="action-row">
+          <button class="button" type="submit">保存</button>
+          <button class="ghost-button" type="button" data-reset-profile>恢复默认</button>
+        </div>
+      </form>
+      <aside class="panel">
+        <h2>常用 Agent</h2>
+        <p class="lead">从 Agent 广场挑选常用的 Agent 钉到这里，方便在主页面与统一聊天中快速访问。</p>
+        <ul id="profilePinnedList" class="profile-pinned"></ul>
+        <h3>未钉选的 Agent</h3>
+        <ul id="profileAvailableList" class="profile-available"></ul>
+      </aside>
+    </section>
+  `;
+  bindProfileForm(recentAgents);
+  paintProfileLists(recentAgents);
+}
+
+function pickRecentAgents(allAgents, pinnedIds = []) {
+  const pinnedSet = new Set(pinnedIds);
+  const pinned = allAgents
+    .filter((agent) => pinnedSet.has(agent.id))
+    .map((agent) => ({ ...agent, pinned: true }));
+  const rest = allAgents
+    .filter((agent) => !pinnedSet.has(agent.id))
+    .map((agent) => ({ ...agent, pinned: false }));
+  return [...pinned, ...rest];
+}
+
+function paintProfileLists({ pinned, rest }) {
+  const renderItem = (agent) => `
+    <li class="profile-agent" data-agent-id="${escapeAttr(agent.id)}">
+      <div class="profile-agent__head">
+        <strong>${escapeHtml(agent.name)}</strong>
+        <span class="small-muted">${escapeHtml(agent.category)} · ${escapeHtml(agent.owner)}</span>
+      </div>
+      <button class="ghost-button" type="button" data-toggle-pin="${escapeAttr(agent.id)}" data-pinned="${agent.pinned ? '1' : '0'}">${agent.pinned ? '取消钉选' : '钉选'}</button>
+    </li>
+  `;
+  const pinnedList = document.querySelector('#profilePinnedList');
+  const availableList = document.querySelector('#profileAvailableList');
+  if (pinnedList) pinnedList.innerHTML = pinned.length ? pinned.map(renderItem).join('') : '<li class="small-muted">尚未钉选任何 Agent。</li>';
+  if (availableList) availableList.innerHTML = rest.length ? rest.slice(0, 8).map(renderItem).join('') : '<li class="small-muted">没有更多 Agent。</li>';
+}
+
+function persistProfileFromForm(form, currentAgents, workingAvatar) {
+  const profile = {
+    displayName: fieldValue(form, 'displayName').trim() || state.user.name,
+    signature: fieldValue(form, 'signature').trim(),
+    bio: fieldValue(form, 'bio').trim(),
+    avatarDataUrl: workingAvatar,
+    pinnedAgentIds: currentAgents.filter((agent) => agent.pinned).map((agent) => agent.id),
+    updatedAt: new Date().toISOString(),
+  };
+  saveProfile(state.user.id, profile);
+  syncTopbarUser();
+}
+
+function bindProfileForm(currentAgents) {
+  const form = document.querySelector('#profileForm');
+  const avatarInput = form?.querySelector('[data-avatar-input]');
+  const avatarPreview = document.querySelector('#avatarPreview');
+  let workingAvatar = loadProfile(state.user.id).avatarDataUrl || '';
+
+  avatarInput?.addEventListener('change', async () => {
+    const file = avatarInput.files?.[0];
+    if (!file) return;
+    avatarInput.value = '';
+    const dataUrl = await readFileAsDataUrl(file);
+    if (!dataUrl) return;
+    try {
+      const cropped = await openAvatarCropper(dataUrl);
+      if (cropped) {
+        workingAvatar = cropped;
+        avatarPreview.innerHTML = `<img src="${escapeAttr(workingAvatar)}" alt="${escapeAttr(state.user.name)}" />`;
+        // 头像裁剪后立即持久化，避免刷新丢失
+        const existing = loadProfile(state.user.id);
+        const merged = { ...existing, avatarDataUrl: workingAvatar, updatedAt: new Date().toISOString() };
+        saveProfile(state.user.id, merged);
+        syncTopbarUser();
+        toast('头像已更新。');
+      }
+    } catch (error) {
+      toast(`裁剪失败：${readableError(error)}`);
+    }
+  });
+
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    persistProfileFromForm(form, currentAgents, workingAvatar);
+    toast('个人主页已保存到本地（前端原型）。');
+  });
+
+  // 输入框失焦时立即持久化，避免刷新丢失
+  ['displayName', 'signature', 'bio'].forEach((name) => {
+    form?.elements.namedItem(name)?.addEventListener('change', () => {
+      persistProfileFromForm(form, currentAgents, workingAvatar);
+      syncTopbarUser();
+    });
+  });
+
+  document.querySelector('[data-reset-avatar]')?.addEventListener('click', () => {
+    workingAvatar = '';
+    avatarPreview.textContent = state.user.initials;
+    avatarInput.value = '';
+  });
+
+  document.querySelector('[data-reset-profile]')?.addEventListener('click', () => {
+    clearProfile(state.user.id);
+    form.reset();
+    avatarPreview.textContent = state.user.initials;
+    workingAvatar = '';
+    if (userAvatar) renderUserAvatar(userAvatar, state.user, {});
+    const fresh = pickRecentAgents(state.agents, []);
+    paintProfileLists(fresh);
+    toast('已恢复默认个人主页。');
+  });
+
+  document.querySelectorAll('[data-toggle-pin]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.togglePin;
+      const isPinned = button.dataset.pinned === '1';
+      const updated = currentAgents.map((agent) => (agent.id === id ? { ...agent, pinned: !isPinned } : agent));
+      const pinned = updated.filter((agent) => agent.pinned);
+      const rest = updated.filter((agent) => !agent.pinned);
+      paintProfileLists({ pinned, rest });
+      bindProfileForm(updated);
+    });
+  });
+}
+
+const PROFILE_KEY = 'hub_user_profiles';
+function loadProfile(userId) {
+  try {
+    const all = JSON.parse(localStorage.getItem(PROFILE_KEY)) || {};
+    return all[userId] || {};
+  } catch {
+    return {};
+  }
+}
+function saveProfile(userId, profile) {
+  const all = (() => { try { return JSON.parse(localStorage.getItem(PROFILE_KEY)) || {}; } catch { return {}; } })();
+  all[userId] = profile;
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(all));
+}
+function clearProfile(userId) {
+  const all = (() => { try { return JSON.parse(localStorage.getItem(PROFILE_KEY)) || {}; } catch { return {}; } })();
+  delete all[userId];
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(all));
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('读取文件失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('图片加载失败'));
+    img.src = src;
+  });
+}
+
+/**
+ * 头像裁剪弹窗：圆形遮罩 + 拖动平移 + 滚轮缩放，确认后导出 256×256 方形 DataURL。
+ */
+function openAvatarCropper(imageSrc) {
+  return new Promise((resolve, reject) => {
+    loadImage(imageSrc).then((img) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'cropper-overlay';
+
+      const stage = document.createElement('div');
+      stage.className = 'cropper-stage';
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 'cropper-canvas';
+      const ctx = canvas.getContext('2d');
+      const STAGE = 320;
+      const RADIUS = 120;
+      canvas.width = STAGE;
+      canvas.height = STAGE;
+
+      const ring = document.createElement('div');
+      ring.className = 'cropper-ring';
+
+      const hint = document.createElement('p');
+      hint.className = 'cropper-hint';
+      hint.textContent = '拖动调整位置 · 滚轮缩放';
+
+      const actions = document.createElement('div');
+      actions.className = 'cropper-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'ghost-button';
+      cancelBtn.textContent = '取消';
+      const confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'button';
+      confirmBtn.textContent = '使用此头像';
+      actions.append(cancelBtn, confirmBtn);
+
+      stage.append(canvas, ring, hint);
+      overlay.append(stage, actions);
+      document.body.append(overlay);
+
+      // 视图状态：图片中心相对画布中心，缩放
+      const natural = { w: img.naturalWidth || img.width, h: img.naturalHeight || img.height };
+      const fitScale = Math.max(STAGE / natural.w, STAGE / natural.h);
+      const view = {
+        cx: STAGE / 2,
+        cy: STAGE / 2,
+        scale: fitScale,
+        minScale: fitScale * 0.5,
+        maxScale: fitScale * 4,
+      };
+
+      function clamp() {
+        // 至少保证圆形遮罩内不露出图片外
+        const halfW = (natural.w * view.scale) / 2;
+        const halfH = (natural.h * view.scale) / 2;
+        const minX = STAGE / 2 - halfW + RADIUS;
+        const maxX = STAGE / 2 + halfW - RADIUS;
+        const minY = STAGE / 2 - halfH + RADIUS;
+        const maxY = STAGE / 2 + halfH - RADIUS;
+        view.cx = Math.min(Math.max(view.cx, Math.min(minX, maxX)), Math.max(minX, maxX));
+        view.cy = Math.min(Math.max(view.cy, Math.min(minY, maxY)), Math.max(minY, maxY));
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, STAGE, STAGE);
+        ctx.save();
+        // 圆形裁剪
+        ctx.beginPath();
+        ctx.arc(STAGE / 2, STAGE / 2, RADIUS, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(
+          img,
+          view.cx - (natural.w * view.scale) / 2,
+          view.cy - (natural.h * view.scale) / 2,
+          natural.w * view.scale,
+          natural.h * view.scale,
+        );
+        ctx.restore();
+        // 遮罩外暗化
+        ctx.save();
+        ctx.fillStyle = 'rgba(8, 10, 18, 0.62)';
+        ctx.beginPath();
+        ctx.rect(0, 0, STAGE, STAGE);
+        ctx.arc(STAGE / 2, STAGE / 2, RADIUS, 0, Math.PI * 2, true);
+        ctx.fill('evenodd');
+        ctx.restore();
+      }
+
+      clamp();
+      draw();
+
+      // 拖动平移
+      let dragging = false;
+      let lastX = 0;
+      let lastY = 0;
+      function onPointerDown(event) {
+        dragging = true;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        canvas.setPointerCapture?.(event.pointerId);
+      }
+      function onPointerMove(event) {
+        if (!dragging) return;
+        view.cx += event.clientX - lastX;
+        view.cy += event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        clamp();
+        draw();
+      }
+      function onPointerUp(event) {
+        dragging = false;
+        canvas.releasePointerCapture?.(event.pointerId);
+      }
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+
+      // 滚轮缩放
+      function onWheel(event) {
+        event.preventDefault();
+        const factor = event.deltaY > 0 ? 0.92 : 1.08;
+        view.scale = Math.min(Math.max(view.scale * factor, view.minScale), view.maxScale);
+        clamp();
+        draw();
+      }
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+
+      function cleanup() {
+        canvas.removeEventListener('pointerdown', onPointerDown);
+        canvas.removeEventListener('pointermove', onPointerMove);
+        canvas.removeEventListener('pointerup', onPointerUp);
+        canvas.removeEventListener('pointercancel', onPointerUp);
+        canvas.removeEventListener('wheel', onWheel);
+        overlay.remove();
+      }
+
+      cancelBtn.addEventListener('click', () => {
+        cleanup();
+        resolve(null);
+      });
+      confirmBtn.addEventListener('click', () => {
+        const out = document.createElement('canvas');
+        out.width = 256;
+        out.height = 256;
+        const octx = out.getContext('2d');
+        const crop = RADIUS * 2;
+        const sourceLeft = view.cx - RADIUS;
+        const sourceTop = view.cy - RADIUS;
+        octx.drawImage(canvas, sourceLeft, sourceTop, crop, crop, 0, 0, 256, 256);
+        cleanup();
+        resolve(out.toDataURL('image/png'));
+      });
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) {
+          cleanup();
+          resolve(null);
+        }
+      });
+    }).catch(reject);
+  });
 }
 
 function bindSubmitForm() {
@@ -1147,9 +1715,7 @@ function readableError(error) {
 
 function rememberRecent(id) {
   if (!id) return;
-  const recent = loadJson(STORAGE.recent, []).filter((item) => item !== id);
-  recent.unshift(id);
-  localStorage.setItem(STORAGE.recent, JSON.stringify(recent.slice(0, 12)));
+  localStorage.removeItem(STORAGE.recent);
 }
 
 function replaceAdminAgent(updated) {
