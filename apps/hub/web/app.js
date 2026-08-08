@@ -759,7 +759,7 @@ function renderSettings() {
       <div>
         <p class="eyebrow">SETTINGS</p>
         <h1>模型配置</h1>
-        <p class="lead">在这里配置你自己的大模型 Key。配置后，Hub 主页面与所有 Hub 调度的子 Agent（如瀚海行、校园助手 Demo）都可以调用你的模型。前端先打通界面，后端持久化与透传将在后续接入。</p>
+        <p class="lead">配置你的默认大模型，用于 Hub 相关调用。</p>
       </div>
     </section>
     <section class="submit-layout">
@@ -784,36 +784,11 @@ function renderSettings() {
           <span>API Key</span>
           <input name="apiKey" type="password" value="${escapeAttr(saved.apiKey)}" placeholder="sk-..." autocomplete="off" />
         </label>
-        <label class="field">
-          <span>调用温度（temperature）</span>
-          <input name="temperature" type="number" min="0" max="2" step="0.1" value="${escapeAttr(saved.temperature ?? '0.7')}" />
-        </label>
-        <label class="field">
-          <span>最大输出 token</span>
-          <input name="maxTokens" type="number" min="64" max="32000" step="64" value="${escapeAttr(saved.maxTokens ?? '2048')}" />
-        </label>
         <div class="action-row">
-          <button class="ghost-button" type="button" data-test-model>测试连通</button>
           <button class="ghost-button" type="button" data-reset-model>清空</button>
           <button class="button" type="submit">保存配置</button>
         </div>
       </form>
-      <aside class="panel">
-        <h2>说明</h2>
-        <p class="lead">目前仅在浏览器本地保存（localStorage），用于前端原型演示。后续会在 Hub 后端增加 <code>POST /api/settings</code> 持久化到用户档案，并由 Hub 网关按身份读取后在网关层注入到子 Agent 调用。</p>
-        <h3>生效范围</h3>
-        <ul class="validation-list">
-          <li>Hub 主页面搜索 / 问答（占位）</li>
-          <li>统一聊天页（Connected Agent，透传 <code>custom_llm</code> 字段）</li>
-          <li>完整工作台（Featured Agent，如瀚海行 Agent）</li>
-        </ul>
-        <h3>安全</h3>
-        <p class="lead">生产环境不允许把 Key 直接暴露给浏览器。请选择以下方式之一：</p>
-        <ul class="validation-list">
-          <li>由 Hub 在服务端持有 Key，网关层替换 <code>Authorization</code> 头；</li>
-          <li>改为走 SSO/校园统一身份，由网关签发短期访问令牌。</li>
-        </ul>
-      </aside>
     </section>
   `;
   bindSettingsForm();
@@ -829,20 +804,10 @@ function bindSettingsForm() {
       model: fieldValue(form, 'model').trim(),
       baseUrl: fieldValue(form, 'baseUrl').trim(),
       apiKey: fieldValue(form, 'apiKey').trim(),
-      temperature: fieldValue(form, 'temperature'),
-      maxTokens: fieldValue(form, 'maxTokens'),
       savedAt: new Date().toISOString(),
     };
     saveSettings(data);
     toast('已保存到本地（前端原型）。后续将打通 Hub 后端持久化。');
-  });
-  document.querySelector('[data-test-model]')?.addEventListener('click', () => {
-    const data = currentSettings(form);
-    if (!data.apiKey) {
-      toast('请先填写 API Key 再测试。');
-      return;
-    }
-    toast(`已记录 ${data.provider}/${data.model}。联通性验证接口待接入。`);
   });
   document.querySelector('[data-reset-model]')?.addEventListener('click', () => {
     form.reset();
@@ -857,8 +822,6 @@ function currentSettings(form) {
     model: fieldValue(form, 'model').trim(),
     baseUrl: fieldValue(form, 'baseUrl').trim(),
     apiKey: fieldValue(form, 'apiKey').trim(),
-    temperature: fieldValue(form, 'temperature'),
-    maxTokens: fieldValue(form, 'maxTokens'),
   };
 }
 

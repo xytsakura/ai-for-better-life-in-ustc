@@ -624,6 +624,12 @@ function renderMarkdownTable(headers, alignments, rows) {
   return `<div class="markdown-table-wrap" role="region" aria-label="表格，可横向滚动" tabindex="0"><table class="markdown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
+function buildReasoningHtml(reasoning) {
+  if (!reasoning || !String(reasoning).trim()) return '';
+  const html = renderMarkdown(reasoning);
+  return `<details class="reasoning-block"><summary>思考过程</summary><div class="reasoning-markdown">${html}</div></details>`;
+}
+
 function renderMarkdown(value) {
   const lines = String(value ?? '').split(/\r?\n/);
   const output = [];
@@ -785,6 +791,7 @@ function closeReferenceViewer() {
   };
   renderReferenceViewer();
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  document.body.classList.remove('document-reader-fullscreen');
 }
 
 function openReferenceViewer(reference) {
@@ -829,6 +836,25 @@ function openDocumentPreview(documentId, pageNumber = 1) {
     id: doc.id,
     excerpt: `打开 ${doc.title} 的第 ${pageNumber} 页原文`,
   });
+}
+
+function viewDocumentNewTab(documentId) {
+  if (!documentId) return;
+  const url = `${location.pathname}?doc=${encodeURIComponent(documentId)}`;
+  window.open(url, '_blank', 'noopener');
+}
+
+function syncSourceSelectors() {
+  renderSourceList('source-list', 'source-count', syncSourceSelectors);
+  renderSourceList('home-source-list', 'home-source-count', syncSourceSelectors);
+  updateQueryStatus();
+}
+
+function openDocumentFromUrl() {
+  const docId = new URLSearchParams(location.search).get('doc');
+  if (!docId) return;
+  openReferenceViewer({ document_id: docId, document_title: docId, page: 1, id: docId });
+  document.body.classList.add('document-reader-fullscreen');
 }
 
 function openMarketplaceDocumentPreview(document) {
@@ -2343,7 +2369,10 @@ function renderDocuments() {
     const warning = doc.needs_ocr_pages || doc.needs_review_pages || doc.failed_pages;
     return `
       <div class="document-row">
-        <button class="document-open" data-open-document="${escapeHtml(doc.id)}" type="button" aria-label="打开 ${escapeHtml(doc.title)}">
+        <label class="doc-select" title="勾选该资料用于提问">
+          <input type="checkbox" class="doc-select-checkbox" value="${escapeHtml(doc.id)}" ${state.selectedDocumentIds.has(doc.id) ? 'checked' : ''}${state.isQuerying || doc.use_in_rag === false ? ' disabled' : ''}>
+        </label>
+        <button class="document-open" data-open-document="${escapeHtml(doc.id)}" type="button" aria-label="查看 ${escapeHtml(doc.title)}">
           <div class="document-title" title="${escapeHtml(doc.title)}">${escapeHtml(doc.title)}</div>
           <div class="document-meta">
             <span>${escapeHtml(doc.material_type)}</span>
@@ -2353,7 +2382,9 @@ function renderDocuments() {
           <span class="parse-badge ${warning ? 'warn' : ''}">${warning ? `需关注 ${doc.needs_ocr_pages + doc.needs_review_pages + doc.failed_pages} 页` : '解析完成'}</span>
         </button>
         <div class="doc-actions">
-          ${writeable ? `<button class="icon-text" data-reparse="${doc.id}" type="button">重解析</button><button class="icon-text" data-delete="${doc.id}" type="button">删除</button>` : ''}
+          <button class="icon-text doc-view-btn" data-view="${escapeHtml(doc.id)}" type="button">查看</button>
+          <button class="icon-text" data-save="${escapeHtml(doc.id)}" type="button">保存</button>
+          ${writeable ? `<button class="icon-text" data-delete="${doc.id}" type="button">删除</button>` : ''}
         </div>
       </div>
     `;
@@ -2365,9 +2396,24 @@ function renderDocuments() {
   `;
 
   $$('[data-delete]').forEach(btn => btn.addEventListener('click', () => removeDocument(btn.dataset.delete)));
-  $$('[data-reparse]').forEach(btn => btn.addEventListener('click', () => reparse(btn.dataset.reparse)));
+  $$('[data-save]').forEach(btn => btn.addEventListener('click', () => saveToPersonal(btn.dataset.save)));
+  $$('.doc-view-btn').forEach(btn => btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    viewDocumentNewTab(btn.dataset.view);
+  }));
   $$('[data-open-document]').forEach(row => {
-    row.addEventListener('click', () => openDocumentPreview(row.dataset.openDocument));
+    row.addEventListener('click', () => viewDocumentNewTab(row.dataset.openDocument));
+  });
+  $$('.doc-select-checkbox').forEach(input => {
+    input.addEventListener('change', () => {
+      if (state.isQuerying) {
+        input.checked = state.selectedDocumentIds.has(input.value);
+        return;
+      }
+      if (input.checked) state.selectedDocumentIds.add(input.value);
+      else state.selectedDocumentIds.delete(input.value);
+      syncSourceSelectors();
+    });
   });
   renderLibraryPublicationAction();
 }
@@ -2386,15 +2432,19 @@ async function removeDocument(documentId) {
   }
 }
 
-async function reparse(documentId) {
+async function saveToPersonal(documentId) {
   try {
     const authContext = captureAuthContext();
-    await api(`/api/documents/${documentId}/reparse`, { method: 'POST' });
+    await api(`/api/documents/${documentId}/save-to-personal`, { method: 'POST' });
     if (!authContextMatches(authContext)) return;
-    toast('资料已重新解析', 'success');
+    toast('已保存到个人资料库', 'success');
     await loadSpaces();
   } catch (error) {
-    toast(error.message, 'error');
+    if (error && error.code === 'duplicate_document') {
+      toast('该资料已在你的个人资料库中', 'info');
+    } else {
+      toast(error.message, 'error');
+    }
   }
 }
 
@@ -3631,7 +3681,7 @@ function renderHomeAnswer(result, mode, ctx) {
     ? (mode === 'direct' ? '模型不可用' : '检索降级')
     : (mode === 'direct' ? '直接回答' : '资料回答');
   ctx.modeEl.className = `chat-meta${result.degraded ? ' warn' : ''}`;
-  ctx.textEl.innerHTML = renderMarkdown(result.answer);
+  ctx.textEl.innerHTML = buildReasoningHtml(result.reasoning) + renderMarkdown(result.answer);
   renderMath(ctx.textEl);
 
   const citations = result.citations || [];
@@ -3643,14 +3693,13 @@ function renderHomeAnswer(result, mode, ctx) {
     ctx.citationList.innerHTML = citations.length ? citations.map(source => `
       <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
         <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
-        <div class="citation-excerpt">${escapeHtml(source.excerpt)}</div>
       </button>
     `).join('') : '';
     wireCitationButtons(ctx.citationList, citations);
   }
   const answerText = String(result.answer || '').trim();
   if (answerText) {
-    const entry = { role: 'assistant', messageId: ctx.messageId, content: answerText, mode, citations, branches: [] };
+    const entry = { role: 'assistant', messageId: ctx.messageId, content: answerText, mode, citations, branches: [], reasoning: result.reasoning || '' };
     state.homeConversation.push(entry);
     renderBranchPanels(ctx.rowEl, entry);
   }
@@ -3912,7 +3961,7 @@ function renderAnswer(result, mode, prefix) {
     : (mode === 'direct' ? '直接回答' : '资料回答');
   modeEl.className = `mode-pill ${result.degraded ? 'warn' : ''}`;
 
-  textEl.innerHTML = renderMarkdown(result.answer);
+  textEl.innerHTML = buildReasoningHtml(result.reasoning) + renderMarkdown(result.answer);
   renderMath(textEl);
 
   const citations = result.citations || [];
@@ -3923,7 +3972,6 @@ function renderAnswer(result, mode, prefix) {
     citationList.innerHTML = citations.length ? citations.map(source => `
       <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
         <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
-        <div class="citation-excerpt">${escapeHtml(source.excerpt)}</div>
       </button>
     `).join('') : '<div class="muted" style="font-size:.78rem">本次回答没有可验证引用</div>';
     wireCitationButtons(citationList, citations);
@@ -4514,7 +4562,7 @@ function appendHomeMessageBubble(entry) {
     meta.textContent = failed ? '回答未完成' : (entry.mode === 'retrieval' ? '资料回答' : '直接回答');
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble-assistant${failed ? ' chat-bubble-incomplete' : ''}`;
-    bubble.innerHTML = renderMarkdown(entry.content || '');
+    bubble.innerHTML = buildReasoningHtml(entry.reasoning) + renderMarkdown(entry.content || '');
     renderMath(bubble);
     const citations = failed ? [] : (Array.isArray(entry.citations) ? entry.citations : []);
     if (!failed) {
@@ -4537,7 +4585,6 @@ function appendHomeMessageBubble(entry) {
         <div class="citation-list">${citations.map(source => `
           <button class="citation-item citation-button" type="button" ${citeButtonDataset(source)}>
             <strong>[${escapeHtml(source.id)}] ${escapeHtml(source.document_title)} · 第 ${escapeHtml(source.page)} 页</strong>
-            <span class="citation-excerpt">${escapeHtml(source.excerpt)}</span>
           </button>
         `).join('')}</div>
       `;
@@ -6286,6 +6333,7 @@ async function init() {
   initRouting();
   updateHomeModeLabel();
   await loadBase();
+  openDocumentFromUrl();
 }
 
 document.addEventListener('DOMContentLoaded', init);

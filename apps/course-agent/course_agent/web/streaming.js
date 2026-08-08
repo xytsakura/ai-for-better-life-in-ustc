@@ -5,7 +5,7 @@
     module.exports = api;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (root) {
-  const KNOWN_EVENTS = new Set(['start', 'delta', 'complete', 'error']);
+  const KNOWN_EVENTS = new Set(['start', 'delta', 'reasoning', 'complete', 'error']);
 
   class StreamApiError extends Error {
     constructor(message, options = {}) {
