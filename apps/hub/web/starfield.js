@@ -28,6 +28,12 @@ export function sampleGaussianPair(random = Math.random) {
   return [magnitude * Math.cos(angle), magnitude * Math.sin(angle)];
 }
 
+export function resolveLightTheme(theme, systemLight = false, followSystemLight = true) {
+  if (theme === 'light') return true;
+  if (theme === 'system') return Boolean(systemLight) && followSystemLight !== false;
+  return false;
+}
+
 export function generateStarField(options = {}) {
   const width = Math.max(1, Math.floor(Number(options.width) || 1));
   const height = Math.max(1, Math.floor(Number(options.height) || 1));
@@ -330,9 +336,8 @@ export function mountStarfield(container, options = {}) {
 
   function isLightTheme() {
     const theme = doc.documentElement?.dataset?.theme;
-    if (options.theme === 'light' || theme === 'light') return true;
-    if (options.theme === 'dark' || theme === 'dark') return false;
-    return lightSchemeQuery.matches && options.followSystemLight !== false;
+    const activeTheme = ['dark', 'light', 'system'].includes(options.theme) ? options.theme : theme;
+    return resolveLightTheme(activeTheme, lightSchemeQuery.matches, options.followSystemLight);
   }
 }
 

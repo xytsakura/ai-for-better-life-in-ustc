@@ -500,6 +500,7 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert 'href="/styles.css?' in deep_link.text
     assert 'src="/assets/ustc-emblem.jpg"' in deep_link.text
     assert 'src="/splash.js?' in deep_link.text
+    assert 'src="/hub-theme.js?' in deep_link.text
     assert 'src="/app.js?' in deep_link.text
     assert 'href="./styles.css?' not in deep_link.text
     assert 'src="./' not in deep_link.text
@@ -507,6 +508,7 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert app_script.status_code == 200
     assert "from './hub-core.js?v=" in app_script.text
     assert client.get("/hub-core.js").status_code == 200
+    assert client.get("/hub-theme.js").status_code == 200
     assert client.get("/starfield.js").status_code == 200
     assert client.get("/assets/ustc-emblem.jpg").status_code == 200
 

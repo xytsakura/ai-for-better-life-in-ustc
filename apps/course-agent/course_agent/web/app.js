@@ -300,14 +300,11 @@ const PUBLICATION_STATUS_LABELS = Object.freeze({
 const MARKETPLACE_PAGE_SIZE = 50;
 
 function normalizeTheme(value) {
-  return value === 'light' ? 'light' : 'dark';
+  return globalThis.CourseAgentTheme?.normalize(value) ?? (value === 'light' ? 'light' : 'dark');
 }
 
 function loadTheme() {
-  try {
-    const stored = localStorage.getItem(THEME_KEY);
-    if (stored === 'dark' || stored === 'light') return stored;
-  } catch {}
+  if (globalThis.CourseAgentTheme) return globalThis.CourseAgentTheme.readFromGlobal();
   return normalizeTheme(document.documentElement.dataset.theme);
 }
 

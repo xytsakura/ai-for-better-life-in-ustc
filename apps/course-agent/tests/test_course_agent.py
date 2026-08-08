@@ -197,7 +197,9 @@ def test_theme_selector_and_light_palette_are_packaged(tmp_path: Path):
     assert 'data-settings-tab="theme"' in html
     assert 'name="theme" value="dark"' in html
     assert 'name="theme" value="light"' in html
-    assert html.index("course-agent:theme") < html.index("/assets/styles.css")
+    assert html.index("/assets/course-theme.js") < html.index("CourseAgentTheme.readFromGlobal()")
+    assert html.index("CourseAgentTheme.readFromGlobal()") < html.index("/assets/styles.css")
+    assert client.get("/assets/course-theme.js").status_code == 200
 
     styles = client.get("/assets/styles.css").text
     assert ':root[data-theme="light"]' in styles
@@ -289,7 +291,7 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
     assert '/assets/styles.css?v=20260807-3' in html
-    assert '/assets/app.js?v=20260807-4' in html
+    assert '/assets/app.js?v=20260808-1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles

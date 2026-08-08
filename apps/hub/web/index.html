@@ -8,6 +8,10 @@
       name="description"
       content="面向校园场景的 Agent 应用广场、统一聊天、开发者接入和管理审核工作台。"
     />
+    <script src="/hub-theme.js?v=20260808-1"></script>
+    <script>
+      document.documentElement.dataset.theme = globalThis.HubTheme.readFromGlobal();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Caveat:wght@500;700&display=swap" rel="stylesheet" />
@@ -75,6 +79,6 @@
     </template>
 
     <script src="/splash.js?v=20260807-2" defer></script>
-    <script type="module" src="/app.js?v=20260807-18"></script>
+    <script type="module" src="/app.js?v=20260808-1"></script>
   </body>
 </html>

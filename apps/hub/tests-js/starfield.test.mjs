@@ -5,10 +5,20 @@ import {
   createInteractionState,
   createSeededRandom,
   generateStarField,
+  resolveLightTheme,
   sampleGaussianPair,
   shouldAnimate,
   stepInteraction,
 } from '../web/starfield.js';
+
+test('theme resolution defaults invalid values to dark', () => {
+  assert.equal(resolveLightTheme('dark', true), false);
+  assert.equal(resolveLightTheme('light', false), true);
+  assert.equal(resolveLightTheme('system', true), true);
+  assert.equal(resolveLightTheme('system', true, false), false);
+  assert.equal(resolveLightTheme('sepia', true), false);
+  assert.equal(resolveLightTheme(undefined, true), false);
+});
 
 test('seeded random and gaussian sampling are reproducible', () => {
   const first = createSeededRandom('fixed-hub-seed');

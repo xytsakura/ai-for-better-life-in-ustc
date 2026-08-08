@@ -5,15 +5,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>瀚海行agent · 真理如瀚海，求索亦行舟</title>
+  <script src="/assets/course-theme.js?v=20260808-1"></script>
   <script>
-    (() => {
-      try {
-        const theme = localStorage.getItem('course-agent:theme');
-        if (theme === 'dark' || theme === 'light') {
-          document.documentElement.dataset.theme = theme;
-        }
-      } catch {}
-    })();
+    document.documentElement.dataset.theme = globalThis.CourseAgentTheme.readFromGlobal();
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
@@ -1033,6 +1027,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=course-streaming-v1" defer></script>
-  <script src="/assets/app.js?v=20260807-4" defer></script>
+  <script src="/assets/app.js?v=20260808-1" defer></script>
 </body>
 </html>

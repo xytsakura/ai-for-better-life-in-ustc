@@ -95,11 +95,11 @@ function bindGlobalEvents() {
   });
 
   themeToggle?.addEventListener('click', () => {
-    const current = document.documentElement.dataset.theme || 'dark';
-    const next = current === 'dark' ? 'light' : current === 'light' ? 'system' : 'dark';
+    const current = globalThis.HubTheme.normalize(document.documentElement.dataset.theme);
+    const next = globalThis.HubTheme.next(current);
     localStorage.setItem(STORAGE.theme, next);
     document.documentElement.dataset.theme = next;
-    themeToggle.textContent = next === 'dark' ? '深色模式' : next === 'light' ? '浅色模式' : '跟随系统';
+    themeToggle.textContent = globalThis.HubTheme.label(next);
     if (state.route.name === 'portal') mountPortalEffects();
   });
 
@@ -107,10 +107,10 @@ function bindGlobalEvents() {
 }
 
 function applyTheme() {
-  const theme = localStorage.getItem(STORAGE.theme) || 'dark';
+  const theme = globalThis.HubTheme.readFromGlobal();
   document.documentElement.dataset.theme = theme;
   if (themeToggle) {
-    themeToggle.textContent = theme === 'dark' ? '深色模式' : theme === 'light' ? '浅色模式' : '跟随系统';
+    themeToggle.textContent = globalThis.HubTheme.label(theme);
   }
 }
 
