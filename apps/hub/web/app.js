@@ -944,7 +944,9 @@ function pickRecentAgents(allAgents, pinnedIds = []) {
   return [...pinned, ...rest];
 }
 
-function paintProfileLists({ pinned, rest }) {
+function paintProfileLists(agents) {
+  const pinned = agents.filter((agent) => agent.pinned);
+  const rest = agents.filter((agent) => !agent.pinned);
   const renderItem = (agent) => `
     <li class="profile-agent" data-agent-id="${escapeAttr(agent.id)}">
       <div class="profile-agent__head">
@@ -1029,20 +1031,20 @@ function bindProfileForm(currentAgents) {
     workingAvatar = '';
     if (userAvatar) renderUserAvatar(userAvatar, state.user, {});
     const fresh = pickRecentAgents(state.agents, []);
-    paintProfileLists(fresh);
+    currentAgents.splice(0, currentAgents.length, ...fresh);
+    paintProfileLists(currentAgents);
     toast('已恢复默认个人主页。');
   });
 
-  document.querySelectorAll('[data-toggle-pin]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const id = button.dataset.togglePin;
-      const isPinned = button.dataset.pinned === '1';
-      const updated = currentAgents.map((agent) => (agent.id === id ? { ...agent, pinned: !isPinned } : agent));
-      const pinned = updated.filter((agent) => agent.pinned);
-      const rest = updated.filter((agent) => !agent.pinned);
-      paintProfileLists({ pinned, rest });
-      bindProfileForm(updated);
-    });
+  document.querySelector('.profile-layout')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-toggle-pin]');
+    if (!button) return;
+    const id = button.dataset.togglePin;
+    const isPinned = button.dataset.pinned === '1';
+    const updated = currentAgents.map((agent) => (agent.id === id ? { ...agent, pinned: !isPinned } : agent));
+    currentAgents.splice(0, currentAgents.length, ...updated);
+    paintProfileLists(currentAgents);
+    persistProfileFromForm(form, currentAgents, workingAvatar);
   });
 }
 

@@ -288,8 +288,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=bichon-avatar-v1' in html
-    assert '/assets/app.js?v=bichon-avatar-v1' in html
+    assert '/assets/styles.css?v=20260807-3' in html
+    assert '/assets/app.js?v=20260807-4' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -443,7 +443,8 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     client, _ = make_client(tmp_path)
 
     html = client.get("/").text
-    assert 'id="home-model-select"' in html
+    assert 'id="home-model-input"' in html
+    assert 'id="home-model-list"' in html
     assert 'id="home-reasoning-effort"' in html
     assert 'id="home-context-meter"' in html
     assert 'id="home-mode-label"' not in html
@@ -460,7 +461,8 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
     assert 'id="document-reader" role="dialog" aria-modal="false"' in html
     assert 'id="settings-discover-models"' in html
     assert 'id="settings-model-list"' in html
-    assert '<select id="setting-model"></select>' in html
+    assert 'id="setting-model"' in html
+    assert 'list="setting-model-list"' in html
     assert 'id="settings-model-datalist"' not in html
 
     script = client.get("/assets/app.js").text.replace("\r\n", "\n")
