@@ -86,6 +86,23 @@ def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
     assert "data-marketplace-preview-document" in script
 
 
+def test_document_selection_stays_in_sync_across_all_surfaces(tmp_path: Path):
+    client = make_client(tmp_path)
+    script = client.get("/assets/app.js").text.replace("\r\n", "\n")
+
+    sync_section = script.split("function syncSourceSelectors()", 1)[1].split("\n}", 1)[0]
+    assert "renderSourceList('source-list'" in sync_section
+    assert "renderSourceList('home-source-list'" in sync_section
+    assert "renderDocuments();" in sync_section
+
+    bulk_section = script.split("function selectDocumentsByAction(", 1)[1].split(
+        "function updateQueryStatus()", 1
+    )[0]
+    assert "renderSourceSelector();" in bulk_section
+    assert "renderHomeSourceSelector();" in bulk_section
+    assert "renderDocuments();" in bulk_section
+
+
 def test_marketplace_frontend_clears_identity_scoped_state(tmp_path: Path):
     client = make_client(tmp_path)
     script = client.get("/assets/app.js").text.replace("\r\n", "\n")

@@ -101,7 +101,7 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     assert '<link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">' in main_html
     assert '<div class="brand-mark">107</div>' not in main_html
     assert '<div class="home-logo-mark">107</div>' not in main_html
-    assert '<title>瀚海行agent · 真理如瀚海，求索亦行舟</title>' in main_html
+    assert '<title>瀚海行Agent</title>' in main_html
     assert '<div class="brand" role="img" aria-label="瀚海行agent，AI for better life in ustc">' in main_html
     assert '<div class="brand-title">瀚海行agent</div>' in main_html
     assert '<div class="brand-sub">AI for better life in ustc</div>' in main_html
@@ -201,8 +201,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=20260807-3' in html
-    assert '/assets/app.js?v=20260808-1' in html
+    assert '/assets/styles.css?v=20260809-1' in html
+    assert '/assets/app.js?v=20260809-1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles

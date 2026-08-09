@@ -1378,6 +1378,68 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 raise HTTPException(status_code=422, detail=_error("reparse_failed", str(exc))) from exc
         return {"document": result}
 
+    @app.post("/api/documents/{document_id}/save-to-personal")
+    def save_to_personal(document_id: str, user_id: str = Depends(current_user)) -> dict:
+        with get_db() as conn:
+            require_document(conn, user_id, document_id, operation="download")
+            source = conn.execute(
+                """SELECT d.*, s.source_url, s.license_status, s.source_type
+                   FROM documents d JOIN sources s ON s.id = d.source_id
+                   WHERE d.id = ? AND d.status = 'active'""",
+                (document_id,),
+            ).fetchone()
+            personal = conn.execute(
+                """SELECT sp.id
+                   FROM spaces sp JOIN memberships m ON m.space_id = sp.id
+                   WHERE sp.space_type = 'personal' AND sp.owner_id = ?
+                     AND m.user_id = ? AND m.role = 'owner' AND m.status = 'active'
+                   LIMIT 1""",
+                (user_id, user_id),
+            ).fetchone()
+            if not source or not personal:
+                raise HTTPException(
+                    status_code=404,
+                    detail=_error("personal_space_not_found", "个人资料库不存在"),
+                )
+            metadata = DocumentMetadata(
+                title=str(source["title"]),
+                course=str(source["course"]),
+                semester=source["semester"],
+                material_type=str(source["material_type"]),
+                source_url=source["source_url"],
+                license_status=str(source["license_status"]),
+                source_type="saved-copy",
+            )
+            try:
+                result = ingest_pdf(
+                    conn,
+                    settings,
+                    Path(str(source["file_path"])),
+                    str(personal["id"]),
+                    metadata,
+                    copy_to_uploads=True,
+                )
+            except DuplicateDocument as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail=_error("duplicate_document", f"资料已存在：{exc.document_id}"),
+                ) from exc
+            except IngestionError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=_error("save_to_personal_failed", str(exc)),
+                ) from exc
+            audit_event(
+                conn,
+                user_id,
+                "document_saved_to_personal",
+                "document",
+                str(result["id"]),
+                {"source_document_id": document_id},
+            )
+            conn.commit()
+        return {"document": result}
+
     @app.get("/api/documents/{document_id}/pages/{page_number}")
     def document_page(document_id: str, page_number: int, user_id: str = Depends(current_user)) -> dict:
         if page_number < 1:

@@ -810,8 +810,8 @@ function bindSettingsForm() {
     toast('已保存到本地（前端原型）。后续将打通 Hub 后端持久化。');
   });
   document.querySelector('[data-reset-model]')?.addEventListener('click', () => {
-    form.reset();
     clearSettings();
+    renderSettings();
     toast('已清空本地模型配置。');
   });
 }

@@ -507,6 +507,9 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     app_script = client.get("/app.js")
     assert app_script.status_code == 200
     assert "from './hub-core.js?v=" in app_script.text
+    reset_handler = app_script.text.split("[data-reset-model]", 1)[1].split("});", 1)[0]
+    assert reset_handler.index("clearSettings();") < reset_handler.index("renderSettings();")
+    assert "form.reset();" not in reset_handler
     assert client.get("/hub-core.js").status_code == 200
     assert client.get("/hub-theme.js").status_code == 200
     assert client.get("/starfield.js").status_code == 200

@@ -219,6 +219,55 @@ def test_direct_mode_forwards_conversation_history(monkeypatch, tmp_path):
     assert "再举一个例子" in input_messages[-1]["content"]
 
 
+def test_max_output_tokens_allows_bounded_environment_override(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://example.invalid",
+        llm_model="test-model",
+    )
+    _CapturingClient.last_payload = None
+    monkeypatch.setattr("course_agent.llm.httpx.Client", _CapturingClient)
+
+    monkeypatch.setenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "8000")
+    LLMAdapter(settings).generate_direct("测试输出上限")
+    assert _CapturingClient.last_payload["max_output_tokens"] == 8000
+
+    monkeypatch.setenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "not-a-number")
+    LLMAdapter(settings).generate_direct("测试非法配置")
+    assert _CapturingClient.last_payload["max_output_tokens"] == 1200
+
+    monkeypatch.setenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "999999")
+    LLMAdapter(settings).generate_direct("测试上限保护")
+    assert _CapturingClient.last_payload["max_output_tokens"] == 32_000
+
+
+def test_hidden_reasoning_is_never_used_as_visible_answer(tmp_path):
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": "",
+                    "reasoning_content": "这是不应展示的隐藏推理。",
+                }
+            }
+        ],
+        "output": [
+            {
+                "type": "reasoning",
+                "content": [{"type": "reasoning_text", "text": "另一段隐藏推理。"}],
+            },
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "这是最终答案。"}],
+            },
+        ],
+    }
+
+    assert LLMAdapter._extract_text(payload) == "这是最终答案。"
+    assert LLMAdapter._extract_text({"choices": payload["choices"]}) == ""
+
+
 def test_custom_preference_is_sent_as_user_context_not_system_instruction(monkeypatch, tmp_path):
     settings = Settings(
         runtime_dir=tmp_path,

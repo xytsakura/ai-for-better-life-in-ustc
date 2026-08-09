@@ -624,12 +624,6 @@ function renderMarkdownTable(headers, alignments, rows) {
   return `<div class="markdown-table-wrap" role="region" aria-label="表格，可横向滚动" tabindex="0"><table class="markdown-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
-function buildReasoningHtml(reasoning) {
-  if (!reasoning || !String(reasoning).trim()) return '';
-  const html = renderMarkdown(reasoning);
-  return `<details class="reasoning-block"><summary>思考过程</summary><div class="reasoning-markdown">${html}</div></details>`;
-}
-
 function renderMarkdown(value) {
   const lines = String(value ?? '').split(/\r?\n/);
   const output = [];
@@ -847,6 +841,7 @@ function viewDocumentNewTab(documentId) {
 function syncSourceSelectors() {
   renderSourceList('source-list', 'source-count', syncSourceSelectors);
   renderSourceList('home-source-list', 'home-source-count', syncSourceSelectors);
+  renderDocuments();
   updateQueryStatus();
 }
 
@@ -2383,7 +2378,9 @@ function renderDocuments() {
         </button>
         <div class="doc-actions">
           <button class="icon-text doc-view-btn" data-view="${escapeHtml(doc.id)}" type="button">查看</button>
-          <button class="icon-text" data-save="${escapeHtml(doc.id)}" type="button">保存</button>
+          ${state.currentSpace.space_type !== 'personal' && doc.can_download !== false
+            ? `<button class="icon-text" data-save="${escapeHtml(doc.id)}" type="button">保存至个人库</button>`
+            : ''}
           ${writeable ? `<button class="icon-text" data-delete="${doc.id}" type="button">删除</button>` : ''}
         </div>
       </div>
@@ -3356,6 +3353,7 @@ function selectDocumentsByAction(action, context = 'library') {
   }
   renderSourceSelector();
   renderHomeSourceSelector();
+  renderDocuments();
   updateQueryStatus();
 }
 
@@ -3681,7 +3679,7 @@ function renderHomeAnswer(result, mode, ctx) {
     ? (mode === 'direct' ? '模型不可用' : '检索降级')
     : (mode === 'direct' ? '直接回答' : '资料回答');
   ctx.modeEl.className = `chat-meta${result.degraded ? ' warn' : ''}`;
-  ctx.textEl.innerHTML = buildReasoningHtml(result.reasoning) + renderMarkdown(result.answer);
+  ctx.textEl.innerHTML = renderMarkdown(result.answer);
   renderMath(ctx.textEl);
 
   const citations = result.citations || [];
@@ -3699,7 +3697,7 @@ function renderHomeAnswer(result, mode, ctx) {
   }
   const answerText = String(result.answer || '').trim();
   if (answerText) {
-    const entry = { role: 'assistant', messageId: ctx.messageId, content: answerText, mode, citations, branches: [], reasoning: result.reasoning || '' };
+    const entry = { role: 'assistant', messageId: ctx.messageId, content: answerText, mode, citations, branches: [] };
     state.homeConversation.push(entry);
     renderBranchPanels(ctx.rowEl, entry);
   }
@@ -3961,7 +3959,7 @@ function renderAnswer(result, mode, prefix) {
     : (mode === 'direct' ? '直接回答' : '资料回答');
   modeEl.className = `mode-pill ${result.degraded ? 'warn' : ''}`;
 
-  textEl.innerHTML = buildReasoningHtml(result.reasoning) + renderMarkdown(result.answer);
+  textEl.innerHTML = renderMarkdown(result.answer);
   renderMath(textEl);
 
   const citations = result.citations || [];
@@ -4562,7 +4560,7 @@ function appendHomeMessageBubble(entry) {
     meta.textContent = failed ? '回答未完成' : (entry.mode === 'retrieval' ? '资料回答' : '直接回答');
     const bubble = document.createElement('div');
     bubble.className = `chat-bubble-assistant${failed ? ' chat-bubble-incomplete' : ''}`;
-    bubble.innerHTML = buildReasoningHtml(entry.reasoning) + renderMarkdown(entry.content || '');
+    bubble.innerHTML = renderMarkdown(entry.content || '');
     renderMath(bubble);
     const citations = failed ? [] : (Array.isArray(entry.citations) ? entry.citations : []);
     if (!failed) {

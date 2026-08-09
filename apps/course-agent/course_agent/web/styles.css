@@ -1382,54 +1382,6 @@ body.document-reader-open .library-chat { display: none; }
 .chat-bubble-assistant > *:first-child { margin-top: 0; }
 .chat-bubble-assistant > *:last-child { margin-bottom: 0; }
 
-/* Collapsible "thinking process" block shown above an answer */
-.reasoning-block {
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--text-tertiary) 8%, transparent);
-  margin-bottom: 12px;
-  font-size: 0.9em;
-  overflow: hidden;
-}
-
-.reasoning-block > summary {
-  cursor: pointer;
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  font-weight: 600;
-  font-size: 0.85rem;
-  color: var(--text-tertiary);
-  user-select: none;
-}
-
-.reasoning-block > summary::-webkit-details-marker { display: none; }
-
-.reasoning-block > summary::before {
-  content: "";
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: 5px 0 5px 7px;
-  border-color: transparent transparent transparent currentColor;
-  transition: transform 0.15s ease;
-}
-
-.reasoning-block[open] > summary::before {
-  transform: rotate(90deg);
-}
-
-.reasoning-block .reasoning-markdown {
-  padding: 0 14px 12px;
-  color: var(--text-secondary);
-  line-height: 1.7;
-}
-
-.reasoning-block .reasoning-markdown > *:first-child { margin-top: 0; }
-.reasoning-block .reasoning-markdown > *:last-child { margin-bottom: 0; }
-
 .chat-bubble-assistant ::selection,
 .branch-answer-markdown ::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 

@@ -22,16 +22,10 @@ class LLMResult:
     usage: UsageSummary | None = None
     error_code: str | None = None
     error_message: str | None = None
-    reasoning: str | None = None
 
 
 @dataclass(frozen=True)
 class LLMStreamDelta:
-    text: str
-
-
-@dataclass(frozen=True)
-class LLMStreamReasoning:
     text: str
 
 
@@ -48,12 +42,21 @@ class LLMStreamError:
     partial: bool = False
 
 
-LLMStreamEvent = LLMStreamDelta | LLMStreamReasoning | LLMStreamComplete | LLMStreamError
+LLMStreamEvent = LLMStreamDelta | LLMStreamComplete | LLMStreamError
 
 
 class LLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
+
+    @staticmethod
+    def _max_output_tokens() -> int:
+        raw_value = os.getenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "1200")
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            return 1200
+        return min(max(value, 1), 32_000)
 
     @staticmethod
     def _sanitize_history(history: list[dict] | None) -> list[dict]:
@@ -94,16 +97,15 @@ class LLMAdapter:
             model=model,
             reasoning_effort=reasoning_effort,
         )
-        text, usage, error_code, error_message, reasoning = self._response_text(payload)
+        text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._direct_degraded(error_code, error_message, selected_model, reasoning=reasoning)
+            return self._direct_degraded(error_code, error_message, selected_model)
         return LLMResult(
             answer=text or "",
             citation_ids=[],
             degraded=False,
             model=selected_model,
             usage=usage,
-            reasoning=reasoning,
         )
 
     def generate(
@@ -135,10 +137,10 @@ class LLMAdapter:
             model=model,
             reasoning_effort=reasoning_effort,
         )
-        text, usage, error_code, error_message, reasoning = self._response_text(payload)
+        text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
-            return self._degraded(sources, error_code, error_message, selected_model, reasoning=reasoning)
-        return self._finalize_retrieval_result(text or "", sources, usage, selected_model, reasoning=reasoning)
+            return self._degraded(sources, error_code, error_message, selected_model)
+        return self._finalize_retrieval_result(text or "", sources, usage, selected_model)
 
     async def stream_direct(
         self,
@@ -162,9 +164,6 @@ class LLMAdapter:
         payload["stream"] = True
         saw_delta = False
         async for event in self._response_text_stream(payload):
-            if isinstance(event, LLMStreamReasoning):
-                yield event
-                continue
             if isinstance(event, LLMStreamDelta):
                 saw_delta = True
                 yield event
@@ -220,9 +219,6 @@ class LLMAdapter:
         payload["stream"] = True
         saw_delta = False
         async for event in self._response_text_stream(payload):
-            if isinstance(event, LLMStreamReasoning):
-                yield event
-                continue
             if isinstance(event, LLMStreamDelta):
                 saw_delta = True
                 yield event
@@ -245,7 +241,6 @@ class LLMAdapter:
                 sources,
                 event.result.usage,
                 selected_model,
-                reasoning=event.result.reasoning,
             )
             yield LLMStreamComplete(result)
             return
@@ -279,7 +274,7 @@ class LLMAdapter:
             "model": selected_model,
             "instructions": instructions,
             "input": input_messages,
-            "max_output_tokens": int(os.getenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "8000")),
+            "max_output_tokens": self._max_output_tokens(),
         }
         effective_reasoning = reasoning_effort or os.getenv("COURSE_AGENT_LLM_REASONING_EFFORT") or None
         if effective_reasoning:
@@ -325,7 +320,7 @@ class LLMAdapter:
             "model": selected_model,
             "instructions": instructions,
             "input": input_messages,
-            "max_output_tokens": int(os.getenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "8000")),
+            "max_output_tokens": self._max_output_tokens(),
         }
         effective_reasoning = reasoning_effort or os.getenv("COURSE_AGENT_LLM_REASONING_EFFORT") or None
         if effective_reasoning:
@@ -338,7 +333,6 @@ class LLMAdapter:
         sources: list[SearchResult],
         usage: UsageSummary | None,
         selected_model: str,
-        reasoning: str | None = None,
     ) -> LLMResult:
         valid = {source.citation_id for source in sources}
         citation_ids: list[str] = []
@@ -352,14 +346,13 @@ class LLMAdapter:
 
         answer = re.sub(r"\[S(\d+)\]", keep, text or "")
         if not citation_ids:
-            return self._degraded(sources, "llm_missing_citations", model=selected_model, reasoning=reasoning)
+            return self._degraded(sources, "llm_missing_citations", model=selected_model)
         return LLMResult(
             answer=answer,
             citation_ids=list(dict.fromkeys(citation_ids)),
             degraded=False,
             model=selected_model,
             usage=usage,
-            reasoning=reasoning,
         )
 
     @staticmethod
@@ -386,9 +379,9 @@ class LLMAdapter:
             ),
         }
 
-    def _response_text(self, payload: dict) -> tuple[str | None, UsageSummary | None, str | None, str | None, str | None]:
+    def _response_text(self, payload: dict) -> tuple[str | None, UsageSummary | None, str | None, str | None]:
         if not self.settings.llm_configured:
-            return None, None, "llm_not_configured", None, None
+            return None, None, "llm_not_configured", None
         url = self.settings.llm_base_url.rstrip("/") + "/responses"
         last_code = "llm_request_failed"
         last_message = None
@@ -411,16 +404,15 @@ class LLMAdapter:
                     break
                 data = response.json()
                 text = self._extract_text(data).strip()
-                reasoning = self._extract_reasoning(data)
                 if not text:
-                    return None, None, "llm_empty_response", None, None
+                    return None, None, "llm_empty_response", None
                 usage = normalize_usage(data.get("usage"), str(payload.get("model") or ""))
-                return text, usage, None, None, reasoning
+                return text, usage, None, None
             except (httpx.HTTPError, ValueError):
                 last_code = "llm_network_or_parse_error"
                 if attempt == 0:
                     continue
-        return None, None, last_code, last_message, None
+        return None, None, last_code, last_message
 
     async def _response_text_stream(self, payload: dict) -> AsyncIterator[LLMStreamEvent]:
         if not self.settings.llm_configured:
@@ -429,7 +421,6 @@ class LLMAdapter:
 
         url = self.settings.llm_base_url.rstrip("/") + "/responses"
         accumulated: list[str] = []
-        reasoning_accumulated: list[str] = []
         terminal_seen = False
         try:
             async with httpx.AsyncClient(timeout=self.settings.llm_timeout_seconds) as client:
@@ -464,7 +455,6 @@ class LLMAdapter:
                                 event,
                                 payload,
                                 accumulated,
-                                reasoning_accumulated,
                             ):
                                 if isinstance(parsed, LLMStreamComplete):
                                     terminal_seen = True
@@ -485,7 +475,6 @@ class LLMAdapter:
                             event,
                             payload,
                             accumulated,
-                            reasoning_accumulated,
                         ):
                             if isinstance(parsed, (LLMStreamComplete, LLMStreamError)):
                                 terminal_seen = True
@@ -534,16 +523,8 @@ class LLMAdapter:
         event: dict,
         payload: dict,
         accumulated: list[str],
-        reasoning_accumulated: list[str],
     ) -> AsyncIterator[LLMStreamEvent]:
         event_type = event.get("type")
-        if event_type == "response.reasoning_text.delta":
-            delta = event.get("delta")
-            if isinstance(delta, str) and delta:
-                reasoning_accumulated.append(delta)
-                yield LLMStreamReasoning(delta)
-            return
-
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
@@ -564,7 +545,6 @@ class LLMAdapter:
                     partial=bool(accumulated),
                 )
                 return
-            reasoning = self._extract_reasoning(response_data) or "".join(reasoning_accumulated).strip() or None
             model = str(response_data.get("model") or payload.get("model") or "")
             usage = normalize_usage(response_data.get("usage"), model)
             yield LLMStreamComplete(
@@ -574,7 +554,6 @@ class LLMAdapter:
                     degraded=False,
                     model=model,
                     usage=usage,
-                    reasoning=reasoning,
                 )
             )
             return
@@ -681,12 +660,6 @@ class LLMAdapter:
                 text = message["content"].strip()
                 if text:
                     return text
-            # Reasoning models (e.g. DeepSeek-V4-pro) may put the final answer in
-            # reasoning_content when the visible content is empty.
-            if isinstance(message.get("reasoning_content"), str):
-                text = message["reasoning_content"].strip()
-                if text:
-                    return text
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         parts: list[str] = []
@@ -708,32 +681,12 @@ class LLMAdapter:
             parts.append(data["text"])
         return "\n".join(parts).strip()
 
-    @staticmethod
-    def _extract_reasoning(data: object) -> str | None:
-        """Pull the model's reasoning/thinking trace from a Responses API payload."""
-        if not isinstance(data, dict):
-            return None
-        parts: list[str] = []
-        for item in data.get("output", []) or []:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") != "reasoning":
-                continue
-            for content in item.get("content", []) or []:
-                if isinstance(content, dict) and isinstance(content.get("text"), str):
-                    parts.append(content["text"])
-        if not parts:
-            return None
-        text = "\n".join(parts).strip()
-        return text or None
-
     def _degraded(
         self,
         sources: list[SearchResult],
         error_code: str,
         error_message: str | None = None,
         model: str | None = None,
-        reasoning: str | None = None,
     ) -> LLMResult:
         citations = [source.citation_id for source in sources]
         lines = ["模型暂时不可用，以下是检索到的相关资料："]
@@ -746,7 +699,6 @@ class LLMAdapter:
             model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
-            reasoning=reasoning,
         )
 
     def _direct_degraded(
@@ -754,7 +706,6 @@ class LLMAdapter:
         error_code: str,
         error_message: str | None = None,
         model: str | None = None,
-        reasoning: str | None = None,
     ) -> LLMResult:
         return LLMResult(
             answer="模型暂时不可用，请检查模型配置后重试。",
@@ -763,7 +714,6 @@ class LLMAdapter:
             model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
-            reasoning=reasoning,
         )
 
 

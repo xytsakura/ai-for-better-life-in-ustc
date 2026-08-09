@@ -205,7 +205,7 @@ def test_theme_selector_and_light_palette_are_packaged(tmp_path: Path):
     assert ':root[data-theme="light"]' in styles
     assert "--bg-1: #ffffff" in styles
     assert "--text-primary: #111111" in styles
-    assert "--accent: #6d28d9" in styles
+    assert "--accent: #2563eb" in styles
     assert ".segment-option input:focus-visible + span" in styles
 
     script = client.get("/assets/app.js").text
@@ -290,8 +290,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260807-3' in html
-    assert '/assets/app.js?v=20260808-1' in html
+    assert '/assets/styles.css?v=20260809-1' in html
+    assert '/assets/app.js?v=20260809-1' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -1317,6 +1317,62 @@ def test_shared_space_retrieval_is_available_to_both_users(tmp_path: Path):
     assert result.json()["retrieval_count"] >= 1
 
 
+def test_shared_document_can_be_saved_to_personal_with_search_index(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-a")
+    shared = shared_space(client)
+    source_document_id = upload_pdf(
+        client,
+        tmp_path,
+        shared["id"],
+        "shared-save.pdf",
+        "Saved personal copy keeps searchable uniform convergence material.",
+    )
+
+    login(client, "demo-b")
+    personal = personal_space(client)
+    saved = client.post(f"/api/documents/{source_document_id}/save-to-personal")
+
+    assert saved.status_code == 200, saved.text
+    saved_document = saved.json()["document"]
+    assert saved_document["id"] != source_document_id
+    assert saved_document["space_id"] == personal["id"]
+    assert saved_document["searchable_pages"] == 1
+
+    personal_documents = client.get(f"/api/spaces/{personal['id']}/documents").json()["items"]
+    assert any(item["id"] == saved_document["id"] for item in personal_documents)
+    page = client.get(f"/api/documents/{saved_document['id']}/pages/1")
+    assert page.status_code == 200
+    assert "uniform convergence" in page.json()["content"]
+
+    with sqlite3.connect(client.app.state.settings.database_path) as conn:
+        indexed_chunks = conn.execute(
+            """SELECT count(*) FROM chunk_fts
+               WHERE chunk_id IN (
+                 SELECT c.id FROM chunks c
+                 JOIN revisions r ON r.id = c.revision_id
+                 WHERE r.document_id = ? AND r.status = 'active'
+               )""",
+            (saved_document["id"],),
+        ).fetchone()[0]
+        audit_count = conn.execute(
+            """SELECT count(*) FROM audit_events
+               WHERE event_type = 'document_saved_to_personal'
+                 AND target_id = ?""",
+            (saved_document["id"],),
+        ).fetchone()[0]
+    assert indexed_chunks >= 1
+    assert audit_count == 1
+
+    duplicate = client.post(f"/api/documents/{source_document_id}/save-to-personal")
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "duplicate_document"
+
+    login(client, "demo-c")
+    forbidden = client.post(f"/api/documents/{source_document_id}/save-to-personal")
+    assert forbidden.status_code == 404
+
+
 def publish_demo_b_library(
     client: TestClient,
     tmp_path: Path,
@@ -1359,6 +1415,22 @@ def publish_demo_b_library(
     )
     assert reviewed.status_code == 200, reviewed.text
     return library_id, version_id, snapshot_doc_id
+
+
+def test_subscribed_document_without_download_permission_cannot_be_saved(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, snapshot_doc_id = publish_demo_b_library(
+        client,
+        tmp_path,
+        can_download=False,
+    )
+    login(client, "demo-c")
+    assert client.post(f"/api/marketplace/libraries/{library_id}/subscribe").status_code == 200
+
+    blocked = client.post(f"/api/documents/{snapshot_doc_id}/save-to-personal")
+
+    assert blocked.status_code == 404
+    assert blocked.json()["error"]["code"] == "document_not_found"
 
 
 def submit_demo_b_version(
