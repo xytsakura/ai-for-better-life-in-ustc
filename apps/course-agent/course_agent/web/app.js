@@ -3323,6 +3323,7 @@ function renderSourceSelector() {
     clearAnswer('library');
     renderSourceSelector();
     renderHomeSourceSelector();
+    renderDocuments();
     updateQueryStatus();
   });
 }
@@ -3334,6 +3335,7 @@ function renderHomeSourceSelector() {
   renderSourceList('home-source-list', 'home-source-count', () => {
     renderSourceSelector();
     renderHomeSourceSelector();
+    renderDocuments();
     updateQueryStatus();
   });
 }

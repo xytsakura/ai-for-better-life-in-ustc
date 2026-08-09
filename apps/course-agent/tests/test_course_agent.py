@@ -13,6 +13,7 @@ import course_agent.main as course_agent_main
 from course_agent.config import Settings
 from course_agent.llm import FakeLLMAdapter, LLMResult
 from course_agent.main import create_app
+from course_agent.ocr import OcrPage, file_sha256 as ocr_file_sha256, sidecar_path_for, write_ocr_sidecar
 
 
 def make_pdf(path: Path, text: str) -> None:
@@ -291,7 +292,7 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
     assert '/assets/styles.css?v=20260809-1' in html
-    assert '/assets/app.js?v=20260809-1' in html
+    assert '/assets/app.js?v=20260809-2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -1328,6 +1329,25 @@ def test_shared_document_can_be_saved_to_personal_with_search_index(tmp_path: Pa
         "shared-save.pdf",
         "Saved personal copy keeps searchable uniform convergence material.",
     )
+    with sqlite3.connect(client.app.state.settings.database_path) as conn:
+        source_file_path = Path(
+            conn.execute(
+                "SELECT file_path FROM documents WHERE id = ?",
+                (source_document_id,),
+            ).fetchone()[0]
+        )
+    ocr_marker = "# OCR 保存验证\n\n一致收敛的 OCR 文本必须原样进入个人知识库。"
+    write_ocr_sidecar(
+        source_file_path,
+        source_sha256=ocr_file_sha256(source_file_path),
+        page_count=1,
+        model="deepseek-ocr-2",
+        mode="markdown",
+        dpi=200,
+        pages=[OcrPage(1, "success", ocr_marker)],
+    )
+    reparsed = client.post(f"/api/documents/{source_document_id}/reparse")
+    assert reparsed.status_code == 200, reparsed.text
 
     login(client, "demo-b")
     personal = personal_space(client)
@@ -1343,7 +1363,8 @@ def test_shared_document_can_be_saved_to_personal_with_search_index(tmp_path: Pa
     assert any(item["id"] == saved_document["id"] for item in personal_documents)
     page = client.get(f"/api/documents/{saved_document['id']}/pages/1")
     assert page.status_code == 200
-    assert "uniform convergence" in page.json()["content"]
+    assert page.json()["content"] == ocr_marker
+    assert sidecar_path_for(Path(saved_document["file_path"])).is_file()
 
     with sqlite3.connect(client.app.state.settings.database_path) as conn:
         indexed_chunks = conn.execute(
@@ -1371,6 +1392,41 @@ def test_shared_document_can_be_saved_to_personal_with_search_index(tmp_path: Pa
     login(client, "demo-c")
     forbidden = client.post(f"/api/documents/{source_document_id}/save-to-personal")
     assert forbidden.status_code == 404
+
+
+def test_save_to_personal_rolls_back_document_index_and_files_when_audit_fails(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    login(client, "demo-a")
+    source_document_id = upload_pdf(
+        client,
+        tmp_path,
+        shared_space(client)["id"],
+        "rollback-save.pdf",
+        "Rollback validation content long enough to create a searchable chunk.",
+    )
+    login(client, "demo-b")
+    personal = personal_space(client)
+    uploads_before = {path.name for path in client.app.state.settings.uploads_dir.iterdir()}
+    with sqlite3.connect(client.app.state.settings.database_path) as conn:
+        conn.execute("DROP TABLE audit_events")
+        conn.commit()
+
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(f"/api/documents/{source_document_id}/save-to-personal")
+
+    uploads_after = {path.name for path in client.app.state.settings.uploads_dir.iterdir()}
+    assert uploads_after == uploads_before
+    with sqlite3.connect(client.app.state.settings.database_path) as conn:
+        saved_documents = conn.execute(
+            "SELECT id FROM documents WHERE space_id = ? AND title = 'rollback-save.pdf'",
+            (personal["id"],),
+        ).fetchall()
+        orphan_fts = conn.execute(
+            """SELECT count(*) FROM chunk_fts
+               WHERE chunk_id NOT IN (SELECT id FROM chunks)"""
+        ).fetchone()[0]
+    assert saved_documents == []
+    assert orphan_fts == 0
 
 
 def publish_demo_b_library(
@@ -1431,6 +1487,24 @@ def test_subscribed_document_without_download_permission_cannot_be_saved(tmp_pat
 
     assert blocked.status_code == 404
     assert blocked.json()["error"]["code"] == "document_not_found"
+
+
+def test_subscribed_document_with_download_permission_can_be_saved(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, snapshot_doc_id = publish_demo_b_library(
+        client,
+        tmp_path,
+        name="可保存订阅库",
+        can_download=True,
+    )
+    login(client, "demo-c")
+    assert client.post(f"/api/marketplace/libraries/{library_id}/subscribe").status_code == 200
+    personal = personal_space(client)
+
+    saved = client.post(f"/api/documents/{snapshot_doc_id}/save-to-personal")
+
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["document"]["space_id"] == personal["id"]
 
 
 def submit_demo_b_version(

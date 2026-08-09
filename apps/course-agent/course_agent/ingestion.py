@@ -34,7 +34,7 @@ from pathlib import Path
 import fitz
 
 from .config import Settings
-from .ocr import read_ocr_sidecar
+from .ocr import read_ocr_sidecar, sidecar_path_for
 from .tokenizer import normalize_text, tokenize_for_search
 from .types import (
     ChunkRecord,
@@ -81,6 +81,7 @@ class PreparedPdfIngestion:
     content_hash: str
     parse_output: ParseOutput
     copy_to_uploads: bool
+    stored_sidecar_path: Path | None = None
 
 
 # ---- Utilities --------------------------------------------------------
@@ -243,7 +244,7 @@ _default_index_writer = FTS5IndexWriter()
 
 # ---- Document ingestion -----------------------------------------------
 
-def _active_duplicate(conn: sqlite3.Connection, space_id: str, content_hash: str) -> str | None:
+def active_duplicate_document(conn: sqlite3.Connection, space_id: str, content_hash: str) -> str | None:
     row = conn.execute(
         """SELECT d.id FROM documents d
            JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
@@ -252,6 +253,14 @@ def _active_duplicate(conn: sqlite3.Connection, space_id: str, content_hash: str
         (space_id, content_hash),
     ).fetchone()
     return str(row["id"]) if row else None
+
+
+def cleanup_prepared_pdf_ingestion(prepared: PreparedPdfIngestion) -> None:
+    if not prepared.copy_to_uploads:
+        return
+    if prepared.stored_sidecar_path is not None:
+        prepared.stored_sidecar_path.unlink(missing_ok=True)
+    prepared.stored_path.unlink(missing_ok=True)
 
 
 def extract_pdf(path: Path, revision_id: str) -> tuple[list[tuple], list[tuple], dict[str, int]]:
@@ -354,13 +363,20 @@ def prepare_pdf_ingestion(
     revision_id = revision_id or str(uuid.uuid4())
     source_id = source_id or str(uuid.uuid4())
     stored_path = path
-    if copy_to_uploads:
-        stored_path = settings.uploads_dir / f"{document_id}{path.suffix.lower() or '.pdf'}"
-        shutil.copy2(path, stored_path)
+    stored_sidecar_path: Path | None = None
     try:
+        if copy_to_uploads:
+            stored_path = settings.uploads_dir / f"{document_id}{path.suffix.lower() or '.pdf'}"
+            shutil.copy2(path, stored_path)
+            source_sidecar = read_ocr_sidecar(path)
+            if source_sidecar is not None and source_sidecar.sidecar_path is not None:
+                stored_sidecar_path = sidecar_path_for(stored_path)
+                shutil.copy2(source_sidecar.sidecar_path, stored_sidecar_path)
         parse_output = _default_parser.extract(stored_path, revision_id)
     except Exception as exc:
-        if copy_to_uploads and stored_path.exists():
+        if stored_sidecar_path is not None:
+            stored_sidecar_path.unlink(missing_ok=True)
+        if copy_to_uploads:
             stored_path.unlink(missing_ok=True)
         raise IngestionError(f"PDF parse failed: {exc}") from exc
     return PreparedPdfIngestion(
@@ -371,6 +387,7 @@ def prepare_pdf_ingestion(
         content_hash=content_hash,
         parse_output=parse_output,
         copy_to_uploads=copy_to_uploads,
+        stored_sidecar_path=stored_sidecar_path,
     )
 
 
@@ -414,7 +431,7 @@ def ingest_pdf(
     path = path.resolve()
     _default_parser.validate(path, settings.max_upload_bytes)
     content_hash = file_sha256(path)
-    duplicate = _active_duplicate(conn, space_id, content_hash)
+    duplicate = active_duplicate_document(conn, space_id, content_hash)
     if duplicate:
         raise DuplicateDocument(duplicate)
 
@@ -426,8 +443,8 @@ def ingest_pdf(
         )
         write_prepared_pdf_ingestion(conn, metadata, space_id, prepared)
     except Exception:
-        if "prepared" in locals() and copy_to_uploads and prepared.stored_path.exists():
-            prepared.stored_path.unlink(missing_ok=True)
+        if "prepared" in locals():
+            cleanup_prepared_pdf_ingestion(prepared)
         raise
 
     return document_details(conn, prepared.document_id)
@@ -484,7 +501,9 @@ def delete_document(conn: sqlite3.Connection, document_id: str) -> None:
     )
     conn.commit()
     if not row["is_repo_source"]:
-        Path(row["file_path"]).unlink(missing_ok=True)
+        file_path = Path(row["file_path"])
+        sidecar_path_for(file_path).unlink(missing_ok=True)
+        file_path.unlink(missing_ok=True)
 
 
 def reparse_document(conn: sqlite3.Connection, settings: Settings, document_id: str) -> dict:

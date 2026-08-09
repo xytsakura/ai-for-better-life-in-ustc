@@ -29,6 +29,8 @@ from .ingestion import (
     IngestionError,
     PyMuPDFParser,
     SentenceChunking,
+    active_duplicate_document,
+    cleanup_prepared_pdf_ingestion,
     delete_document,
     document_details,
     ingest_pdf,
@@ -1015,7 +1017,6 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         source_rows = selected_personal_documents(conn, user_id, document_ids)
         policy_by_id = {item.document_id: item for item in payload.documents}
         prepared_items: list[tuple[Any, PublicationDocumentInput, Any]] = []
-        copied_paths: list[Path] = []
         library_id = str(library["id"]) if library else str(uuid.uuid4())
         space_id = str(library["space_id"]) if library else str(uuid.uuid4())
         version_id = str(uuid.uuid4())
@@ -1031,7 +1032,6 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                     source_id=str(uuid.uuid4()),
                     copy_to_uploads=True,
                 )
-                copied_paths.append(prepared.stored_path)
                 prepared_items.append((source_row, policy_by_id[str(source_row["id"])], prepared))
             conn.execute("BEGIN IMMEDIATE")
             if library:
@@ -1135,8 +1135,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             conn.commit()
         except Exception:
             conn.rollback()
-            for path in copied_paths:
-                path.unlink(missing_ok=True)
+            for _source_row, _policy, prepared in prepared_items:
+                cleanup_prepared_pdf_ingestion(prepared)
             raise
         return fetch_library(conn, library_id), fetch_version(conn, version_id)
 
@@ -1383,8 +1383,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         with get_db() as conn:
             require_document(conn, user_id, document_id, operation="download")
             source = conn.execute(
-                """SELECT d.*, s.source_url, s.license_status, s.source_type
+                """SELECT d.*, s.source_url, s.license_status, s.source_type,
+                          r.content_hash
                    FROM documents d JOIN sources s ON s.id = d.source_id
+                   JOIN revisions r ON r.document_id = d.id AND r.status = 'active'
                    WHERE d.id = ? AND d.status = 'active'""",
                 (document_id,),
             ).fetchone()
@@ -1410,34 +1412,54 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 license_status=str(source["license_status"]),
                 source_type="saved-copy",
             )
-            try:
-                result = ingest_pdf(
-                    conn,
-                    settings,
-                    Path(str(source["file_path"])),
-                    str(personal["id"]),
-                    metadata,
-                    copy_to_uploads=True,
-                )
-            except DuplicateDocument as exc:
+            duplicate = active_duplicate_document(
+                conn,
+                str(personal["id"]),
+                str(source["content_hash"]),
+            )
+            if duplicate:
                 raise HTTPException(
                     status_code=409,
-                    detail=_error("duplicate_document", f"资料已存在：{exc.document_id}"),
-                ) from exc
+                    detail=_error("duplicate_document", f"资料已存在：{duplicate}"),
+                )
+            prepared = None
+            try:
+                prepared = prepare_pdf_ingestion(
+                    settings,
+                    Path(str(source["file_path"])),
+                    copy_to_uploads=True,
+                )
+                conn.execute("BEGIN IMMEDIATE")
+                write_prepared_pdf_ingestion(
+                    conn,
+                    metadata,
+                    str(personal["id"]),
+                    prepared,
+                    manage_transaction=False,
+                )
+                audit_event(
+                    conn,
+                    user_id,
+                    "document_saved_to_personal",
+                    "document",
+                    prepared.document_id,
+                    {"source_document_id": document_id},
+                )
+                result = document_details(conn, prepared.document_id)
+                conn.commit()
             except IngestionError as exc:
+                conn.rollback()
+                if prepared is not None:
+                    cleanup_prepared_pdf_ingestion(prepared)
                 raise HTTPException(
                     status_code=422,
                     detail=_error("save_to_personal_failed", str(exc)),
                 ) from exc
-            audit_event(
-                conn,
-                user_id,
-                "document_saved_to_personal",
-                "document",
-                str(result["id"]),
-                {"source_document_id": document_id},
-            )
-            conn.commit()
+            except Exception:
+                conn.rollback()
+                if prepared is not None:
+                    cleanup_prepared_pdf_ingestion(prepared)
+                raise
         return {"document": result}
 
     @app.get("/api/documents/{document_id}/pages/{page_number}")

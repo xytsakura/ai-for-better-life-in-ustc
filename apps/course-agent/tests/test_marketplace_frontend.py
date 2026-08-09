@@ -95,6 +95,16 @@ def test_document_selection_stays_in_sync_across_all_surfaces(tmp_path: Path):
     assert "renderSourceList('home-source-list'" in sync_section
     assert "renderDocuments();" in sync_section
 
+    library_callback = script.split("function renderSourceSelector()", 1)[1].split(
+        "function renderHomeSourceSelector()", 1
+    )[0]
+    assert "renderDocuments();" in library_callback
+
+    home_callback = script.split("function renderHomeSourceSelector()", 1)[1].split(
+        "function selectDocumentsByAction(", 1
+    )[0]
+    assert "renderDocuments();" in home_callback
+
     bulk_section = script.split("function selectDocumentsByAction(", 1)[1].split(
         "function updateQueryStatus()", 1
     )[0]

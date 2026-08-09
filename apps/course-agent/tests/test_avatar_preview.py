@@ -202,7 +202,7 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
     assert '/assets/styles.css?v=20260809-1' in html
-    assert '/assets/app.js?v=20260809-1' in html
+    assert '/assets/app.js?v=20260809-2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles
