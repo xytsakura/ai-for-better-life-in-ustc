@@ -56,6 +56,20 @@ def test_hub_client_secret_can_be_read_from_runtime_file(tmp_path: Path, monkeyp
     monkeypatch.setenv("TEST_HUB_SECRET", "direct-secret")
     assert _secret_from_env_or_file("TEST_HUB_SECRET", "TEST_HUB_SECRET_FILE") == "direct-secret"
 
+    settings = Settings(
+        runtime_dir=tmp_path,
+        hub_client_secret="stale-secret",
+        hub_client_secret_file=secret_path,
+    )
+    assert settings.current_hub_client_secret() == "runtime-only-secret"
+    secret_path.write_text("rotated-secret\n", encoding="utf-8")
+    assert settings.current_hub_client_secret() == "rotated-secret"
+    secret_path.unlink()
+    assert settings.current_hub_client_secret() == ""
+
+    settings.hub_client_secret_file = None
+    assert settings.current_hub_client_secret() == "stale-secret"
+
 
 def jwks_for(private_key: Ed25519PrivateKey, kid: str = "test-kid") -> str:
     public_key = private_key.public_key()
@@ -318,3 +332,51 @@ def test_workspace_exchange_consumes_hub_code_and_creates_course_session(
     assert response.status_code == 200, response.text
     assert response.json()["hub"]["mapped_user_id"] == "demo-c"
     assert client.get("/api/session").json()["user"]["id"] == "demo-c"
+
+
+def test_workspace_exchange_reloads_rotated_secret_file_without_restart(
+    monkeypatch,
+    tmp_path: Path,
+):
+    private_key = Ed25519PrivateKey.generate()
+    workspace_token = sign_hub_token(private_key, sub="workspace-user", scope="workspace:enter")
+    secret_path = tmp_path / "course-agent.secret"
+    secret_path.write_text("old-secret\n", encoding="utf-8")
+    settings = Settings(
+        runtime_dir=tmp_path,
+        session_secret="test-secret",
+        hub_jwks_json=jwks_for(private_key),
+        hub_token_endpoint="http://hub.example.test/api/hub/oauth/token",
+        hub_client_secret="old-secret",
+        hub_client_secret_file=secret_path,
+        hub_user_mapping={"workspace-user": "demo-c"},
+    )
+    adapter = FakeLLMAdapter(settings, answer="Hub adapter answer")
+    client = TestClient(create_app(settings, adapter))
+    secret_path.write_text("rotated-secret\n", encoding="utf-8")
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, headers=None, data=None):
+            encoded = headers["Authorization"].removeprefix("Basic ")
+            credentials = base64.b64decode(encoded).decode("utf-8")
+            assert credentials == "hanhai-course-agent:rotated-secret"
+            return httpx.Response(200, json={"access_token": workspace_token, "scope": "workspace"})
+
+    monkeypatch.setattr("course_agent.hub.httpx.AsyncClient", FakeAsyncClient)
+
+    response = client.post(
+        "/api/hub/workspace/exchange",
+        json={"code": "x" * 32, "state": "state-1234567890"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["hub"]["mapped_user_id"] == "demo-c"

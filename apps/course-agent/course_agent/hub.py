@@ -267,14 +267,15 @@ def new_message_id() -> str:
 
 
 async def exchange_workspace_code(settings: Settings, payload: HubWorkspaceExchangeRequest) -> dict[str, Any]:
-    if not settings.hub_token_endpoint or not settings.hub_client_secret:
+    client_secret = settings.current_hub_client_secret()
+    if not settings.hub_token_endpoint or not client_secret:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"error": {"code": "hub_workspace_exchange_not_configured", "message": "Hub token exchange is not configured"}},
         )
     redirect_uri = payload.redirect_uri or settings.hub_workspace_redirect_uri
     auth = base64.b64encode(
-        f"{settings.hub_client_id}:{settings.hub_client_secret}".encode("utf-8")
+        f"{settings.hub_client_id}:{client_secret}".encode("utf-8")
     ).decode("ascii")
     async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
         response = await client.post(

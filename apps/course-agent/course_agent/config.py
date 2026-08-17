@@ -67,6 +67,18 @@ def _secret_from_env_or_file(value_name: str, file_name: str) -> str:
         return ""
 
 
+def _secret_file_path(value_name: str, file_name: str) -> Path | None:
+    if os.getenv(value_name, ""):
+        return None
+    configured_path = os.getenv(file_name, "").strip()
+    if not configured_path:
+        return None
+    path = Path(configured_path)
+    if not path.is_absolute():
+        path = APP_DIR / path
+    return path.resolve()
+
+
 @dataclass
 class Settings:
     repo_root: Path = REPO_ROOT
@@ -101,6 +113,10 @@ class Settings:
     hub_token_endpoint: str = os.getenv("COURSE_AGENT_HUB_TOKEN_ENDPOINT", "")
     hub_client_id: str = os.getenv("COURSE_AGENT_HUB_CLIENT_ID", "hanhai-course-agent")
     hub_client_secret: str = _secret_from_env_or_file(
+        "COURSE_AGENT_HUB_CLIENT_SECRET",
+        "COURSE_AGENT_HUB_CLIENT_SECRET_FILE",
+    )
+    hub_client_secret_file: Path | None = _secret_file_path(
         "COURSE_AGENT_HUB_CLIENT_SECRET",
         "COURSE_AGENT_HUB_CLIENT_SECRET_FILE",
     )
@@ -154,6 +170,14 @@ class Settings:
             "chunking_backend": self.chunking_backend,
             "tokenizer_backend": self.tokenizer_backend,
         }
+
+    def current_hub_client_secret(self) -> str:
+        if self.hub_client_secret_file is None:
+            return self.hub_client_secret
+        try:
+            return self.hub_client_secret_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
 
     def update_from_dict(self, data: dict[str, Any]) -> None:
         """Apply runtime updates from the frontend."""
