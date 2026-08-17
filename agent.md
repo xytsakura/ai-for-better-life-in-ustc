@@ -85,6 +85,7 @@
 - 外部 Endpoint 在注册和调用前都要解析 DNS，并拒绝任一私网、回环、链路本地、保留或未指定地址；生产部署还应通过出站代理或网络策略绑定允许的目的地址，闭合 DNS rebinding 的解析与连接时序风险。
 - Agent 必须校验 Hub JWT 的 issuer、audience、签名、`chat:invoke`/`workspace:enter` scope 和最长 120 秒有效期，不能只校验签名。
 - Featured Agent 的客户端密钥通过运行时只读 secret 文件注入，不写入命令行、普通环境变量、日志或仓库。
+- 使用运行时 secret 文件的 Featured Agent 必须在每次 token 兑换前重新读取文件；bootstrap 轮换密钥后不能依赖人工重启进程。文件缺失或为空时必须拒绝兑换，不得回退内存中的旧文件密钥。
 - Agent 健康响应必须严格满足 Contract（包括 `status: "ok"` 与 `contract_version: "1.0"`），不能只以 HTTP 200 判定兼容。
 - 文档不得把尚未实现的能力写成现状；Hub 已实现 SQLite 持久限流、大小限制、异步健康轮询和连续失败准入，公开多实例部署仍需评估共享数据库或独立限流基础设施。
 - Hub Ed25519 私钥必须持久化在忽略的运行时文件或 Secret Store 中；不能在每次进程启动时静默生成新身份，否则 Agent 的 JWKS 缓存会导致重启后的短期 401。
