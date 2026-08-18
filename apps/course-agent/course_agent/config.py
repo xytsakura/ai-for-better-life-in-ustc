@@ -127,6 +127,21 @@ class Settings:
     )
     hub_return_url: str = os.getenv("COURSE_AGENT_HUB_RETURN_URL", "http://127.0.0.1:8100/")
     hub_user_mapping: dict[str, str] | None = None
+    hub_model_gateway_enabled: bool = _as_bool(
+        os.getenv("COURSE_AGENT_HUB_MODEL_GATEWAY_ENABLED"),
+        False,
+    )
+    hub_model_grant_endpoint: str = os.getenv("COURSE_AGENT_HUB_MODEL_GRANT_ENDPOINT", "")
+    hub_model_gateway_url: str = os.getenv(
+        "COURSE_AGENT_HUB_MODEL_GATEWAY_URL",
+        "http://127.0.0.1:8100/api/model-gateway/v1/generate",
+    )
+    hub_model_gateway_timeout_seconds: float = float(
+        os.getenv("COURSE_AGENT_HUB_MODEL_GATEWAY_TIMEOUT_SECONDS", "60")
+    )
+    hub_model_delegation_ttl_seconds: int = int(
+        os.getenv("COURSE_AGENT_HUB_MODEL_DELEGATION_TTL_SECONDS", "120")
+    )
     llm_config_generation: int = 0
     max_upload_bytes: int = 50 * 1024 * 1024
 
@@ -171,6 +186,13 @@ class Settings:
             "parser_backend": self.parser_backend,
             "chunking_backend": self.chunking_backend,
             "tokenizer_backend": self.tokenizer_backend,
+            "model_runtime": {
+                "mode": "platform_optional",
+                "gateway_contract": "campus-model-gateway-v1",
+                "supported_api_styles": ["responses", "chat_completions"],
+                "platform_configured": self.hub_model_gateway_configured,
+                "agent_fallback_configured": self.llm_configured,
+            },
         }
 
     def current_hub_client_secret(self) -> str:
@@ -267,6 +289,16 @@ class Settings:
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key and self.llm_base_url and self.llm_model)
+
+    @property
+    def hub_model_gateway_configured(self) -> bool:
+        return bool(
+            self.hub_model_gateway_enabled
+            and self.hub_model_grant_endpoint.strip()
+            and self.hub_model_gateway_url.strip()
+            and self.hub_client_id.strip()
+            and self.current_hub_client_secret()
+        )
 
     def ensure_directories(self) -> None:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)

@@ -100,6 +100,15 @@ def patch_hanhai_manifest(manifest: dict[str, Any]) -> None:
     integration["chat_endpoint"] = f"{internal_url}/api/hub/chat"
     integration["health_endpoint"] = f"{internal_url}/api/health"
     integration["callback_urls"] = [f"{public_url}/api/hub/callback"]
+    capabilities = list(manifest.get("capabilities") or [])
+    if "platform-model-gateway" not in capabilities:
+        capabilities.append("platform-model-gateway")
+    manifest["capabilities"] = capabilities
+    manifest["model_runtime"] = {
+        "mode": "platform_optional",
+        "gateway_contract": "campus-model-gateway-v1",
+        "supported_api_styles": ["responses", "chat_completions"],
+    }
 
 
 def patch_demo_manifest(manifest: dict[str, Any]) -> None:

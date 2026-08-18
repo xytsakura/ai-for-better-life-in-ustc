@@ -36,6 +36,9 @@ def test_marketplace_frontend_assets_are_packaged(tmp_path: Path):
     assert ".view-marketplace" in styles
     assert ".marketplace-layout" in styles
     assert ".marketplace-library-item" in styles
+    assert ".marketplace-course-card" in styles
+    assert "#marketplace-library-list" in styles
+    assert ".marketplace-empty-course" in styles
     assert ".marketplace-detail-panel" in styles
     assert ".publication-policy-grid" in styles
     assert "@media (max-width: 900px)" in styles
@@ -51,6 +54,9 @@ def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
     assert "function resetMarketplaceState()" in script
     assert "function loadMarketplace()" in script
     assert "function loadMarketplaceLibraryDetail(" in script
+    assert "function marketplaceMetadata(" in script
+    assert "function marketplaceDemoLabel(" in script
+    assert "function marketplaceEmptyState(" in script
     assert "function submitPublication(" in script
     assert "function submitAdminReview(" in script
     assert "function enterMarketplaceLibrary(" in script
@@ -84,6 +90,8 @@ def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
     assert "document.use_in_rag !== false" in script
     assert "data-marketplace-rollback-version" in script
     assert "data-marketplace-preview-document" in script
+    assert "marketplace-course-card" in script
+    assert "不会参与 RAG 检索" in script
 
 
 def test_document_selection_stays_in_sync_across_all_surfaces(tmp_path: Path):

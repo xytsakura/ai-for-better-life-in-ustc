@@ -113,6 +113,21 @@ CREATE TABLE IF NOT EXISTS library_subscriptions (
     PRIMARY KEY(library_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS marketplace_course_metadata (
+    library_id TEXT PRIMARY KEY REFERENCES published_libraries(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    demo_kind TEXT NOT NULL DEFAULT 'demo-placeholder'
+        CHECK (demo_kind IN ('real', 'demo-placeholder')),
+    cover_icon TEXT NOT NULL DEFAULT '◇',
+    cover_theme TEXT NOT NULL DEFAULT 'indigo',
+    short_description TEXT NOT NULL DEFAULT '',
+    empty_state TEXT NOT NULL DEFAULT '资料待补充',
+    sort_order INTEGER NOT NULL DEFAULT 100,
+    seed_version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
     id TEXT PRIMARY KEY,
     actor_id TEXT NOT NULL REFERENCES users(id),
@@ -174,6 +189,7 @@ CREATE INDEX IF NOT EXISTS idx_published_libraries_status ON published_libraries
 CREATE INDEX IF NOT EXISTS idx_publication_versions_status ON publication_versions(status);
 CREATE INDEX IF NOT EXISTS idx_publication_documents_document ON publication_documents(document_id);
 CREATE INDEX IF NOT EXISTS idx_library_subscriptions_user_status ON library_subscriptions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_marketplace_course_metadata_sort ON marketplace_course_metadata(sort_order, slug);
 CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id, created_at);
 """
 

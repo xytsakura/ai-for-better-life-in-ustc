@@ -31,6 +31,23 @@ test('connected manifests require protocol and endpoints', async () => {
   assert.equal(validate(payload), false);
 });
 
+test('manifest model_runtime extension is optional and validates platform gateway modes', async () => {
+  const ajv = new Ajv2020({ allErrors: true, strict: true });
+  addFormats(ajv);
+  const validate = ajv.compile(await json('manifest.schema.json'));
+  const payload = await json('examples/demo-connected.json');
+  payload.capabilities.push('platform-model-gateway');
+  payload.model_runtime = {
+    mode: 'platform_optional',
+    gateway_contract: 'campus-model-gateway-v1',
+    supported_api_styles: ['responses', 'chat_completions'],
+  };
+  assert.equal(validate(payload), true, ajv.errorsText(validate.errors));
+
+  payload.model_runtime.supported_api_styles.push('responses');
+  assert.equal(validate(payload), false);
+});
+
 test('health fixture satisfies Health v1', async () => {
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   addFormats(ajv);

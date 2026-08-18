@@ -40,6 +40,9 @@ from .ingestion import (
 )
 from .llm import LLMAdapter, LLMResult, LLMStreamComplete, LLMStreamDelta, LLMStreamError
 from .hub import (
+    HubModelContext,
+    HubModelDelegationStore,
+    HubModelGatewayClient,
     HubJwtVerifier,
     HubWorkspaceExchangeRequest,
     RunAgentInput,
@@ -625,6 +628,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
     app.state.hub_jwt_verifier = HubJwtVerifier(settings)
+    app.state.hub_model_delegations = HubModelDelegationStore()
+    app.state.hub_model_gateway = HubModelGatewayClient(settings)
     page_image_cache: OrderedDict[tuple[str, int, int, int], bytes] = OrderedDict()
     page_image_cache_lock = Lock()
     page_image_render_slots = BoundedSemaphore(value=2)
@@ -707,11 +712,54 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             raise catalog_error(exc, 422) from exc
         return model_info.id, payload.reasoning_effort
 
-    def settings_response(user_id: str) -> dict:
+    def hub_platform_available(request: Request | None) -> bool:
+        if request is None:
+            return False
+        handle = request.session.get("hub_model_delegation_id")
+        return app.state.hub_model_delegations.get(str(handle) if handle else None) is not None
+
+    def settings_response(user_id: str, request: Request | None = None) -> dict:
+        safe = app.state.settings.to_safe_dict()
+        runtime = dict(safe.get("model_runtime") or {})
+        platform_available = hub_platform_available(request)
+        runtime.update(
+            {
+                "platform_available": platform_available,
+                "source": (
+                    "platform"
+                    if runtime.get("platform_configured") and platform_available
+                    else "agent_fallback"
+                ),
+            }
+        )
         return {
-            **app.state.settings.to_safe_dict(),
+            **safe,
+            "model_runtime": runtime,
             "is_admin": user_id in (app.state.settings.admin_user_ids or set()),
         }
+
+    def pop_session_model_delegation(request: Request):
+        handle = str(request.session.get("hub_model_delegation_id") or "")
+        request.session.pop("hub_model_delegation_id", None)
+        return app.state.hub_model_delegations.pop(handle)
+
+    def revoke_session_model_delegation(request: Request) -> None:
+        delegation = pop_session_model_delegation(request)
+        if delegation is None:
+            return
+        try:
+            app.state.hub_model_gateway.revoke_delegation(delegation.access_token)
+        except Exception:
+            return
+
+    async def revoke_session_model_delegation_async(request: Request) -> None:
+        delegation = pop_session_model_delegation(request)
+        if delegation is None:
+            return
+        try:
+            await app.state.hub_model_gateway.revoke_delegation_async(delegation.access_token)
+        except Exception:
+            return
 
     def is_admin_user(user_id: str) -> bool:
         return user_id in (app.state.settings.admin_user_ids or set())
@@ -791,6 +839,22 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         author = conn.execute(
             "SELECT display_name FROM users WHERE id = ?", (row["author_id"],)
         ).fetchone()
+        metadata = conn.execute(
+            "SELECT * FROM marketplace_course_metadata WHERE library_id = ?",
+            (library_id,),
+        ).fetchone()
+        marketplace_metadata = None
+        if metadata:
+            marketplace_metadata = {
+                "slug": metadata["slug"],
+                "demo_kind": metadata["demo_kind"],
+                "cover_icon": metadata["cover_icon"],
+                "cover_theme": metadata["cover_theme"],
+                "short_description": metadata["short_description"],
+                "empty_state": metadata["empty_state"],
+                "sort_order": int(metadata["sort_order"] or 100),
+                "seed_version": int(metadata["seed_version"] or 1),
+            }
         return {
             "id": library_id,
             "space_id": row["space_id"],
@@ -805,6 +869,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "document_count": int(document_count or 0),
             "subscriber_count": int(subscriber_count or 0),
             "is_subscribed": bool(subscription and subscription["status"] == "active"),
+            "marketplace": marketplace_metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1164,7 +1229,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "knowledge-base",
                 "file-preview",
                 "full-workspace",
+                "platform-model-gateway",
             ],
+            "model_runtime": {
+                "mode": "platform_optional",
+                "gateway_contract": "campus-model-gateway-v1",
+                "supported_api_styles": ["responses", "chat_completions"],
+                "agent_fallback_configured": settings.llm_configured,
+                "platform_configured": settings.hub_model_gateway_configured,
+            },
             "hub": {
                 "agent_id": settings.hub_agent_id,
                 "protocol": "ag-ui",
@@ -1188,6 +1261,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/session")
     def create_session(payload: SessionRequest, request: Request) -> dict:
+        revoke_session_model_delegation(request)
+        request.session.pop("hub_sub", None)
         with get_db() as conn:
             row = conn.execute("SELECT id, display_name, is_demo FROM users WHERE id = ?", (payload.user_id,)).fetchone()
         if not row:
@@ -1206,6 +1281,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.delete("/api/session", status_code=204)
     def clear_session(request: Request) -> None:
+        revoke_session_model_delegation(request)
         request.session.clear()
 
     @app.get("/api/weather/today")
@@ -1563,25 +1639,46 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     ) -> dict:
         if page < 1 or not 1 <= page_size <= 100:
             raise HTTPException(status_code=422, detail=_error("invalid_pagination", "invalid pagination"))
-        filters = ["status IN ('published', 'suspended')" if is_admin_user(user_id) else "status = 'published'"]
+        filters = [
+            "published_libraries.status IN ('published', 'suspended')"
+            if is_admin_user(user_id)
+            else "published_libraries.status = 'published'"
+        ]
         params: list[Any] = []
         if q.strip():
-            filters.append("(name LIKE ? OR description LIKE ? OR tags_json LIKE ?)")
+            filters.append(
+                """(published_libraries.name LIKE ?
+                   OR published_libraries.description LIKE ?
+                   OR published_libraries.tags_json LIKE ?
+                   OR marketplace_course_metadata.short_description LIKE ?
+                   OR marketplace_course_metadata.slug LIKE ?)"""
+            )
             needle = f"%{q.strip()}%"
-            params.extend([needle, needle, needle])
+            params.extend([needle, needle, needle, needle, needle])
         if course.strip():
-            filters.append("course = ?")
+            filters.append("published_libraries.course = ?")
             params.append(course.strip())
         where = " AND ".join(filters)
         with get_db() as conn:
             total = conn.execute(
-                f"SELECT count(*) AS count FROM published_libraries WHERE {where}",
+                f"""SELECT count(*) AS count
+                    FROM published_libraries
+                    LEFT JOIN marketplace_course_metadata
+                      ON marketplace_course_metadata.library_id = published_libraries.id
+                    WHERE {where}""",
                 params,
             ).fetchone()["count"]
             rows = conn.execute(
-                f"""SELECT * FROM published_libraries
+                f"""SELECT published_libraries.*
+                    FROM published_libraries
+                    LEFT JOIN marketplace_course_metadata
+                      ON marketplace_course_metadata.library_id = published_libraries.id
                     WHERE {where}
-                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY
+                      CASE WHEN marketplace_course_metadata.sort_order IS NULL THEN 1 ELSE 0 END,
+                      marketplace_course_metadata.sort_order ASC,
+                      published_libraries.updated_at DESC
+                    LIMIT ? OFFSET ?""",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
             items = [library_dict(conn, row, user_id) for row in rows]
@@ -2048,11 +2145,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             return {"library": library_dict(conn, library, user_id), "version": version_dict(target)}
 
     @app.get("/api/settings")
-    def get_settings(user_id: str = Depends(current_user)) -> dict:
-        return settings_response(user_id)
+    def get_settings(request: Request, user_id: str = Depends(current_user)) -> dict:
+        return settings_response(user_id, request)
 
     @app.post("/api/settings")
-    def update_settings(payload: SettingsUpdate, user_id: str = Depends(current_user)) -> dict:
+    def update_settings(
+        payload: SettingsUpdate,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> dict:
         require_admin(user_id)
         incoming = payload.model_dump(exclude_unset=True)
         old_base_url = app.state.settings.llm_base_url
@@ -2089,7 +2190,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         invalidate_model_catalog()
         app.state.llm = LLMAdapter(app.state.settings)
         app.state.model_catalog = ModelCatalog(app.state.settings)
-        return settings_response(user_id)
+        app.state.hub_model_gateway = HubModelGatewayClient(app.state.settings)
+        return settings_response(user_id, request)
 
     @app.get("/api/models")
     def get_models(user_id: str = Depends(current_user)) -> dict:
@@ -2147,6 +2249,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "scope": prepared.scope,
             "degraded": result.degraded,
             "model": result.model,
+            "model_source": result.model_source,
             "usage": result.usage.as_dict() if result.usage else None,
             "retrieval_count": prepared.retrieval_count,
             "citations": _citations_for_result(result, prepared.source_map),
@@ -2269,6 +2372,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     async def _query_sse_events(
         request: Request,
         prepared: PreparedQuery,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[bytes]:
         yield _sse(
             "start",
@@ -2287,6 +2391,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
             if prepared.mode == "direct"
             else app.state.llm.stream(
@@ -2298,6 +2403,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         )
         try:
@@ -2398,6 +2504,58 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             claims={},
         )
 
+    def _platform_context_from_request(
+        request: Request,
+        *,
+        identity: VerifiedHubIdentity | None = None,
+    ) -> HubModelContext | None:
+        if not app.state.settings.hub_model_gateway_configured:
+            return None
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer ") and identity is not None:
+            return HubModelContext(
+                hub_sub=identity.hub_sub,
+                course_user_id=identity.course_user_id,
+                display_name=identity.display_name,
+                delegate_token=auth.split(" ", 1)[1].strip(),
+                request_id=request.headers.get("x-hub-request-id", "") or f"hubchat:{uuid.uuid4().hex}",
+            )
+        delegation = app.state.hub_model_delegations.get(
+            str(request.session.get("hub_model_delegation_id") or "")
+        )
+        if delegation is None:
+            return None
+        return HubModelContext(
+            hub_sub=delegation.hub_sub,
+            course_user_id=delegation.course_user_id,
+            display_name=delegation.display_name,
+            delegate_token=delegation.access_token,
+            request_id=f"workspace:{uuid.uuid4().hex}",
+        )
+
+    def _store_model_delegation(
+        request: Request,
+        token_response: dict[str, Any],
+        identity: VerifiedHubIdentity,
+    ) -> None:
+        model_delegation = token_response.get("model_delegation_token")
+        if not isinstance(model_delegation, str) or not model_delegation.strip():
+            request.session.pop("hub_model_delegation_id", None)
+            return
+        try:
+            expires_in = int(
+                token_response.get("model_delegation_expires_in")
+                or settings.hub_model_delegation_ttl_seconds
+            )
+        except (TypeError, ValueError):
+            expires_in = settings.hub_model_delegation_ttl_seconds
+        request.session["hub_model_delegation_id"] = app.state.hub_model_delegations.put(
+            access_token=model_delegation.strip(),
+            identity=identity,
+            expires_in=expires_in,
+            max_ttl_seconds=settings.hub_model_delegation_ttl_seconds,
+        )
+
     def _hub_query_request(payload: RunAgentInput) -> tuple[QueryRequest, str]:
         question, history = extract_question_and_history(payload)
         options = course_query_options(payload)
@@ -2418,6 +2576,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         request: Request,
         payload: RunAgentInput,
         prepared: PreparedQuery,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[bytes]:
         message_id = new_message_id()
         yield agui_event(
@@ -2440,6 +2599,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
             if prepared.mode == "direct"
             else app.state.llm.stream(
@@ -2451,6 +2611,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         )
         terminal_sent = False
@@ -2508,8 +2669,9 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         identity = await _hub_identity(request, "chat:invoke")
         query_payload, _question = _hub_query_request(payload)
         prepared = prepare_query(query_payload, identity.course_user_id)
+        platform_context = _platform_context_from_request(request, identity=identity)
         return StreamingResponse(
-            _hub_agui_events(request, payload, prepared),
+            _hub_agui_events(request, payload, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
             headers=_sse_headers(),
         )
@@ -2524,8 +2686,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             token_response["access_token"],
             required_scope="workspace:enter",
         )
+        await revoke_session_model_delegation_async(request)
         request.session["user_id"] = identity.course_user_id
         request.session["hub_sub"] = identity.hub_sub
+        _store_model_delegation(request, token_response, identity)
         with get_db() as conn:
             row = conn.execute(
                 "SELECT id, display_name, is_demo FROM users WHERE id = ?",
@@ -2557,8 +2721,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             token_response["access_token"],
             required_scope="workspace:enter",
         )
+        await revoke_session_model_delegation_async(request)
         request.session["user_id"] = identity.course_user_id
         request.session["hub_sub"] = identity.hub_sub
+        _store_model_delegation(request, token_response, identity)
         return RedirectResponse(url="/?from=hub")
 
     @app.get("/api/hub/context")
@@ -2571,11 +2737,27 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "return_url": settings.hub_return_url,
             "user_id": user_id,
             "hub_sub": mapped_from,
+            "model_runtime": {
+                "mode": "platform_optional",
+                "gateway_contract": "campus-model-gateway-v1",
+                "platform_configured": settings.hub_model_gateway_configured,
+                "platform_available": hub_platform_available(request),
+                "source": (
+                    "platform"
+                    if settings.hub_model_gateway_configured and hub_platform_available(request)
+                    else "agent_fallback"
+                ),
+            },
         }
 
     @app.post("/api/query")
-    def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
+    def query(
+        payload: QueryRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> dict:
         prepared = prepare_query(payload, user_id)
+        platform_context = _platform_context_from_request(request)
         if prepared.mode == "direct":
             llm_result = app.state.llm.generate_direct(
                 prepared.question,
@@ -2585,6 +2767,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         else:
             llm_result = app.state.llm.generate(
@@ -2596,6 +2779,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         return _query_result_payload(prepared, llm_result)
 
@@ -2606,8 +2790,9 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         user_id: str = Depends(current_user),
     ) -> StreamingResponse:
         prepared = prepare_query(payload, user_id)
+        platform_context = _platform_context_from_request(request)
         return StreamingResponse(
-            _query_sse_events(request, prepared),
+            _query_sse_events(request, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
             headers=_sse_headers(),
         )

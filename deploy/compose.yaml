@@ -1,4 +1,14 @@
 services:
+  hub-model-key-init:
+    image: python:3.12-slim
+    environment:
+      HUB_MODEL_PROFILE_MASTER_KEY_FILE: /run/hub-model-secrets/master.key
+    volumes:
+      - ./init_model_profile_key.py:/workspace/deploy/init_model_profile_key.py:ro
+      - hub-model-secrets:/run/hub-model-secrets
+    command: ["python", "/workspace/deploy/init_model_profile_key.py"]
+    restart: "no"
+
   hub:
     build:
       context: ..
@@ -18,10 +28,18 @@ services:
       HUB_CORS_ALLOW_ORIGINS: >-
         http://127.0.0.1:${HUB_PUBLIC_PORT:-8100},
         http://localhost:${HUB_PUBLIC_PORT:-8100}
+      HUB_MODEL_PROFILES_ENABLED: "true"
+      HUB_MODEL_PROFILE_MASTER_KEY_FILE: /run/hub-model-secrets/master.key
+      HUB_MODEL_PROVIDER_ORIGIN_ALLOWLIST: ${HUB_MODEL_PROVIDER_ORIGIN_ALLOWLIST:-}
+      HUB_ALLOW_LOCAL_MODEL_PROVIDERS: ${HUB_ALLOW_LOCAL_MODEL_PROVIDERS:-false}
+    depends_on:
+      hub-model-key-init:
+        condition: service_completed_successfully
     ports:
       - "${HUB_PUBLIC_PORT:-8100}:8100"
     volumes:
       - hub-data:/app/var/hub
+      - hub-model-secrets:/run/hub-model-secrets:ro
 
   hub-bootstrap:
     image: python:3.12-slim
@@ -74,6 +92,11 @@ services:
       COURSE_AGENT_HUB_WORKSPACE_REDIRECT_URI: http://127.0.0.1:${COURSE_AGENT_PUBLIC_PORT:-8002}/api/hub/callback
       COURSE_AGENT_HUB_RETURN_URL: http://127.0.0.1:${HUB_PUBLIC_PORT:-8100}/
       COURSE_AGENT_HUB_USER_MAP: demo-a:demo-a,demo-b:demo-b,demo-c:demo-c
+      COURSE_AGENT_HUB_MODEL_GATEWAY_ENABLED: "true"
+      COURSE_AGENT_HUB_MODEL_GRANT_ENDPOINT: http://hub:8100/api/model-gateway/grants/exchange
+      COURSE_AGENT_HUB_MODEL_GATEWAY_URL: http://hub:8100/api/model-gateway/v1/generate
+      COURSE_AGENT_HUB_MODEL_DELEGATION_TTL_SECONDS: ${COURSE_AGENT_HUB_MODEL_DELEGATION_TTL_SECONDS:-3600}
+      COURSE_AGENT_HUB_MODEL_GATEWAY_TIMEOUT_SECONDS: ${COURSE_AGENT_HUB_MODEL_GATEWAY_TIMEOUT_SECONDS:-60}
     ports:
       - "${COURSE_AGENT_PUBLIC_PORT:-8002}:8000"
     volumes:
@@ -85,6 +108,7 @@ services:
       - |
         course-agent init-db
         course-agent import-manifest /app/repository/data/manifests/math-analysis-b1.yaml
+        course-agent seed-marketplace /app/repository/data/manifests/marketplace-demo.yaml
         until [ -f /run/hub-secrets/course-agent.secret ]; do
           sleep 1
         done
@@ -110,4 +134,5 @@ services:
 volumes:
   hub-data:
   hub-secrets:
+  hub-model-secrets:
   course-agent-data:

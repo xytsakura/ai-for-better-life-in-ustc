@@ -94,6 +94,7 @@ def _record_invocation_end(
     from .db import database
 
     with database(db_path) as conn:
+        now = now_iso()
         conn.execute(
             """
             UPDATE hub_invocations
@@ -105,10 +106,37 @@ def _record_invocation_end(
                 error_code,
                 duration_ms,
                 json.dumps(usage or {}, ensure_ascii=False, sort_keys=True),
-                now_iso(),
+                now,
                 invocation_id,
             ),
         )
+        delegation_rows = conn.execute(
+            """
+            SELECT delegation_id
+            FROM hub_model_delegations
+            WHERE scope_type = 'connected_run' AND scope_id = ?
+            """,
+            (invocation_id,),
+        ).fetchall()
+        delegation_ids = [row["delegation_id"] for row in delegation_rows if row["delegation_id"]]
+        if delegation_ids:
+            placeholders = ",".join("?" for _ in delegation_ids)
+            conn.execute(
+                f"""
+                UPDATE hub_model_delegations
+                SET status = 'revoked', revoked_at = ?
+                WHERE delegation_id IN ({placeholders}) AND status != 'revoked'
+                """,
+                (now, *delegation_ids),
+            )
+            conn.execute(
+                f"""
+                UPDATE hub_model_gateway_grants
+                SET status = 'revoked', revoked_at = ?
+                WHERE delegation_id IN ({placeholders}) AND status = 'issued'
+                """,
+                (now, *delegation_ids),
+            )
 
 
 async def gateway_stream(
@@ -156,7 +184,7 @@ async def gateway_stream(
         user_id=user["user_id"],
         run_id=run_input.runId,
     )
-    request_id = new_id("req")
+    request_id = invocation_id
     token = identity.sign_agent_token(
         agent_id=agent_id,
         version_id=version["version_id"],

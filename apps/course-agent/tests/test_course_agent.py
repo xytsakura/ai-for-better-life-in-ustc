@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import course_agent.main as course_agent_main
+from course_agent.cli import seed_marketplace
 from course_agent.config import Settings
 from course_agent.llm import FakeLLMAdapter, LLMResult
 from course_agent.main import create_app
@@ -291,8 +292,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260809-1' in html
-    assert '/assets/app.js?v=20260818-1' in html
+    assert '/assets/styles.css?v=20260818-2' in html
+    assert '/assets/app.js?v=20260818-2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -1878,3 +1879,109 @@ def test_multi_document_publication_failure_leaves_no_snapshot_residue(monkeypat
         assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == baseline["chunks"]
         assert conn.execute("SELECT count(*) FROM chunk_fts").fetchone()[0] == baseline["fts"]
     assert {path.name for path in (tmp_path / "uploads").iterdir()} == baseline_files
+
+
+def test_seed_marketplace_creates_idempotent_course_market_and_empty_demo_libraries(tmp_path: Path):
+    settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
+    adapter = FakeLLMAdapter(settings)
+    client = TestClient(create_app(settings, adapter))
+
+    login(client, "demo-a")
+    shared = shared_space(client)
+    source_doc_id = upload_pdf(
+        client,
+        tmp_path,
+        shared["id"],
+        "math-seed.pdf",
+        "Seed marketplace searchable math analysis material.",
+    )
+    manifest = tmp_path / "marketplace-demo.yaml"
+    manifest.write_text(
+        """
+version: 1
+courses:
+  - slug: math-analysis-b1
+    library_id: marketplace-library-math-analysis-b1
+    space_id: marketplace-space-math-analysis-b1
+    version_id: marketplace-version-math-analysis-b1
+    source_space_id: math-b1-shared
+    name: 数学分析 B1 期末复习库
+    course: 数学分析 B1
+    description: 真实资料演示
+    short_description: 真题与讲义
+    tags: [真实资料, 期末复习]
+    demo_kind: real
+    cover_icon: ∫
+    cover_theme: aurora
+    sort_order: 10
+  - slug: linear-algebra-b1
+    library_id: marketplace-library-linear-algebra-b1
+    space_id: marketplace-space-linear-algebra-b1
+    version_id: marketplace-version-linear-algebra-b1
+    name: 线性代数 B1 知识库
+    course: 线性代数 B1
+    description: 演示知识库
+    short_description: 资料待补充
+    tags: [演示知识库]
+    demo_kind: demo-placeholder
+    cover_icon: A
+    cover_theme: violet
+    empty_state: 线性代数资料待补充
+    sort_order: 20
+""",
+        encoding="utf-8",
+    )
+
+    first = seed_marketplace(settings, manifest)
+    second = seed_marketplace(settings, manifest)
+
+    assert first["created"] == 2
+    assert first["populated_documents"] == 1
+    assert first["failed"] == []
+    assert second["created"] == 0
+    assert second["skipped"] == 2
+    assert second["populated_documents"] == 0
+    assert second["failed"] == []
+
+    with sqlite3.connect(settings.database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM marketplace_course_metadata").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM published_libraries").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM publication_versions").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM publication_documents").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM publication_documents WHERE source_document_id = ?",
+            (source_doc_id,),
+        ).fetchone()[0] == 1
+
+    login(client, "demo-c")
+    listed = client.get("/api/marketplace/libraries", params={"page_size": 10})
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert [item["id"] for item in items] == [
+        "marketplace-library-math-analysis-b1",
+        "marketplace-library-linear-algebra-b1",
+    ]
+    math = items[0]
+    empty = items[1]
+    assert math["document_count"] == 1
+    assert math["marketplace"]["demo_kind"] == "real"
+    assert empty["document_count"] == 0
+    assert empty["marketplace"]["demo_kind"] == "demo-placeholder"
+    assert empty["marketplace"]["empty_state"] == "线性代数资料待补充"
+
+    empty_detail = client.get("/api/marketplace/libraries/marketplace-library-linear-algebra-b1")
+    assert empty_detail.status_code == 200
+    assert empty_detail.json()["documents"] == []
+
+    subscribed_empty = client.post("/api/marketplace/libraries/marketplace-library-linear-algebra-b1/subscribe")
+    assert subscribed_empty.status_code == 200
+    empty_docs = client.get(f"/api/spaces/{subscribed_empty.json()['space_id']}/documents")
+    assert empty_docs.status_code == 200
+    assert empty_docs.json()["total"] == 0
+
+    math_detail = client.get("/api/marketplace/libraries/marketplace-library-math-analysis-b1")
+    assert math_detail.status_code == 200
+    math_document = math_detail.json()["documents"][0]
+    assert math_document["use_in_rag"] is True
+    assert math_document["can_preview"] is True
+    assert math_document["can_download"] is False

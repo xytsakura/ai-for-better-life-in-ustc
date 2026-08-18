@@ -4,11 +4,16 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 
 from .config import Settings
+from .hub import (
+    HubModelContext,
+    HubModelGatewayClient,
+    HubModelGatewayError,
+)
 from .model_catalog import UsageSummary, normalize_usage
 from .retrieval import SearchResult
 
@@ -22,6 +27,7 @@ class LLMResult:
     usage: UsageSummary | None = None
     error_code: str | None = None
     error_message: str | None = None
+    model_source: str = "agent"
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,7 @@ LLMStreamEvent = LLMStreamDelta | LLMStreamComplete | LLMStreamError
 class LLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.platform_gateway = HubModelGatewayClient(settings)
 
     def _api_style(self) -> str:
         style = str(self.settings.llm_api_style or "responses").strip().lower()
@@ -123,16 +130,26 @@ class LLMAdapter:
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> LLMResult:
+        effective_model = self._effective_model(model, platform_context)
         selected_model, payload = self._build_direct_payload(
             question,
             history=history,
             system=system,
             preference_context=preference_context,
             reference_context=reference_context,
-            model=model,
+            model=effective_model,
             reasoning_effort=reasoning_effort,
         )
+        platform_result = self._try_platform_generate(
+            payload,
+            selected_model=selected_model,
+            platform_context=platform_context,
+            sources=None,
+        )
+        if platform_result is not None:
+            return platform_result
         text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
             return self._direct_degraded(error_code, error_message, selected_model)
@@ -154,8 +171,10 @@ class LLMAdapter:
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> LLMResult:
-        selected_model = (model or self.settings.llm_model).strip()
+        effective_model = self._effective_model(model, platform_context)
+        selected_model = effective_model.strip()
         if not sources:
             return LLMResult(
                 answer="当前可访问的知识库资料中没有找到足够依据，请补充或上传更多资料。",
@@ -170,9 +189,17 @@ class LLMAdapter:
             system=system,
             preference_context=preference_context,
             reference_context=reference_context,
-            model=model,
+            model=effective_model,
             reasoning_effort=reasoning_effort,
         )
+        platform_result = self._try_platform_generate(
+            payload,
+            selected_model=selected_model,
+            platform_context=platform_context,
+            sources=sources,
+        )
+        if platform_result is not None:
+            return platform_result
         text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
             return self._degraded(sources, error_code, error_message, selected_model)
@@ -187,17 +214,29 @@ class LLMAdapter:
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
+        effective_model = self._effective_model(model, platform_context)
         selected_model, payload = self._build_direct_payload(
             question,
             history=history,
             system=system,
             preference_context=preference_context,
             reference_context=reference_context,
-            model=model,
+            model=effective_model,
             reasoning_effort=reasoning_effort,
         )
         payload["stream"] = True
+        platform_stream = self._try_platform_stream(
+            payload,
+            selected_model=selected_model,
+            platform_context=platform_context,
+            sources=None,
+        )
+        if platform_stream is not None:
+            async for event in platform_stream:
+                yield event
+            return
         saw_delta = False
         async for event in self._response_text_stream(payload):
             if isinstance(event, LLMStreamDelta):
@@ -230,8 +269,10 @@ class LLMAdapter:
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
-        selected_model = (model or self.settings.llm_model).strip()
+        effective_model = self._effective_model(model, platform_context)
+        selected_model = effective_model.strip()
         if not sources:
             yield LLMStreamComplete(
                 LLMResult(
@@ -249,10 +290,20 @@ class LLMAdapter:
             system=system,
             preference_context=preference_context,
             reference_context=reference_context,
-            model=model,
+            model=effective_model,
             reasoning_effort=reasoning_effort,
         )
         payload["stream"] = True
+        platform_stream = self._try_platform_stream(
+            payload,
+            selected_model=selected_model,
+            platform_context=platform_context,
+            sources=sources,
+        )
+        if platform_stream is not None:
+            async for event in platform_stream:
+                yield event
+            return
         saw_delta = False
         async for event in self._response_text_stream(payload):
             if isinstance(event, LLMStreamDelta):
@@ -280,6 +331,270 @@ class LLMAdapter:
             )
             yield LLMStreamComplete(result)
             return
+
+    def _effective_model(
+        self,
+        model: str | None,
+        platform_context: HubModelContext | None,
+    ) -> str:
+        if platform_context is not None:
+            return (self.settings.llm_model or "").strip()
+        return (model or self.settings.llm_model or "").strip()
+
+    def _try_platform_generate(
+        self,
+        payload: dict,
+        *,
+        selected_model: str,
+        platform_context: HubModelContext | None,
+        sources: list[SearchResult] | None,
+    ) -> LLMResult | None:
+        if platform_context is None or not self.platform_gateway.is_configured():
+            return None
+        try:
+            gateway = self.platform_gateway.generate(
+                context=platform_context,
+                instructions=str(payload.get("instructions") or ""),
+                messages=self._gateway_messages(payload),
+                reasoning_effort=self._gateway_reasoning(payload),
+                max_output_tokens=self._max_output_tokens(),
+            )
+        except HubModelGatewayError as exc:
+            if exc.allow_fallback:
+                return None
+            return self._direct_degraded(
+                exc.code,
+                exc.message,
+                selected_model,
+                model_source="platform",
+            )
+        usage = normalize_usage(gateway.usage, gateway.model)
+        if sources is None:
+            return LLMResult(
+                answer=gateway.text,
+                citation_ids=[],
+                degraded=False,
+                model=gateway.model,
+                usage=usage,
+                model_source="platform",
+            )
+        return self._finalize_retrieval_result(
+            gateway.text,
+            sources,
+            usage,
+            gateway.model,
+            model_source="platform",
+        )
+
+    def _try_platform_stream(
+        self,
+        payload: dict,
+        *,
+        selected_model: str,
+        platform_context: HubModelContext | None,
+        sources: list[SearchResult] | None,
+    ) -> AsyncIterator[LLMStreamEvent] | None:
+        if platform_context is None or not self.platform_gateway.is_configured():
+            return None
+        return self._platform_stream_events(
+            payload,
+            selected_model=selected_model,
+            platform_context=platform_context,
+            sources=sources,
+        )
+
+    async def _platform_stream_events(
+        self,
+        payload: dict,
+        *,
+        selected_model: str,
+        platform_context: HubModelContext,
+        sources: list[SearchResult] | None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        accumulated: list[str] = []
+        usage: UsageSummary | None = None
+        model = selected_model or "platform-model"
+        terminal_seen = False
+        try:
+            async for event, grant in self.platform_gateway.stream_generate(
+                context=platform_context,
+                instructions=str(payload.get("instructions") or ""),
+                messages=self._gateway_messages(payload),
+                reasoning_effort=self._gateway_reasoning(payload),
+                max_output_tokens=self._max_output_tokens(),
+            ):
+                event_type = event.get("type")
+                if event_type == "model.started":
+                    model = self._gateway_model_id(event.get("model"), grant.model or model)
+                    continue
+                if event_type == "model.output_text.delta":
+                    delta = event.get("delta") or event.get("text")
+                    if isinstance(delta, str) and delta:
+                        accumulated.append(delta)
+                        yield LLMStreamDelta(delta)
+                    continue
+                if event_type == "model.usage":
+                    usage = normalize_usage(event.get("usage"), model)
+                    continue
+                if event_type == "model.completed":
+                    model = self._gateway_model_id(event.get("model"), grant.model or model)
+                    if isinstance(event.get("usage"), dict):
+                        usage = normalize_usage(event.get("usage"), model)
+                    text = ""
+                    for key in ("answer", "text", "output_text"):
+                        value = event.get(key)
+                        if isinstance(value, str) and value.strip():
+                            text = value.strip()
+                            break
+                    text = text or "".join(accumulated).strip()
+                    if not text:
+                        yield LLMStreamError(
+                            "model_gateway_empty_response",
+                            "平台模型返回为空",
+                            retryable=True,
+                            partial=bool(accumulated),
+                        )
+                        return
+                    if sources is None:
+                        result = LLMResult(
+                            answer=text,
+                            citation_ids=[],
+                            degraded=False,
+                            model=model,
+                            usage=usage,
+                            model_source="platform",
+                        )
+                    else:
+                        result = self._finalize_retrieval_result(
+                            text,
+                            sources,
+                            usage,
+                            model,
+                            model_source="platform",
+                        )
+                    terminal_seen = True
+                    yield LLMStreamComplete(result)
+                    return
+                if event_type == "model.error":
+                    error = event.get("error") if isinstance(event.get("error"), dict) else event
+                    code = self._normalize_error_code(
+                        str(error.get("code") or "model_gateway_error"),
+                        fallback="model_gateway_error",
+                    )
+                    message = str(error.get("message") or "平台模型调用失败")
+                    yield LLMStreamError(
+                        code,
+                        self._redact_error_message(message),
+                        retryable=bool(error.get("retryable")),
+                        partial=bool(accumulated),
+                    )
+                    return
+        except HubModelGatewayError as exc:
+            if exc.allow_fallback:
+                fallback = self.stream_direct(
+                    question=self._question_from_gateway_payload(payload),
+                    history=None,
+                    system=str(payload.get("instructions") or ""),
+                    model=selected_model,
+                )
+                # Avoid recursively trying the platform path while preserving the
+                # existing local fallback behavior for configured Agent models.
+                async for event in self._response_text_stream_without_platform(payload, selected_model, sources):
+                    yield event
+                return
+            yield LLMStreamComplete(
+                self._direct_degraded(
+                    exc.code,
+                    exc.message,
+                    selected_model,
+                    model_source="platform",
+                )
+            )
+            return
+        if not terminal_seen:
+            yield LLMStreamError(
+                "model_gateway_stream_incomplete",
+                "Hub Model Gateway stream ended before a terminal event.",
+                retryable=True,
+                partial=bool(accumulated),
+            )
+
+    async def _response_text_stream_without_platform(
+        self,
+        payload: dict,
+        selected_model: str,
+        sources: list[SearchResult] | None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        saw_delta = False
+        async for event in self._response_text_stream(payload):
+            if isinstance(event, LLMStreamDelta):
+                saw_delta = True
+                yield event
+                continue
+            if isinstance(event, LLMStreamError):
+                if saw_delta or event.partial:
+                    yield LLMStreamError(
+                        code=event.code,
+                        message=event.message,
+                        retryable=event.retryable,
+                        partial=True,
+                    )
+                elif sources is None:
+                    yield LLMStreamComplete(
+                        self._direct_degraded(event.code, event.message, selected_model)
+                    )
+                else:
+                    yield LLMStreamComplete(
+                        self._degraded(sources, event.code, event.message, selected_model)
+                    )
+                return
+            if sources is None:
+                yield event
+            else:
+                result = self._finalize_retrieval_result(
+                    event.result.answer,
+                    sources,
+                    event.result.usage,
+                    selected_model,
+                )
+                yield LLMStreamComplete(result)
+            return
+
+    @staticmethod
+    def _gateway_messages(payload: dict) -> list[dict[str, Any]]:
+        messages = payload.get("input")
+        if isinstance(messages, list):
+            return [message for message in messages if isinstance(message, dict)]
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            return [
+                message
+                for message in messages
+                if isinstance(message, dict) and message.get("role") != "system"
+            ]
+        return []
+
+    @staticmethod
+    def _gateway_reasoning(payload: dict) -> str | None:
+        reasoning = payload.get("reasoning")
+        if isinstance(reasoning, dict) and isinstance(reasoning.get("effort"), str):
+            return reasoning["effort"]
+        value = payload.get("reasoning_effort")
+        return value if isinstance(value, str) else None
+
+    @staticmethod
+    def _gateway_model_id(value: Any, fallback: str) -> str:
+        if isinstance(value, dict):
+            value = value.get("id") or value.get("model_id")
+        return str(value or fallback or "platform-model")
+
+    @staticmethod
+    def _question_from_gateway_payload(payload: dict) -> str:
+        for message in reversed(LLMAdapter._gateway_messages(payload)):
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+        return ""
 
     def _build_direct_payload(
         self,
@@ -365,6 +680,7 @@ class LLMAdapter:
         sources: list[SearchResult],
         usage: UsageSummary | None,
         selected_model: str,
+        model_source: str = "agent",
     ) -> LLMResult:
         valid = {source.citation_id for source in sources}
         citation_ids: list[str] = []
@@ -378,13 +694,19 @@ class LLMAdapter:
 
         answer = re.sub(r"\[S(\d+)\]", keep, text or "")
         if not citation_ids:
-            return self._degraded(sources, "llm_missing_citations", model=selected_model)
+            return self._degraded(
+                sources,
+                "llm_missing_citations",
+                model=selected_model,
+                model_source=model_source,
+            )
         return LLMResult(
             answer=answer,
             citation_ids=list(dict.fromkeys(citation_ids)),
             degraded=False,
             model=selected_model,
             usage=usage,
+            model_source=model_source,
         )
 
     @staticmethod
@@ -770,6 +1092,7 @@ class LLMAdapter:
         error_code: str,
         error_message: str | None = None,
         model: str | None = None,
+        model_source: str = "agent",
     ) -> LLMResult:
         citations = [source.citation_id for source in sources]
         lines = ["模型暂时不可用，以下是检索到的相关资料："]
@@ -782,6 +1105,7 @@ class LLMAdapter:
             model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
+            model_source=model_source,
         )
 
     def _direct_degraded(
@@ -789,6 +1113,7 @@ class LLMAdapter:
         error_code: str,
         error_message: str | None = None,
         model: str | None = None,
+        model_source: str = "agent",
     ) -> LLMResult:
         return LLMResult(
             answer="模型暂时不可用，请检查模型配置后重试。",
@@ -797,6 +1122,7 @@ class LLMAdapter:
             model=model or self.settings.llm_model,
             error_code=error_code,
             error_message=error_message,
+            model_source=model_source,
         )
 
 
@@ -829,6 +1155,7 @@ class FakeLLMAdapter(LLMAdapter):
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> LLMResult:
         self.direct_calls += 1
         self.last_direct_system = system
@@ -855,6 +1182,7 @@ class FakeLLMAdapter(LLMAdapter):
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> LLMResult:
         self.retrieval_calls += 1
         self.last_retrieval_system = system
@@ -886,6 +1214,7 @@ class FakeLLMAdapter(LLMAdapter):
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         result = self.generate_direct(
             question,
@@ -912,6 +1241,7 @@ class FakeLLMAdapter(LLMAdapter):
         reference_context: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[LLMStreamEvent]:
         result = self.generate(
             question,

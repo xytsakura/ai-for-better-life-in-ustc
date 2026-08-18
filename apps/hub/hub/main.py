@@ -29,11 +29,34 @@ from .identity import (
     update_agent_credential_status,
 )
 from .limits import read_json_limited
+from .model_gateway import (
+    ModelBindingRequest,
+    ModelDelegationRevokeRequest,
+    ModelGenerateRequest,
+    ModelGrantExchangeRequest,
+    ModelProfileCreate,
+    ModelProfilePatch,
+    ModelProfileService,
+    bind_model,
+    create_model_delegation_if_supported,
+    create_profile,
+    delete_profile,
+    discover_profile_models,
+    exchange_model_grant,
+    get_binding,
+    get_profile,
+    list_profiles,
+    model_generate_stream,
+    patch_profile,
+    revoke_model_delegation,
+    test_profile_connection,
+)
 from .registry import (
     deprecate_agent,
     get_active_version,
     get_agent,
     list_agents,
+    list_submitted_agents,
     restore_agent,
     review_version,
     rollback_agent,
@@ -53,6 +76,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     settings = settings or Settings.from_env()
     init_db(settings.database_path)
     identity = identity or IdentityService(settings)
+    model_service = ModelProfileService.from_settings(settings, identity)
 
     async def monitor_health() -> None:
         while True:
@@ -97,11 +121,12 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     app = FastAPI(title="Campus Agent Hub", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.identity = identity
+    app.state.model_service = model_service
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_allow_origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
     web_root = Path(__file__).resolve().parents[1] / "web"
@@ -122,6 +147,11 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     def require_admin(user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
         if user["role"] != "admin":
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"error": "admin_required"})
+        return user
+
+    def require_developer_or_admin(user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
+        if user["role"] not in {"developer", "admin"}:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"error": "developer_or_admin_required"})
         return user
 
     async def run_checks_background(agent_id: str, version_id: str) -> None:
@@ -182,7 +212,7 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
     async def submit_agent(
         manifest: dict[str, Any],
         background_tasks: BackgroundTasks,
-        user: dict[str, str] = Depends(current_user),
+        user: dict[str, str] = Depends(require_developer_or_admin),
     ) -> dict[str, Any]:
         if manifest.get("trust_level") == "first_party_internal" and user["role"] != "admin":
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail={"error": "admin_required"})
@@ -201,6 +231,12 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                     version_id,
                 )
             return get_agent(conn, record["agent_id"], include_private=True)
+
+    @app.get("/api/developer/submissions")
+    def developer_submissions(user: dict[str, str] = Depends(require_developer_or_admin)) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            submitted_by = None if user["role"] == "admin" else user["user_id"]
+            return {"agents": list_submitted_agents(conn, submitted_by=submitted_by)}
 
     @app.get("/api/agents")
     def public_agents() -> dict[str, Any]:
@@ -382,6 +418,156 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
         with database(settings.database_path) as conn:
             return {"events": list_audit(conn, agent_id)}
 
+    @app.get("/api/model-profiles")
+    def api_model_profiles(user: dict[str, str] = Depends(current_user)) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            return {"profiles": list_profiles(conn, user["user_id"])}
+
+    @app.post("/api/model-profiles", status_code=201)
+    def api_create_model_profile(
+        body: ModelProfileCreate,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            return create_profile(
+                conn,
+                model_service,
+                owner_user_id=user["user_id"],
+                body=body,
+            )
+
+    @app.get("/api/model-profiles/{profile_id}")
+    def api_get_model_profile(
+        profile_id: str,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            return get_profile(conn, user["user_id"], profile_id)
+
+    @app.patch("/api/model-profiles/{profile_id}")
+    def api_patch_model_profile(
+        profile_id: str,
+        body: ModelProfilePatch,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            return patch_profile(
+                conn,
+                model_service,
+                owner_user_id=user["user_id"],
+                profile_id=profile_id,
+                body=body,
+            )
+
+    @app.delete("/api/model-profiles/{profile_id}", status_code=204)
+    def api_delete_model_profile(
+        profile_id: str,
+        user: dict[str, str] = Depends(current_user),
+    ) -> None:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            delete_profile(conn, user["user_id"], profile_id)
+
+    @app.post("/api/model-profiles/{profile_id}/test")
+    async def api_test_model_profile(
+        profile_id: str,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            return await test_profile_connection(
+                conn,
+                model_service,
+                owner_user_id=user["user_id"],
+                profile_id=profile_id,
+            )
+
+    @app.post("/api/model-profiles/{profile_id}/discover")
+    async def api_discover_model_profile(
+        profile_id: str,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        with database(settings.database_path) as conn:
+            return await discover_profile_models(
+                conn,
+                model_service,
+                owner_user_id=user["user_id"],
+                profile_id=profile_id,
+            )
+
+    @app.put("/api/model-bindings/global")
+    def api_bind_global_model(
+        body: ModelBindingRequest,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            return bind_model(conn, owner_user_id=user["user_id"], agent_id="", body=body)
+
+    @app.get("/api/model-bindings")
+    def api_get_model_bindings(user: dict[str, str] = Depends(current_user)) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT agent_id FROM hub_model_bindings
+                WHERE owner_user_id = ?
+                ORDER BY agent_id
+                """,
+                (user["user_id"],),
+            ).fetchall()
+            result = {
+                "global": get_binding(conn, user["user_id"], ""),
+                "agents": [
+                    get_binding(conn, user["user_id"], row["agent_id"])
+                    for row in rows
+                    if row["agent_id"]
+                ],
+            }
+            return result
+
+    @app.put("/api/model-bindings/agents/{agent_id}")
+    def api_bind_agent_model(
+        agent_id: str,
+        body: ModelBindingRequest,
+        user: dict[str, str] = Depends(current_user),
+    ) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            return bind_model(conn, owner_user_id=user["user_id"], agent_id=agent_id, body=body)
+
+    @app.post("/api/model-gateway/grants/exchange")
+    def api_exchange_model_grant(
+        request: Request,
+        body: ModelGrantExchangeRequest,
+    ) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            return exchange_model_grant(conn, model_service, request=request, body=body)
+
+    @app.post("/api/model-gateway/delegations/revoke")
+    def api_revoke_model_delegation(
+        request: Request,
+        body: ModelDelegationRevokeRequest,
+    ) -> dict[str, Any]:
+        model_service.require_enabled()
+        with database(settings.database_path) as conn:
+            client_id = authenticate_client_secret_basic(conn, request)
+            return revoke_model_delegation(conn, agent_id=client_id, token=body.token)
+
+    @app.post("/api/model-gateway/v1/generate")
+    async def api_model_gateway_generate(
+        request: Request,
+        body: ModelGenerateRequest,
+    ):
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail={"error": "model_grant_invalid"})
+        token = auth.split(" ", 1)[1].strip()
+        with database(settings.database_path) as conn:
+            return await model_generate_stream(conn, model_service, token=token, body=body)
+
     @app.get("/api/agents/{agent_id}/launch")
     async def launch_link_app(
         agent_id: str,
@@ -492,12 +678,23 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 agent_id=client_id,
                 version_id=code_record["version_id"],
             )
-            return {
+            response = {
                 "access_token": token,
                 "token_type": "Bearer",
                 "expires_in": settings.jwt_ttl_seconds,
                 "scope": " ".join(code_record["scopes"]),
             }
+            delegation = create_model_delegation_if_supported(
+                conn,
+                model_service,
+                agent_id=client_id,
+                version_id=code_record["version_id"],
+                user_id=code_record["user_id"],
+                display_name=code_record["display_name"],
+            )
+            if delegation:
+                response.update(delegation)
+            return response
 
     @app.post("/api/agents/{agent_id}/health/check")
     async def run_health_check(

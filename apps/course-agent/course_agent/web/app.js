@@ -7,6 +7,7 @@ const state = {
   selectedDocumentIds: new Set(),
   settings: {},
   modelName: '',
+  modelSource: 'agent_fallback',
   modelCatalog: { models: [], discoverySource: null, cached: false },
   currentModel: '',
   currentReasoningEffort: null,
@@ -1168,8 +1169,11 @@ function applyUsageFromResult(result) {
   if (result?.model) {
     state.currentModel = result.model;
     state.modelName = result.model;
-    updateHomeModelLabel();
   }
+  if (result?.model_source) {
+    state.modelSource = result.model_source === 'platform' ? 'platform' : 'agent_fallback';
+  }
+  updateHomeModelLabel();
   state.currentUsage = result?.usage ? normalizeUsage(result.usage) : null;
   state.usagePending = false;
   renderContextMeter();
@@ -2172,6 +2176,7 @@ async function login(userId) {
     state.selectedDocumentIds.clear();
     state.settings = {};
     state.modelName = '';
+    state.modelSource = 'agent_fallback';
     state.modelCatalog = { models: [], discoverySource: null, cached: false };
     state.currentModel = '';
     state.currentReasoningEffort = null;
@@ -2227,6 +2232,7 @@ async function logout() {
   state.selectedDocumentIds.clear();
   state.settings = {};
   state.modelName = '';
+  state.modelSource = 'agent_fallback';
   state.modelCatalog = { models: [], discoverySource: null, cached: false };
   state.currentModel = '';
   state.currentReasoningEffort = null;
@@ -2529,6 +2535,26 @@ function marketplaceLibraryById(libraryId) {
     || null;
 }
 
+function marketplaceMetadata(library) {
+  return (library && typeof library.marketplace === 'object' && library.marketplace) ? library.marketplace : {};
+}
+
+function marketplaceDemoLabel(library) {
+  const metadata = marketplaceMetadata(library);
+  if (metadata.demo_kind === 'real' && Number(library?.document_count || 0) > 0) return '真实可检索';
+  return '演示知识库';
+}
+
+function marketplaceEmptyState(library) {
+  const metadata = marketplaceMetadata(library);
+  return metadata.empty_state || '资料待补充；当前课程仅展示未来可接入的知识库入口。';
+}
+
+function marketplaceCoverTheme(library) {
+  const metadata = marketplaceMetadata(library);
+  return String(metadata.cover_theme || 'indigo').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'indigo';
+}
+
 function marketplaceDocumentPolicies(document) {
   const policies = [];
   policies.push(document.use_in_rag === false ? '不参与问答' : '可用于问答');
@@ -2620,12 +2646,28 @@ function renderMarketplaceLibraryList() {
   list.innerHTML = state.marketplace.libraries.length ? state.marketplace.libraries.map(library => {
     const active = String(state.marketplace.selectedLibraryId) === String(library.id);
     const tags = normalizeTags(library.tags);
+    const metadata = marketplaceMetadata(library);
+    const docCount = Number(library.document_count || 0);
+    const statusLabel = marketplaceDemoLabel(library);
+    const coverIcon = metadata.cover_icon || '◇';
+    const coverTheme = marketplaceCoverTheme(library);
+    const shortDescription = metadata.short_description || library.description || '课程知识库入口';
     return `
-      <button class="marketplace-library-item ${active ? 'active' : ''}" data-marketplace-library="${escapeHtml(library.id)}" type="button">
-        <span class="marketplace-item-title">${escapeHtml(library.name)}</span>
-        <span class="marketplace-item-meta">${escapeHtml(library.course || '未标注课程')} · ${Number(library.document_count || 0)} 份资料 · ${Number(library.subscriber_count || 0)} 人订阅</span>
-        <span class="marketplace-item-desc">${escapeHtml(library.description || '暂无简介')}</span>
-        <span class="marketplace-tag-row">${tags.slice(0, 4).map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</span>
+      <button class="marketplace-library-item marketplace-course-card ${active ? 'active' : ''}" data-marketplace-library="${escapeHtml(library.id)}" type="button">
+        <span class="marketplace-course-cover marketplace-course-cover-${escapeHtml(coverTheme)}" aria-hidden="true">
+          <span>${escapeHtml(coverIcon)}</span>
+        </span>
+        <span class="marketplace-course-body">
+          <span class="marketplace-course-kicker">${escapeHtml(library.course || '未标注课程')}</span>
+          <span class="marketplace-item-title">${escapeHtml(library.name)}</span>
+          <span class="marketplace-item-desc">${escapeHtml(shortDescription)}</span>
+          <span class="marketplace-item-meta">
+            <span>${docCount} 份资料</span>
+            <span>${Number(library.subscriber_count || 0)} 人订阅</span>
+            <span class="marketplace-demo-badge ${docCount > 0 ? 'ready' : ''}">${escapeHtml(statusLabel)}</span>
+          </span>
+          <span class="marketplace-tag-row">${tags.slice(0, 4).map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</span>
+        </span>
       </button>
     `;
   }).join('') : `
@@ -2660,11 +2702,18 @@ function renderMarketplaceLibraryDetail() {
   const canReviewDocuments = canAdminManage || library.author_id === state.user?.id;
   const isPublished = library.status === 'published';
   const canWithdraw = canAdminManage || library.author_id === state.user?.id;
+  const metadata = marketplaceMetadata(library);
+  const coverTheme = marketplaceCoverTheme(library);
+  const coverIcon = metadata.cover_icon || '◇';
+  const demoLabel = marketplaceDemoLabel(library);
   detail.innerHTML = `
     <article class="marketplace-detail">
       <div class="marketplace-detail-header">
+        <div class="marketplace-detail-cover marketplace-course-cover-${escapeHtml(coverTheme)}" aria-hidden="true">
+          <span>${escapeHtml(coverIcon)}</span>
+        </div>
         <div>
-          <div class="content-subtitle">${escapeHtml(library.course || '公开课程')}</div>
+          <div class="content-subtitle">${escapeHtml(library.course || '公开课程')} · ${escapeHtml(demoLabel)}</div>
           <h2>${escapeHtml(library.name)}</h2>
           <p>${escapeHtml(library.description || '暂无简介')}</p>
         </div>
@@ -2704,7 +2753,11 @@ function renderMarketplaceLibraryDetail() {
               ${((subscribed && document.can_download) || canReviewDocuments) ? `<a class="button button-secondary" href="${referenceViewerDocumentUrl(document.document_id)}" target="_blank" rel="noopener">下载</a>` : ''}
             </div>
           </div>
-        `).join('') : '<div class="muted">后端暂未返回资料清单。</div>'}
+        `).join('') : `<div class="marketplace-empty-course">
+          <div class="empty-icon">◇</div>
+          <p>${escapeHtml(marketplaceEmptyState(library))}</p>
+          <span>这门课目前只作为课程集市演示入口，不会参与 RAG 检索，也不会显示虚假的资料数量。</span>
+        </div>`}
       </section>
       ${canAdminManage && versions.length ? `
         <section class="marketplace-documents">
@@ -4169,6 +4222,7 @@ function updateHomeModeLabel() {
 
 function updateHomeModelLabel() {
   state.modelName = state.currentModel || state.settings.llm_model || state.modelName || '';
+  state.modelSource = state.settings.model_runtime?.source || state.modelSource || 'agent_fallback';
   renderModelControls();
   renderContextMeter();
 }
@@ -4208,6 +4262,17 @@ function renderModelControls() {
   const settingModelList = $('#setting-model-list');
   if (settingModelList) {
     settingModelList.innerHTML = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
+  }
+  const sourceBadge = $('#home-model-source');
+  if (sourceBadge) {
+    const runtime = state.settings.model_runtime || {};
+    const source = state.modelSource || runtime.source || 'agent_fallback';
+    const platform = source === 'platform';
+    sourceBadge.textContent = platform ? '平台配置' : 'Agent 本地回退';
+    sourceBadge.classList.toggle('platform', platform);
+    sourceBadge.title = platform
+      ? '本轮优先通过 Hub Model Gateway 使用平台模型配置；瀚海行不会接触 API Key'
+      : '当前使用瀚海行服务端本地模型配置；独立运行或平台不可用时使用';
   }
   renderReasoningControl();
   renderModelCatalogList();
@@ -5920,6 +5985,7 @@ async function loadSettings() {
     const settings = await api('/api/settings');
     if (!authContextMatches(authContext)) return;
     state.settings = settings;
+    state.modelSource = settings.model_runtime?.source || 'agent_fallback';
     state.modelName = state.currentModel || state.settings.llm_model || '';
     if (!state.currentModel) {
       state.currentModel = state.settings.llm_model || '';

@@ -11,7 +11,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260809-1">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260818-2">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -135,6 +135,7 @@
                     <input id="home-model-input" type="text" list="home-model-list" placeholder="输入模型名，如 gpt-5" autocomplete="off" aria-label="当前对话模型" />
                     <datalist id="home-model-list"></datalist>
                   </label>
+                  <span id="home-model-source" class="model-source-badge" title="当前模型来源">Agent 本地回退</span>
                   <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
                     <span class="visually-hidden">思考强度</span>
                     <select id="home-reasoning-effort" aria-label="当前对话思考强度"></select>
@@ -617,7 +618,7 @@
           <section id="settings-tab-llm" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-llm">
             <div class="settings-card">
               <h3>LLM 服务配置</h3>
-              <p class="settings-desc">配置 OpenAI 兼容接口后，即可使用直接问答与资料检索增强功能。</p>
+              <p class="settings-desc">从 Hub 工作台进入时优先使用平台模型配置；独立运行或平台不可用时，使用这里保存的 Agent 本地回退配置。API Key 不会返回浏览器。</p>
               <form id="settings-form" class="settings-form">
                 <label class="field">
                   <span>Base URL</span>
@@ -1035,6 +1036,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=20260809-1" defer></script>
-  <script src="/assets/app.js?v=20260818-1" defer></script>
+  <script src="/assets/app.js?v=20260818-2" defer></script>
 </body>
 </html>

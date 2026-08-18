@@ -12,10 +12,7 @@
     <script>
       document.documentElement.dataset.theme = globalThis.HubTheme.readFromGlobal();
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Caveat:wght@500;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260807-28" />
+    <link rel="stylesheet" href="/styles.css?v=20260818-4" />
   </head>
   <body>
     <div class="splash" aria-hidden="true">
@@ -40,7 +37,8 @@
         <nav class="hub-nav">
           <a href="/hub" data-link data-nav="portal"><span aria-hidden="true">⌂</span>主页</a>
           <a href="/hub/agents" data-link data-nav="directory"><span aria-hidden="true">✦</span>Agent 广场</a>
-          <a href="/hub/submit" data-link data-nav="submit"><span aria-hidden="true">＋</span>开发者接入</a>
+          <a href="/hub/submit" data-link data-nav="submit" data-developer-only><span aria-hidden="true">＋</span>开发者接入</a>
+          <a href="/hub/submissions" data-link data-nav="submissions" data-developer-only><span aria-hidden="true">▣</span>我的提交</a>
           <a href="/hub/admin" data-link data-nav="admin" data-admin-only><span aria-hidden="true">◇</span>管理审核</a>
           <a href="/hub/settings" data-link data-nav="settings"><span aria-hidden="true">✎</span>模型配置</a>
         </nav>
@@ -79,6 +77,6 @@
     </template>
 
     <script src="/splash.js?v=20260807-2" defer></script>
-    <script type="module" src="/app.js?v=20260809-1"></script>
+    <script type="module" src="/app.js?v=20260818-4"></script>
   </body>
 </html>

@@ -2,6 +2,15 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-08-18：五项核心优化中的瀚海行交付
+
+- 瀚海行改用自托管 Inter、Noto Sans SC 和 Noto Serif SC 字体，默认深色主题及既有浅色偏好保持不变；静态资源版本同步提升，避免浏览器继续使用开发期缓存。
+- 新增课程集市式知识广场：数学分析 B1 展示并复用现有 25 份真实 OCR 资料，其余五门课程清晰标记为演示知识库和“资料待补充”；幂等 seed 不覆盖用户修改，也不生成虚假文档数。
+- 接入 Hub `platform_optional` 模型运行时：Featured 工作台和 Connected 调用使用服务端短期委托与单次 Grant，浏览器和瀚海行进程均不会接触用户 API Key；未从 Hub 启动时继续使用原有 Agent 配置。
+- Profile 禁用、换绑、凭据或协议变化、身份切换、工作台退出及 Connected run 结束都会撤销旧委托和未消费 Grant；撤销失败不再误报成功。
+- 真实浏览器分别完成 `gpt-5.6-sol`、`gpt-5.6-terra` 直接问答，并使用单份《第1-3章复习提纲》完成带第 2 页和第 10 页引用的 RAG 回答。
+- 瀚海行 Python 108 项、JavaScript 12 项全部通过；与 Hub、独立 Demo Agent 和 Contract 合并计算的最终回归共 207 项通过。
+
 ## 2026-08-18：Responses / Chat Completions 双接口兼容
 
 - `a5b5f5f` 为模型适配器增加 `responses` 与 `chat_completions` 两种 API style；Chat Completions 模式使用标准 `messages`、`max_tokens` 和 SSE `choices[].delta.content`，不向兼容服务发送 Responses 专用参数。
