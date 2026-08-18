@@ -10,6 +10,22 @@
 - 一次提交尽量只处理一个主题；提交信息使用 `feat`、`fix`、`docs`、`refactor`、`test` 或 `chore` 等清晰前缀。
 - 尚未实现的想法放入设计文档或待办，不写成已经交付的更新。
 
+## 2026-08-18
+
+### `a5b5f5f` `feat(course-agent)`：本地三服务启动与模型接口兼容
+
+- 新增 Linux/macOS 非 Docker 启动脚本，按 Hub 注册、运行时凭据生成、两个 Agent 启动和完整协议验收的顺序建立三服务闭环。
+- 瀚海行模型适配器新增 `responses` 与 `chat_completions` 两种 API style，支持 Responses API 和通义千问等 OpenAI Chat Completions 兼容服务。
+- Chat Completions 路径补齐非流式与 SSE 流式响应解析，并兼容 `prompt_tokens`、`completion_tokens` 用量字段。
+- bootstrap 新增仅注册模式，使 Featured Agent 可以在应用启动前获得运行时密钥；原有密钥文件热加载能力保持有效。
+
+### `5072610` `fix(course-agent)`：补齐 API style 交付链路
+
+- 修复 API style 只存在于模型适配器、却没有传入 Docker、本地启动和设置接口的问题；管理员现在可在瀚海行设置页选择 Responses 或 Chat Completions 并持久化。
+- 模型自动发现允许选择服务端返回的普通文本模型，同时继续禁用图像、音频、实时、向量、重排、语音转写和审核等非聊天模型。
+- 修复本地脚本重复启动时无法正确停止 Demo Agent，并在缺少 `.env` 时自动从示例配置创建本地文件。
+- 自动化验证为瀚海行 Python 97 项、Hub Python 26 项、第三方 Demo Python 7 项、JavaScript 31 项、Contract 5 项，共 166 项全部通过；三服务固定验收 10/10 轮成功，真实浏览器验证 Hub 进入瀚海行、设置控件、GPT-5.6 回答和上下文用量均正常。
+
 ## 2026-08-17
 
 ### `d877092` `fix(course-agent)`：Hub 工作台密钥轮换热加载

@@ -2,6 +2,15 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-08-18：Responses / Chat Completions 双接口兼容
+
+- `a5b5f5f` 为模型适配器增加 `responses` 与 `chat_completions` 两种 API style；Chat Completions 模式使用标准 `messages`、`max_tokens` 和 SSE `choices[].delta.content`，不向兼容服务发送 Responses 专用参数。
+- Chat Completions 非流式与流式结果均沿用现有隐藏推理边界，只把最终回答传给前端；用量归一化兼容 `prompt_tokens` 与 `completion_tokens`。
+- `5072610` 将 API style 接入管理员设置接口、设置页、Docker Compose 和非 Docker 启动脚本，配置保存后会重新创建模型适配器并立即生效；非法模式由接口返回 422，不再静默保存。
+- 模型目录把服务端发现、且未识别为图像、音频、实时、向量、重排、转写、审核等非聊天类型的模型视为可选文本模型，通义千问、DeepSeek 等名称不再被统一禁用。
+- 本地脚本支持在缺少 `.env` 时创建配置，并修复重复启动时 Demo Agent 进程匹配错误；Featured 密钥二次轮换继续由运行时文件热加载承接。
+- 自动化验证为瀚海行 Python 97 项、Hub Python 26 项、第三方 Demo Python 7 项、JavaScript 31 项、Contract 5 项，共 166 项全部通过；固定三服务验收 10/10 轮成功，现有 Responses 模式 GPT-5.6 真实问答和上下文用量显示正常。Chat Completions 兼容路径已由请求载荷、非流式响应和 SSE 流式单元测试覆盖。
+
 ## 2026-08-17：Featured 工作台密钥轮换修复
 
 - `d877092` 将 Hub client secret 的文件读取从“进程启动时一次性加载”改为“每次工作台 token 兑换前读取”，重复 bootstrap 后无需重启瀚海行。
