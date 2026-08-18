@@ -166,7 +166,11 @@ def normalize_usage(raw_usage: Any, model: str) -> UsageSummary | None:
     if not isinstance(raw_usage, dict):
         return None
     input_tokens = _optional_int(raw_usage.get("input_tokens"))
+    if input_tokens is None:
+        input_tokens = _optional_int(raw_usage.get("prompt_tokens"))
     output_tokens = _optional_int(raw_usage.get("output_tokens"))
+    if output_tokens is None:
+        output_tokens = _optional_int(raw_usage.get("completion_tokens"))
     total_tokens = _optional_int(raw_usage.get("total_tokens"))
     input_details = raw_usage.get("input_tokens_details")
     output_details = raw_usage.get("output_tokens_details")

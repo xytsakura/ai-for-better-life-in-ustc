@@ -242,6 +242,68 @@ def test_max_output_tokens_allows_bounded_environment_override(monkeypatch, tmp_
     assert _CapturingClient.last_payload["max_output_tokens"] == 32_000
 
 
+def test_chat_completions_mode_uses_qwen_compatible_payload(monkeypatch, tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        llm_model="qwen-plus",
+        llm_api_style="chat_completions",
+    )
+    _CapturingClient.last_url = None
+    _CapturingClient.last_payload = None
+    monkeypatch.setattr("course_agent.llm.httpx.Client", _CapturingClient)
+
+    result = LLMAdapter(settings).generate_direct("解释一致连续。")
+
+    assert result.degraded is False
+    assert _CapturingClient.last_url == (
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    )
+    assert _CapturingClient.last_payload == {
+        "model": "qwen-plus",
+        "messages": [
+            {
+                "role": "system",
+                "content": _CapturingClient.last_payload["messages"][0]["content"],
+            },
+            {"role": "user", "content": "用户问题：\n解释一致连续。"},
+        ],
+        "max_tokens": 1200,
+    }
+    assert "instructions" not in _CapturingClient.last_payload
+    assert "max_output_tokens" not in _CapturingClient.last_payload
+
+
+def test_chat_completions_streaming_emits_text_and_completion(tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_style="chat_completions",
+        llm_model="qwen-plus",
+    )
+    adapter = LLMAdapter(settings)
+    accumulated: list[str] = []
+
+    async def collect() -> list[object]:
+        events: list[object] = []
+        for payload in (
+            {"choices": [{"delta": {"content": "你好"}}]},
+            {"choices": [{"delta": {"content": "，世界"}}]},
+            {"model": "qwen-plus", "choices": [{"finish_reason": "stop"}]},
+        ):
+            async for event in adapter._chat_completion_stream_event(
+                payload, {"model": "qwen-plus"}, accumulated
+            ):
+                events.append(event)
+        return events
+
+    events = asyncio.run(collect())
+    assert [event.text for event in events if isinstance(event, LLMStreamDelta)] == ["你好", "，世界"]
+    completed = [event for event in events if isinstance(event, LLMStreamComplete)]
+    assert len(completed) == 1
+    assert completed[0].result.answer == "你好，世界"
+
+
 def test_hidden_reasoning_is_never_used_as_visible_answer(tmp_path):
     payload = {
         "choices": [

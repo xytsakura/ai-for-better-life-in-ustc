@@ -91,6 +91,7 @@ class Settings:
     llm_api_key: str = os.getenv("COURSE_AGENT_LLM_API_KEY", "")
     llm_base_url: str = os.getenv("COURSE_AGENT_LLM_BASE_URL", "")
     llm_model: str = os.getenv("COURSE_AGENT_LLM_MODEL", "gpt-5.6-sol")
+    llm_api_style: str = os.getenv("COURSE_AGENT_LLM_API_STYLE", "responses")
     branch_llm_model: str = os.getenv(
         "COURSE_AGENT_BRANCH_LLM_MODEL", "gpt-5.6-sol"
     )
@@ -163,6 +164,7 @@ class Settings:
             "llm_base_url": self.llm_base_url,
             "llm_api_key": "",
             "llm_model": self.llm_model,
+            "llm_api_style": self.llm_api_style,
             "llm_timeout_seconds": self.llm_timeout_seconds,
             "llm_configured": self.llm_configured,
             "search_backend": self.search_backend,
@@ -191,6 +193,8 @@ class Settings:
                 self.llm_api_key = str(value).strip()
         if "llm_model" in data:
             self.llm_model = str(data["llm_model"] or "").strip() or "gpt-5.6-sol"
+        if "llm_api_style" in data:
+            self.llm_api_style = str(data["llm_api_style"] or "responses").strip()
         if "llm_timeout_seconds" in data:
             self.llm_timeout_seconds = float(data["llm_timeout_seconds"])
         for key in ("search_backend", "parser_backend", "chunking_backend", "tokenizer_backend"):
@@ -209,6 +213,7 @@ class Settings:
             "COURSE_AGENT_LLM_API_KEY",
             "COURSE_AGENT_LLM_BASE_URL",
             "COURSE_AGENT_LLM_MODEL",
+            "COURSE_AGENT_LLM_API_STYLE",
             "COURSE_AGENT_LLM_TIMEOUT_SECONDS",
             "COURSE_AGENT_SEARCH_BACKEND",
             "COURSE_AGENT_PARSER_BACKEND",
@@ -221,6 +226,7 @@ class Settings:
             "COURSE_AGENT_LLM_API_KEY": self.llm_api_key,
             "COURSE_AGENT_LLM_BASE_URL": self.llm_base_url,
             "COURSE_AGENT_LLM_MODEL": self.llm_model,
+            "COURSE_AGENT_LLM_API_STYLE": self.llm_api_style,
             "COURSE_AGENT_LLM_TIMEOUT_SECONDS": str(self.llm_timeout_seconds),
             "COURSE_AGENT_SEARCH_BACKEND": self.search_backend,
             "COURSE_AGENT_PARSER_BACKEND": self.parser_backend,

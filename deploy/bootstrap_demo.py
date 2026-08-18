@@ -28,6 +28,13 @@ def main() -> None:
     write_course_agent_secret(credential["client_secret"])
     demo_version = submit_manifest(demo)
 
+    # 本地无 Docker 启动时，agent 还没起，无法立即做 conformance/health。
+    # REGISTER_ONLY=1 只完成注册、凭据与 secret 文件写入，供 agent 启动后读取，
+    # 之后再用默认模式补齐 conformance 与审核。
+    if os.getenv("HUB_BOOTSTRAP_REGISTER_ONLY", "0") == "1":
+        print("Hub demo bootstrap (register-only) completed: manifests submitted and secret written.")
+        return
+
     wait_for_conformance("hanhai-course-agent", hanhai_version)
     wait_for_conformance("campus-helper-demo", demo_version)
     review_version("hanhai-course-agent", hanhai_version, featured=True)

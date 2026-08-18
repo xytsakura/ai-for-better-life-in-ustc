@@ -49,6 +49,42 @@ class LLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    def _api_style(self) -> str:
+        style = str(self.settings.llm_api_style or "responses").strip().lower()
+        return "chat_completions" if style == "chat_completions" else "responses"
+
+    def _request_url(self) -> str:
+        path = "/chat/completions" if self._api_style() == "chat_completions" else "/responses"
+        return self.settings.llm_base_url.rstrip("/") + path
+
+    def _build_payload(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_messages: list[dict],
+        reasoning_effort: str | None,
+    ) -> dict:
+        if self._api_style() == "chat_completions":
+            payload: dict = {
+                "model": model,
+                "messages": [{"role": "system", "content": instructions}, *input_messages],
+                "max_tokens": self._max_output_tokens(),
+            }
+            # Qwen's OpenAI-compatible endpoint does not accept the Responses
+            # API's reasoning object. It can still return normal chat output.
+            return payload
+
+        payload = {
+            "model": model,
+            "instructions": instructions,
+            "input": input_messages,
+            "max_output_tokens": self._max_output_tokens(),
+        }
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
+        return payload
+
     @staticmethod
     def _max_output_tokens() -> int:
         raw_value = os.getenv("COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS", "1200")
@@ -270,15 +306,13 @@ class LLMAdapter:
         if reference_context:
             input_messages.append(self._reference_message(reference_context))
         input_messages.append({"role": "user", "content": f"用户问题：\n{question}"})
-        payload = {
-            "model": selected_model,
-            "instructions": instructions,
-            "input": input_messages,
-            "max_output_tokens": self._max_output_tokens(),
-        }
         effective_reasoning = reasoning_effort or os.getenv("COURSE_AGENT_LLM_REASONING_EFFORT") or None
-        if effective_reasoning:
-            payload["reasoning"] = {"effort": effective_reasoning}
+        payload = self._build_payload(
+            model=selected_model,
+            instructions=instructions,
+            input_messages=input_messages,
+            reasoning_effort=effective_reasoning,
+        )
         return selected_model, payload
 
     def _build_retrieval_payload(
@@ -316,15 +350,13 @@ class LLMAdapter:
                 "content": f"用户问题：\n{question}\n\n可用资料：\n{source_text}",
             }
         )
-        payload = {
-            "model": selected_model,
-            "instructions": instructions,
-            "input": input_messages,
-            "max_output_tokens": self._max_output_tokens(),
-        }
         effective_reasoning = reasoning_effort or os.getenv("COURSE_AGENT_LLM_REASONING_EFFORT") or None
-        if effective_reasoning:
-            payload["reasoning"] = {"effort": effective_reasoning}
+        payload = self._build_payload(
+            model=selected_model,
+            instructions=instructions,
+            input_messages=input_messages,
+            reasoning_effort=effective_reasoning,
+        )
         return selected_model, payload
 
     def _finalize_retrieval_result(
@@ -382,7 +414,7 @@ class LLMAdapter:
     def _response_text(self, payload: dict) -> tuple[str | None, UsageSummary | None, str | None, str | None]:
         if not self.settings.llm_configured:
             return None, None, "llm_not_configured", None
-        url = self.settings.llm_base_url.rstrip("/") + "/responses"
+        url = self._request_url()
         last_code = "llm_request_failed"
         last_message = None
         for attempt in range(2):
@@ -419,7 +451,7 @@ class LLMAdapter:
             yield LLMStreamError("llm_not_configured", "", retryable=False, partial=False)
             return
 
-        url = self.settings.llm_base_url.rstrip("/") + "/responses"
+        url = self._request_url()
         accumulated: list[str] = []
         terminal_seen = False
         try:
@@ -524,6 +556,11 @@ class LLMAdapter:
         payload: dict,
         accumulated: list[str],
     ) -> AsyncIterator[LLMStreamEvent]:
+        if self._api_style() == "chat_completions":
+            async for parsed in self._chat_completion_stream_event(event, payload, accumulated):
+                yield parsed
+            return
+
         event_type = event.get("type")
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
@@ -609,6 +646,52 @@ class LLMAdapter:
                 retryable=True,
                 partial=bool(accumulated),
             )
+
+    async def _chat_completion_stream_event(
+        self,
+        event: dict,
+        payload: dict,
+        accumulated: list[str],
+    ) -> AsyncIterator[LLMStreamEvent]:
+        choices = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            error = event.get("error")
+            if isinstance(error, dict):
+                message = str(error.get("message") or "Model stream error.")
+                code = self._normalize_error_code(
+                    str(error.get("code") or "llm_stream_error"),
+                    fallback="llm_stream_error",
+                )
+                yield LLMStreamError(
+                    code,
+                    self._redact_error_message(message),
+                    retryable=True,
+                    partial=bool(accumulated),
+                )
+            return
+        choice = choices[0] if isinstance(choices[0], dict) else {}
+        delta = choice.get("delta") if isinstance(choice, dict) else None
+        if isinstance(delta, dict):
+            text = delta.get("content")
+            if isinstance(text, str) and text:
+                accumulated.append(text)
+                yield LLMStreamDelta(text)
+        if choice.get("finish_reason") is not None:
+            text = "".join(accumulated).strip()
+            if not text:
+                yield LLMStreamError("llm_empty_response", "", retryable=True, partial=False)
+                return
+            model = str(event.get("model") or payload.get("model") or "")
+            yield LLMStreamComplete(
+                LLMResult(
+                    answer=text,
+                    citation_ids=[],
+                    degraded=False,
+                    model=model,
+                    usage=normalize_usage(event.get("usage"), model),
+                )
+            )
+            return
 
     @staticmethod
     def _normalize_error_code(raw: str, *, fallback: str) -> str:
