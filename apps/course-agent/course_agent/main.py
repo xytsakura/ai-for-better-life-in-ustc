@@ -286,6 +286,7 @@ class SettingsUpdate(BaseModel):
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_model: Optional[str] = None
+    llm_api_style: Optional[Literal["responses", "chat_completions"]] = None
     llm_timeout_seconds: Optional[float] = Field(default=None, ge=5, le=300)
     search_backend: Optional[str] = None
     parser_backend: Optional[str] = None

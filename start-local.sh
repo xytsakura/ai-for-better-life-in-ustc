@@ -14,7 +14,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+if [[ ! -f "$ROOT/.env" ]]; then
+  cp "$ROOT/.env.example" "$ROOT/.env"
+  echo "[start-local] 已从 .env.example 创建 .env"
+fi
 source "$ROOT/.env"
+
+HUB_PUBLIC_PORT="${HUB_PUBLIC_PORT:-8100}"
+COURSE_AGENT_PUBLIC_PORT="${COURSE_AGENT_PUBLIC_PORT:-8002}"
+DEMO_AGENT_PUBLIC_PORT="${DEMO_AGENT_PUBLIC_PORT:-8101}"
 
 # 运行时数据/凭据目录（替代 compose volume）
 RUNTIME_DIR="$ROOT/var"
@@ -37,7 +45,7 @@ log() { echo "[start-local] $*"; }
 # 停止之前可能残留的进程
 pkill -f "uvicorn hub.main:app" 2>/dev/null || true
 pkill -f "uvicorn course_agent.main:app" 2>/dev/null || true
-pkill -f "demo_agent.main:run" 2>/dev/null || true
+pkill -f "demo_agent.main run" 2>/dev/null || true
 pkill -f "bootstrap_demo.py" 2>/dev/null || true
 sleep 1
 
@@ -96,6 +104,7 @@ COURSE_AGENT_ADMIN_USER_IDS=demo-a \
 COURSE_AGENT_LLM_API_KEY="${COURSE_AGENT_LLM_API_KEY:-}" \
 COURSE_AGENT_LLM_BASE_URL="${COURSE_AGENT_LLM_BASE_URL:-}" \
 COURSE_AGENT_LLM_MODEL="${COURSE_AGENT_LLM_MODEL:-gpt-5.6-sol}" \
+COURSE_AGENT_LLM_API_STYLE="${COURSE_AGENT_LLM_API_STYLE:-responses}" \
 COURSE_AGENT_BRANCH_LLM_MODEL="${COURSE_AGENT_BRANCH_LLM_MODEL:-gpt-5.6-sol}" \
 COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS="${COURSE_AGENT_LLM_MAX_OUTPUT_TOKENS:-1200}" \
 COURSE_AGENT_HUB_AGENT_ID=hanhai-course-agent \

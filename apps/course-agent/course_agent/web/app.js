@@ -5938,9 +5938,12 @@ function renderSettings() {
   $('#setting-api-key').value = '';
   $('#setting-api-key').placeholder = state.settings.llm_configured ? '已配置，留空表示保持不变' : 'sk-...';
   state.apiKeyTouched = false;
+  $('#setting-api-style').value = state.settings.llm_api_style === 'chat_completions'
+    ? 'chat_completions'
+    : 'responses';
   renderModelControls();
   $('#setting-timeout').value = state.settings.llm_timeout_seconds || 45;
-  ['#setting-base-url', '#setting-api-key', '#setting-model', '#setting-timeout', '#settings-test', '#settings-discover-models', '#settings-form button[type="submit"]']
+  ['#setting-base-url', '#setting-api-key', '#setting-model', '#setting-api-style', '#setting-timeout', '#settings-test', '#settings-discover-models', '#settings-form button[type="submit"]']
     .forEach(selector => {
       const element = $(selector);
       if (element) element.disabled = !admin;
@@ -5957,6 +5960,7 @@ async function saveSettings(event) {
   const baseUrl = $('#setting-base-url').value.trim();
   const payload = {
     llm_model: $('#setting-model').value.trim() || null,
+    llm_api_style: $('#setting-api-style').value,
     llm_timeout_seconds: Number($('#setting-timeout').value) || 45,
   };
   if (baseUrl !== (state.settings.llm_base_url || '').trim()) {

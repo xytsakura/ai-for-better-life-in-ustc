@@ -88,7 +88,8 @@ def test_model_discovery_falls_back_from_html_models_to_v1_and_classifies(monkey
     assert eligible["gpt-5.6-sol"].context_window_tokens == 272000
     assert eligible["voice-audio-model"].chat_eligible is False
     assert eligible["voice-audio-model"].disabled_reason == "audio_model_not_supported"
-    assert eligible["unknown-specialized-model"].disabled_reason == "unknown_model_capability"
+    assert eligible["unknown-specialized-model"].chat_eligible is True
+    assert eligible["unknown-specialized-model"].disabled_reason is None
 
 
 def test_model_discovery_cache_is_bound_to_generation(monkeypatch, tmp_path: Path):
@@ -182,12 +183,12 @@ def test_models_endpoint_requires_admin_and_query_validates_catalog_model(monkey
     assert adapter.last_direct_model == "gpt-5.6-terra"
     assert adapter.last_direct_reasoning_effort == "high"
 
-    unknown_model = client.post(
+    compatible_model = client.post(
         "/api/query",
         json={"question": "测试模型选择", "model": "unknown-specialized-model"},
     )
-    assert unknown_model.status_code == 422
-    assert unknown_model.json()["error"]["code"] == "unknown_model_capability"
+    assert compatible_model.status_code == 200
+    assert compatible_model.json()["model"] == "unknown-specialized-model"
 
 
 def test_query_rejects_unsupported_reasoning_for_default_model(tmp_path: Path):
@@ -233,9 +234,22 @@ def test_settings_responses_expose_only_current_user_is_admin(tmp_path: Path):
     assert admin_body["is_admin"] is True
     assert "admin_user_ids" not in admin_body
 
-    updated = client.post("/api/settings", json={"llm_model": "gpt-5.6-terra"})
+    updated = client.post(
+        "/api/settings",
+        json={
+            "llm_model": "gpt-5.6-terra",
+            "llm_api_style": "chat_completions",
+        },
+    )
     assert updated.status_code == 200
     updated_body = updated.json()
     assert updated_body["is_admin"] is True
     assert "admin_user_ids" not in updated_body
     assert updated_body["llm_model"] == "gpt-5.6-terra"
+    assert updated_body["llm_api_style"] == "chat_completions"
+    assert "COURSE_AGENT_LLM_API_STYLE=chat_completions" in (
+        tmp_path / "course-agent.env"
+    ).read_text(encoding="utf-8")
+
+    invalid_style = client.post("/api/settings", json={"llm_api_style": "auto"})
+    assert invalid_style.status_code == 422

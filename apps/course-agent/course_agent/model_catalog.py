@@ -127,6 +127,11 @@ def classify_model(model_id: str) -> ModelInfo:
         return ModelInfo(normalized, display_name, False, [], "realtime_model_not_supported")
     if lowered == "codex-auto-review":
         return ModelInfo(normalized, display_name, False, [], "specialized_review_model")
+    if any(
+        marker in lowered
+        for marker in ("embedding", "rerank", "whisper", "transcription", "moderation", "tts")
+    ):
+        return ModelInfo(normalized, display_name, False, [], "non_chat_model_not_supported")
 
     context_window = context_window_for_model(normalized)
     efforts: list[str] = []
@@ -144,12 +149,15 @@ def classify_model(model_id: str) -> ModelInfo:
             "registry" if context_window else None,
         )
 
+    # The provider's /models endpoint cannot reliably describe capabilities.
+    # Treat models not identified as a known non-chat type as text-capable and
+    # let the selected API style perform the authoritative compatibility test.
     return ModelInfo(
         normalized,
         display_name,
-        False,
+        True,
         [],
-        "unknown_model_capability",
+        None,
         context_window,
         "registry" if context_window else None,
     )

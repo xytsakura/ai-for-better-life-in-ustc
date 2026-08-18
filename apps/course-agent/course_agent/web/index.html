@@ -634,6 +634,14 @@
                   <datalist id="setting-model-list"></datalist>
                   <span class="field-hint">只影响新对话；已有会话保留各自模型。也可直接填写模型名。</span>
                 </label>
+                <label class="field">
+                  <span>接口兼容模式</span>
+                  <select id="setting-api-style">
+                    <option value="responses">Responses API（GPT / OpenAI）</option>
+                    <option value="chat_completions">Chat Completions（通义千问等兼容服务）</option>
+                  </select>
+                  <span class="field-hint">接口返回 404 或提示不支持 /responses 时，切换为 Chat Completions。</span>
+                </label>
                 <div class="settings-model-catalog">
                   <div class="settings-model-catalog-actions">
                     <button type="button" class="button button-secondary" id="settings-discover-models">发现模型</button>
@@ -1027,6 +1035,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=20260809-1" defer></script>
-  <script src="/assets/app.js?v=20260809-2" defer></script>
+  <script src="/assets/app.js?v=20260818-1" defer></script>
 </body>
 </html>
