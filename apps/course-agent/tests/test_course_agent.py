@@ -292,7 +292,7 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260818-2' in html
+    assert '/assets/styles.css?v=20260819-2' in html
     assert '/assets/app.js?v=20260818-2' in html
 
     styles = client.get("/assets/styles.css").text

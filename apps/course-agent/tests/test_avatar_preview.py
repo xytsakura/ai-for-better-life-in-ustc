@@ -201,7 +201,7 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=20260818-2' in html
+    assert '/assets/styles.css?v=20260819-2' in html
     assert '/assets/app.js?v=20260818-2' in html
 
     styles = client.get("/assets/styles.css").text
@@ -295,9 +295,9 @@ def test_virtual_avatar_bubble_theme_and_floating_responsive_layout_are_packaged
     light_theme = styles[
         styles.index(':root[data-theme="light"]') : styles.index("* { box-sizing:")
     ]
-    assert "--agent-bubble-bg: #171717;" in dark_theme
-    assert "--agent-bubble-text: #ffffff;" in dark_theme
-    assert "--agent-bubble-border: #ffffff;" in dark_theme
+    assert "--agent-bubble-bg: rgba(17, 19, 25, 0.94);" in dark_theme
+    assert "--agent-bubble-text: #f2f4f8;" in dark_theme
+    assert "--agent-bubble-border: rgba(143, 166, 255, 0.48);" in dark_theme
     assert "--agent-bubble-bg: #ffffff;" in light_theme
     assert "--agent-bubble-text: #111111;" in light_theme
     assert "--agent-bubble-border: #111111;" in light_theme
