@@ -623,7 +623,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="瀚海行agent", version="0.7.0")
+    app = FastAPI(title="瀚海行Agent", version="0.7.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)

@@ -24,8 +24,8 @@ def main() -> None:
     with httpx.Client(base_url=base_url, timeout=15, follow_redirects=True) as client:
         index_response = client.get("/")
         require(index_response.status_code == 200, "课程 Agent 首页不可用")
-        require("瀚海行agent" in index_response.text, "首页内容不是当前瀚海行agent")
-        require("真理如瀚海，求索亦行舟" in index_response.text, "首页缺少当前品牌标语")
+        require("瀚海行Agent" in index_response.text, "首页内容不是当前瀚海行Agent")
+        require("真理如瀚海求索亦行舟" in index_response.text, "首页缺少当前品牌标语")
         for asset in (
             "/assets/app.js",
             "/assets/styles.css",

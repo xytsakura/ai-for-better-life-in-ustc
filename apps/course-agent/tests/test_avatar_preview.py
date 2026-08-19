@@ -102,24 +102,24 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     assert '<div class="brand-mark">107</div>' not in main_html
     assert '<div class="home-logo-mark">107</div>' not in main_html
     assert '<title>瀚海行Agent</title>' in main_html
-    assert '<div class="brand" role="img" aria-label="瀚海行agent，AI for better life in ustc">' in main_html
-    assert '<div class="brand-title">瀚海行agent</div>' in main_html
+    assert '<div class="brand" role="img" aria-label="瀚海行Agent，AI for better life in ustc">' in main_html
+    assert '<div class="brand-title">瀚海行Agent</div>' in main_html
     assert '<div class="brand-sub">AI for better life in ustc</div>' in main_html
-    assert '<div class="home-logo-badge">真理如瀚海，求索亦行舟</div>' in main_html
-    assert 'placeholder="有问题尽管问瀚海行agent…"' in main_html
-    assert 'aria-label="瀚海行agent 虚拟形象"' in main_html
+    assert '<div class="home-logo-badge">真理如瀚海求索亦行舟</div>' in main_html
+    assert 'placeholder="有问题尽管问瀚海行Agent…"' in main_html
+    assert 'aria-label="瀚海行Agent 虚拟形象"' in main_html
     assert "课程复习 Agent" not in main_html
     assert "USTC Course Agent" not in main_html
     assert "AI for better life In ustc" not in main_html
-    assert client.get("/openapi.json").json()["info"]["title"] == "瀚海行agent"
+    assert client.get("/openapi.json").json()["info"]["title"] == "瀚海行Agent"
 
     preview_html = client.get("/assets/avatar-preview.html").text
     assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v1"') == 1
     assert '/assets/avatar-preview.css?v=product-logo-v1' in preview_html
     assert '<span class="preview-brand-mark" aria-hidden="true">107</span>' not in preview_html
-    assert '<title>虚拟形象预览 · 瀚海行agent</title>' in preview_html
-    assert '<div class="preview-brand" role="img" aria-label="瀚海行agent，虚拟形象预览">' in preview_html
-    assert '<strong>瀚海行agent</strong>' in preview_html
+    assert '<title>虚拟形象预览 · 瀚海行Agent</title>' in preview_html
+    assert '<div class="preview-brand" role="img" aria-label="瀚海行Agent，虚拟形象预览">' in preview_html
+    assert '<strong>瀚海行Agent</strong>' in preview_html
     assert "课程复习 Agent" not in preview_html
 
     logo_response = client.get("/assets/product-logo.png")
