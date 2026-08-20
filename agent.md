@@ -29,7 +29,7 @@
 
 - 用户在 Agent Portal 主动选择 Agent；
 - Gateway 根据用户最终确认的 `agent_id` 做确定性代理和治理，不自行理解或改写 Agent 业务；
-- Hub 首页提供显式双模式助手：即时模式使用用户全局模型，需求路由模式只从功能检索表与运行时 active Registry 的交集中推荐 Agent；
+- Hub 首页采用统一对话助手：普通问题直接使用用户全局模型回答；当需求与功能检索表和运行时 active Registry 的交集高度匹配时，在同一条对话中返回受服务端校验的 Agent 推荐入口；首页不再暴露即时/路由双模式切换；
 - 路由模型只返回候选 `agent_id` 和理由，后端二次校验，用户点击受控入口后才进入 Agent；平台不设置可执行任务的 Main Agent 或 Supervisor；
 - Agent 之间相互独立，不互相发现、调用、协作或递归委派；
 - 课程资料 Agent 是首个第一方参考实现；
@@ -39,6 +39,7 @@
 - Hub 使用独立 `hub.sqlite3`，不 import 瀚海行业务代码，也不复用其数据库和 Session；
 - Featured 工作台使用 60 秒一次性授权码、`client_secret_basic` 和 `workspace:enter` EdDSA JWT；Gateway 调用使用 `chat:invoke`；
 - 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 四个 Agent（含两个 Future Work Demo）并幂等导入 25 份数学分析资料。
+- 瀚海行知识广场使用预生成课程封面池；知识库首次审核发布时按当前使用次数最少、再以知识库 ID 稳定哈希打散的规则分配封面，已有封面不被覆盖，新发布内容不再使用通用菱形占位符。
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
 - 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
 
