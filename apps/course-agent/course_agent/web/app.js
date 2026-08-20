@@ -2542,7 +2542,7 @@ function marketplaceMetadata(library) {
 function marketplaceDemoLabel(library) {
   const metadata = marketplaceMetadata(library);
   if (metadata.demo_kind === 'real' && Number(library?.document_count || 0) > 0) return '真实可检索';
-  return '演示知识库';
+  return '演示入口 · 资料待补充';
 }
 
 function marketplaceEmptyState(library) {
@@ -2553,6 +2553,42 @@ function marketplaceEmptyState(library) {
 function marketplaceCoverTheme(library) {
   const metadata = marketplaceMetadata(library);
   return String(metadata.cover_theme || 'indigo').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'indigo';
+}
+
+function marketplaceCoverAsset(library) {
+  const metadata = marketplaceMetadata(library);
+  const asset = String(metadata.cover_asset || '').trim().replace(/\\/g, '/');
+  if (!asset) return '';
+  if (!asset.startsWith('/assets/course-covers/') || !asset.endsWith('.png') || asset.includes('..')) return '';
+  return asset;
+}
+
+function marketplaceMaterialLabel(library) {
+  const documentCount = Number(library?.document_count || 0);
+  if (documentCount > 0) return `${documentCount} 份可检索资料`;
+  return '资料待补充';
+}
+
+function marketplaceCoverMarkup(library, className = 'marketplace-course-cover') {
+  const metadata = marketplaceMetadata(library);
+  const coverTheme = marketplaceCoverTheme(library);
+  const coverIcon = metadata.cover_icon || '◇';
+  const coverAsset = marketplaceCoverAsset(library);
+  return `
+    <span class="${className} marketplace-course-cover-${escapeHtml(coverTheme)} ${coverAsset ? 'has-asset' : ''}" aria-hidden="true">
+      ${coverAsset ? `<img src="${escapeHtml(coverAsset)}" alt="" loading="lazy" decoding="async">` : ''}
+      <span>${escapeHtml(coverIcon)}</span>
+    </span>
+  `;
+}
+
+function bindMarketplaceCoverFallback(root = document) {
+  root.querySelectorAll('.marketplace-course-cover img, .marketplace-detail-cover img').forEach(image => {
+    image.addEventListener('error', () => {
+      image.hidden = true;
+      image.closest('.marketplace-course-cover, .marketplace-detail-cover')?.classList.remove('has-asset');
+    }, { once: true });
+  });
 }
 
 function marketplaceDocumentPolicies(document) {
@@ -2614,6 +2650,7 @@ function renderMarketplaceShell() {
 function renderMarketplace() {
   renderMarketplaceShell();
   renderMarketplaceFilters();
+  renderMarketplaceOverview();
   renderMarketplaceLibraryList();
   renderMarketplaceLibraryDetail();
   renderMarketplaceMine();
@@ -2636,6 +2673,38 @@ function renderMarketplaceFilters() {
   if (count) count.textContent = `${state.marketplace.libraries.length} 个结果`;
 }
 
+function renderMarketplaceOverview() {
+  const overview = $('#marketplace-overview');
+  if (!overview) return;
+  const libraries = state.marketplace.libraries;
+  const courseCount = new Set(libraries.map(item => item.course).filter(Boolean)).size;
+  const realCount = libraries.filter(item => marketplaceMetadata(item).demo_kind === 'real' && Number(item.document_count || 0) > 0).length;
+  const documentCount = libraries.reduce((sum, item) => sum + Number(item.document_count || 0), 0);
+  const updatedValues = libraries
+    .map(item => item.updated_at)
+    .filter(Boolean)
+    .sort();
+  const latestUpdated = updatedValues[updatedValues.length - 1];
+  overview.innerHTML = `
+    <div class="marketplace-overview-card">
+      <strong>${courseCount}</strong>
+      <span>覆盖课程</span>
+    </div>
+    <div class="marketplace-overview-card">
+      <strong>${realCount}</strong>
+      <span>真实可检索库</span>
+    </div>
+    <div class="marketplace-overview-card">
+      <strong>${documentCount}</strong>
+      <span>公开资料</span>
+    </div>
+    <div class="marketplace-overview-card marketplace-overview-card--wide">
+      <strong>${latestUpdated ? escapeHtml(marketplaceDate(latestUpdated)) : '待导入'}</strong>
+      <span>最近更新</span>
+    </div>
+  `;
+}
+
 function renderMarketplaceLibraryList() {
   const list = $('#marketplace-library-list');
   if (!list) return;
@@ -2649,24 +2718,23 @@ function renderMarketplaceLibraryList() {
     const metadata = marketplaceMetadata(library);
     const docCount = Number(library.document_count || 0);
     const statusLabel = marketplaceDemoLabel(library);
-    const coverIcon = metadata.cover_icon || '◇';
-    const coverTheme = marketplaceCoverTheme(library);
     const shortDescription = metadata.short_description || library.description || '课程知识库入口';
+    const updatedAt = marketplaceDate(library.updated_at);
     return `
       <button class="marketplace-library-item marketplace-course-card ${active ? 'active' : ''}" data-marketplace-library="${escapeHtml(library.id)}" type="button">
-        <span class="marketplace-course-cover marketplace-course-cover-${escapeHtml(coverTheme)}" aria-hidden="true">
-          <span>${escapeHtml(coverIcon)}</span>
-        </span>
+        ${marketplaceCoverMarkup(library)}
         <span class="marketplace-course-body">
           <span class="marketplace-course-kicker">${escapeHtml(library.course || '未标注课程')}</span>
           <span class="marketplace-item-title">${escapeHtml(library.name)}</span>
           <span class="marketplace-item-desc">${escapeHtml(shortDescription)}</span>
           <span class="marketplace-item-meta">
-            <span>${docCount} 份资料</span>
+            <span>${escapeHtml(marketplaceMaterialLabel(library))}</span>
             <span>${Number(library.subscriber_count || 0)} 人订阅</span>
+            ${updatedAt ? `<span>更新 ${escapeHtml(updatedAt)}</span>` : ''}
             <span class="marketplace-demo-badge ${docCount > 0 ? 'ready' : ''}">${escapeHtml(statusLabel)}</span>
           </span>
           <span class="marketplace-tag-row">${tags.slice(0, 4).map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</span>
+          <span class="marketplace-card-action">${active ? '正在查看' : '查看详情'}</span>
         </span>
       </button>
     `;
@@ -2679,6 +2747,7 @@ function renderMarketplaceLibraryList() {
   $$('[data-marketplace-library]').forEach(button => {
     button.addEventListener('click', () => loadMarketplaceLibraryDetail(button.dataset.marketplaceLibrary).catch(error => toast(error.message, 'error')));
   });
+  bindMarketplaceCoverFallback(list);
 }
 
 function renderMarketplaceLibraryDetail() {
@@ -2702,16 +2771,12 @@ function renderMarketplaceLibraryDetail() {
   const canReviewDocuments = canAdminManage || library.author_id === state.user?.id;
   const isPublished = library.status === 'published';
   const canWithdraw = canAdminManage || library.author_id === state.user?.id;
-  const metadata = marketplaceMetadata(library);
-  const coverTheme = marketplaceCoverTheme(library);
-  const coverIcon = metadata.cover_icon || '◇';
   const demoLabel = marketplaceDemoLabel(library);
+  const updatedAt = marketplaceDate(library.updated_at);
   detail.innerHTML = `
     <article class="marketplace-detail">
       <div class="marketplace-detail-header">
-        <div class="marketplace-detail-cover marketplace-course-cover-${escapeHtml(coverTheme)}" aria-hidden="true">
-          <span>${escapeHtml(coverIcon)}</span>
-        </div>
+        ${marketplaceCoverMarkup(library, 'marketplace-detail-cover')}
         <div>
           <div class="content-subtitle">${escapeHtml(library.course || '公开课程')} · ${escapeHtml(demoLabel)}</div>
           <h2>${escapeHtml(library.name)}</h2>
@@ -2721,8 +2786,9 @@ function renderMarketplaceLibraryDetail() {
       </div>
       <div class="marketplace-detail-meta">
         <span>作者：${escapeHtml(library.author_name || library.author_id || '未知')}</span>
-        <span>${Number(library.document_count || documents.length || 0)} 份资料</span>
+        <span>${escapeHtml(marketplaceMaterialLabel(library))}</span>
         <span>${Number(library.subscriber_count || 0)} 人订阅</span>
+        ${updatedAt ? `<span>最近更新：${escapeHtml(updatedAt)}</span>` : ''}
         <span>状态：${escapeHtml(publicationStatusLabel(library.status))}</span>
       </div>
       <div class="marketplace-tag-row">${tags.map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</div>
@@ -2784,6 +2850,7 @@ function renderMarketplaceLibraryDetail() {
   detail.querySelectorAll('[data-marketplace-rollback-version]').forEach(button => {
     button.addEventListener('click', () => adminRollbackPublication(library.id, button.dataset.marketplaceRollbackVersion).catch(error => toast(error.message, 'error')));
   });
+  bindMarketplaceCoverFallback(detail);
 }
 
 function renderMarketplaceMine() {

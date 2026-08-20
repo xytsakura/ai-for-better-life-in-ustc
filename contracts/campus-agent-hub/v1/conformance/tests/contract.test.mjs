@@ -48,6 +48,17 @@ test('manifest model_runtime extension is optional and validates platform gatewa
   assert.equal(validate(payload), false);
 });
 
+test('packaged Hanhai manifest advertises the platform model gateway upgrade', async () => {
+  const payload = await json('examples/hanhai-connected.json');
+  assert.equal(payload.version, '0.9.0');
+  assert.equal(payload.capabilities.includes('platform-model-gateway'), true);
+  assert.deepEqual(payload.model_runtime, {
+    mode: 'platform_optional',
+    gateway_contract: 'campus-model-gateway-v1',
+    supported_api_styles: ['responses', 'chat_completions'],
+  });
+});
+
 test('health fixture satisfies Health v1', async () => {
   const ajv = new Ajv2020({ allErrors: true, strict: true });
   addFormats(ajv);

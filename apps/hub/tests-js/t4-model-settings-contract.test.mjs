@@ -39,9 +39,9 @@ test('T4 legacy migration is explicit and rejects non-local plain HTTP secrets',
 test('T4 keeps request identity aligned with active demo user and bumps module cache versions', () => {
   assert.match(appSource, /'X-Hub-User':\s*state\.user\.id/);
   assert.doesNotMatch(appSource, /options\.admin\s*\?\s*['"]demo-a['"]/);
-  assert.match(appSource, /hub-core\.js\?v=20260818-4/);
-  assert.match(indexSource, /styles\.css\?v=20260818-4/);
-  assert.match(indexSource, /app\.js\?v=20260818-4/);
+  assert.match(appSource, /hub-core\.js\?v=20260820-2/);
+  assert.match(indexSource, /styles\.css\?v=20260820-2/);
+  assert.match(indexSource, /app\.js\?v=20260820-2/);
 });
 
 test('T4 only offers declared platform agents and chat-eligible models for bindings', () => {
@@ -49,4 +49,15 @@ test('T4 only offers declared platform agents and chat-eligible models for bindi
   assert.match(appSource, /mode === 'platform_optional' \|\| mode === 'platform_required'/);
   assert.doesNotMatch(appSource, /normalized\.id === 'hanhai-course-agent'/);
   assert.match(appSource, /filter\(\(model\) => model\.chat_eligible\)/);
+});
+
+test('T4 shows a complete model routing progress summary instead of a vague form', () => {
+  assert.match(appSource, /function renderModelSettingsOverview/);
+  assert.match(appSource, /MODEL ROUTING FLOW/);
+  assert.match(appSource, /创建 Profile/);
+  assert.match(appSource, /发现模型/);
+  assert.match(appSource, /全局默认/);
+  assert.match(appSource, /Agent 绑定/);
+  assert.match(appSource, /chatModelCount/);
+  assert.match(appSource, /renderBindingText/);
 });

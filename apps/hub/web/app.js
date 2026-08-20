@@ -18,7 +18,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js?v=20260818-4';
+} from './hub-core.js?v=20260820-2';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
@@ -879,6 +879,7 @@ function paintModelSettings(payload) {
         <span>你在对话中输入的内容、被 Agent 引用的上下文和必要元数据，会发送到你选择的模型服务商；请只配置你信任的 Base URL。</span>
       </div>
       ${showMigration ? renderLegacyMigration(legacy) : ''}
+      ${renderModelSettingsOverview(profiles, bindings, compatibleAgents)}
       <div class="model-settings__grid">
         <aside class="model-settings__list" aria-label="Model Profile 列表">
           <div class="model-settings__list-head">
@@ -900,6 +901,60 @@ function paintModelSettings(payload) {
     </section>
   `;
   bindModelSettings({ profiles, bindings });
+}
+
+function renderModelSettingsOverview(profiles, bindings, agents) {
+  const chatModelCount = profiles.reduce((sum, profile) => (
+    sum + (profile.models || []).filter((model) => model.chat_eligible).length
+  ), 0);
+  const globalReady = Boolean(bindings.global?.profile_id && bindings.global?.model_id);
+  const boundAgentCount = agents.filter((agent) => {
+    const normalized = normalizeAgent(agent);
+    const binding = bindings.agents[normalized.id];
+    return binding?.profile_id && binding?.model_id;
+  }).length;
+  const steps = [
+    { title: '创建 Profile', detail: `${profiles.length} 套服务端配置`, done: profiles.length > 0 },
+    { title: '发现模型', detail: `${chatModelCount} 个可聊天模型`, done: chatModelCount > 0 },
+    { title: '全局默认', detail: globalReady ? renderBindingText(bindings.global, profiles) : '尚未设置', done: globalReady },
+    { title: 'Agent 绑定', detail: agents.length ? `${boundAgentCount}/${agents.length} 个兼容 Agent 已绑定` : '暂无声明平台模型能力的 Agent', done: agents.length > 0 && boundAgentCount > 0 },
+  ];
+  return `
+    <section class="model-settings__overview" aria-label="多模型配置进度">
+      <div class="model-settings__overview-head">
+        <div>
+          <p class="eyebrow">MODEL ROUTING FLOW</p>
+          <h2>从配置到 Agent 调用的闭环</h2>
+          <p>先创建 Profile，再发现模型；设置全局默认后，瀚海行等兼容 Agent 可继承，也可单独绑定更合适的模型。</p>
+        </div>
+        <span class="badge badge--${globalReady || boundAgentCount ? 'success' : 'neutral'}">${globalReady || boundAgentCount ? '已有可用绑定' : '等待配置'}</span>
+      </div>
+      <ol class="model-settings__steps">
+        ${steps.map((step, index) => `
+          <li class="${step.done ? 'done' : ''}">
+            <span class="model-settings__step-index">${index + 1}</span>
+            <span>
+              <strong>${escapeHtml(step.title)}</strong>
+              <small>${escapeHtml(step.detail)}</small>
+            </span>
+          </li>
+        `).join('')}
+      </ol>
+      <div class="model-settings__summary">
+        <span>Profile：${profiles.length}</span>
+        <span>可聊天模型：${chatModelCount}</span>
+        <span>全局默认：${globalReady ? escapeHtml(renderBindingText(bindings.global, profiles)) : '未设置'}</span>
+        <span>Agent 专属：${boundAgentCount}</span>
+      </div>
+    </section>
+  `;
+}
+
+function renderBindingText(binding, profiles) {
+  if (!binding?.profile_id || !binding?.model_id) return '未设置';
+  const profile = profiles.find((item) => item.id === binding.profile_id);
+  const profileName = profile?.name || binding.profile_id;
+  return `${profileName} / ${binding.model_id}`;
 }
 
 function renderSettingsUnavailable(error) {

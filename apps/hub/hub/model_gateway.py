@@ -921,9 +921,13 @@ def resolve_binding_for_grant(
         return profile_id, model_id, profile
     row = conn.execute(
         """
-        SELECT b.profile_id, b.model_id, p.*
+        SELECT b.profile_id, b.model_id, p.*, m.model_id AS eligible_model_id
         FROM hub_model_bindings b
         JOIN hub_model_profiles p ON p.profile_id = b.profile_id
+        LEFT JOIN hub_model_profile_models m
+          ON m.profile_id = b.profile_id
+         AND m.model_id = b.model_id
+         AND m.chat_eligible = 1
         WHERE b.owner_user_id = ? AND b.agent_id IN (?, '')
         ORDER BY CASE WHEN b.agent_id = ? THEN 0 ELSE 1 END
         LIMIT 1
@@ -934,6 +938,8 @@ def resolve_binding_for_grant(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"error": "model_binding_not_found"})
     if row["status"] != "active":
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_profile_disabled"})
+    if row["eligible_model_id"] is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
     ensure_agent_accepts_platform_model(conn, agent_id, api_style=row["api_style"])
     return row["profile_id"], row["model_id"], row
 

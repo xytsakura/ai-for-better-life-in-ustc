@@ -111,7 +111,9 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     assert "课程复习 Agent" not in main_html
     assert "USTC Course Agent" not in main_html
     assert "AI for better life In ustc" not in main_html
-    assert client.get("/openapi.json").json()["info"]["title"] == "瀚海行Agent"
+    openapi_info = client.get("/openapi.json").json()["info"]
+    assert openapi_info["title"] == "瀚海行Agent"
+    assert openapi_info["version"] == "0.9.0"
 
     preview_html = client.get("/assets/avatar-preview.html").text
     assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v2"') == 1
@@ -201,8 +203,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=20260819-2' in html
-    assert '/assets/app.js?v=20260818-2' in html
+    assert '/assets/styles.css?v=20260820-2' in html
+    assert '/assets/app.js?v=20260820-2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles

@@ -85,6 +85,24 @@ def stable_marketplace_id(prefix: str, slug: str) -> str:
     return f"{prefix}-{normalized}"
 
 
+def marketplace_cover_asset(item: dict[str, Any], slug: str) -> str:
+    normalized_slug = re.sub(r"[^a-z0-9-]+", "-", slug.lower()).strip("-")
+    if not normalized_slug:
+        normalized_slug = uuid.uuid5(uuid.NAMESPACE_URL, slug).hex[:12]
+    raw = str(item.get("cover_asset") or f"/assets/course-covers/{normalized_slug}.png").strip()
+    asset = raw.replace("\\", "/")
+    if not asset:
+        return ""
+    if not asset.startswith("/assets/course-covers/") or not asset.endswith(".png"):
+        raise ValueError("marketplace cover_asset must be a local /assets/course-covers/*.png path")
+    relative_parts = asset[len("/assets/course-covers/") :].split("/")
+    if any(part in {"", ".", ".."} for part in relative_parts):
+        raise ValueError("marketplace cover_asset must not contain empty or parent path segments")
+    if not re.fullmatch(r"/assets/course-covers/[A-Za-z0-9._/-]+\.png", asset):
+        raise ValueError("marketplace cover_asset contains unsupported characters")
+    return asset
+
+
 def marketplace_document_count(conn, version_id: str | None) -> int:
     if not version_id:
         return 0
@@ -139,6 +157,7 @@ def seed_marketplace(settings: Settings, manifest_path: Path) -> dict:
                 demo_kind = str(item.get("demo_kind", "demo-placeholder")).strip() or "demo-placeholder"
                 if demo_kind not in {"real", "demo-placeholder"}:
                     raise ValueError(f"unsupported demo_kind: {demo_kind}")
+                cover_asset = marketplace_cover_asset(item, slug)
 
                 existing_by_slug = conn.execute(
                     """SELECT pl.*
@@ -196,15 +215,16 @@ def seed_marketplace(settings: Settings, manifest_path: Path) -> dict:
                     )
                     conn.execute(
                         """INSERT INTO marketplace_course_metadata
-                           (library_id, slug, demo_kind, cover_icon, cover_theme,
+                           (library_id, slug, demo_kind, cover_icon, cover_theme, cover_asset,
                             short_description, empty_state, sort_order, seed_version)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             library_id,
                             slug,
                             demo_kind,
                             str(item.get("cover_icon", "◇")),
                             str(item.get("cover_theme", "indigo")),
+                            cover_asset,
                             str(item.get("short_description", "")),
                             str(item.get("empty_state", "资料待补充")),
                             int(item.get("sort_order", 100)),
@@ -233,20 +253,32 @@ def seed_marketplace(settings: Settings, manifest_path: Path) -> dict:
                     version_id = str(existing["current_version_id"] or version_id)
                     conn.execute(
                         """INSERT OR IGNORE INTO marketplace_course_metadata
-                           (library_id, slug, demo_kind, cover_icon, cover_theme,
+                           (library_id, slug, demo_kind, cover_icon, cover_theme, cover_asset,
                             short_description, empty_state, sort_order, seed_version)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (
                             library_id,
                             slug,
                             demo_kind,
                             str(item.get("cover_icon", "◇")),
                             str(item.get("cover_theme", "indigo")),
+                            cover_asset,
                             str(item.get("short_description", "")),
                             str(item.get("empty_state", "资料待补充")),
                             int(item.get("sort_order", 100)),
                             seed_version,
                         ),
+                    )
+                    conn.execute(
+                        """UPDATE marketplace_course_metadata
+                           SET updated_at = CASE
+                                 WHEN cover_asset <> ? OR seed_version < ? THEN CURRENT_TIMESTAMP
+                                 ELSE updated_at
+                               END,
+                               cover_asset = ?,
+                               seed_version = MAX(seed_version, ?)
+                           WHERE library_id = ?""",
+                        (cover_asset, seed_version, cover_asset, seed_version, library_id),
                     )
                     conn.commit()
                     skipped += 1

@@ -2063,6 +2063,42 @@ body.document-reader-open .library-chat { display: none; }
 .marketplace-search-field { flex: 1 1 320px; }
 .marketplace-course-field { flex: 0 1 240px; }
 
+.marketplace-overview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.marketplace-overview-card {
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 42%),
+    var(--bg-2);
+}
+
+.marketplace-overview-card strong,
+.marketplace-overview-card span {
+  display: block;
+}
+
+.marketplace-overview-card strong {
+  color: var(--text-primary);
+  font-family: var(--font-serif);
+  font-size: 1.25rem;
+  line-height: 1.2;
+}
+
+.marketplace-overview-card span {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
 .marketplace-tabs {
   display: flex;
   gap: 4px;
@@ -2090,6 +2126,11 @@ body.document-reader-open .library-chat { display: none; }
   min-height: 540px;
 }
 
+.marketplace-browse-layout {
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
 .marketplace-list-panel,
 .marketplace-detail-panel,
 .marketplace-my-panel {
@@ -2102,6 +2143,11 @@ body.document-reader-open .library-chat { display: none; }
 .marketplace-detail-panel {
   max-height: calc(100vh - 210px);
   overflow-y: auto;
+}
+.marketplace-browse-layout .marketplace-list-panel,
+.marketplace-browse-layout .marketplace-detail-panel {
+  max-height: none;
+  overflow: visible;
 }
 .marketplace-my-panel { padding: 18px; }
 .marketplace-panel-title {
@@ -2128,8 +2174,9 @@ body.document-reader-open .library-chat { display: none; }
 
 #marketplace-library-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-content: start;
+  gap: 14px;
 }
 
 .marketplace-library-item {
@@ -2152,11 +2199,11 @@ body.document-reader-open .library-chat { display: none; }
 }
 .marketplace-course-card {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 12px;
-  min-height: 180px;
-  padding: 12px;
-  border-radius: 8px;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+  min-height: 210px;
+  padding: 14px;
+  border-radius: 14px;
 }
 .marketplace-course-cover,
 .marketplace-detail-cover {
@@ -2172,13 +2219,31 @@ body.document-reader-open .library-chat { display: none; }
   box-shadow: inset 0 0 32px rgba(255, 255, 255, 0.05);
 }
 .marketplace-course-cover {
-  width: 72px;
-  min-height: 112px;
+  width: 96px;
+  min-height: 138px;
 }
 .marketplace-detail-cover {
   flex: 0 0 92px;
   width: 92px;
   min-height: 92px;
+}
+.marketplace-course-cover img,
+.marketplace-detail-cover img {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  object-fit: contain;
+}
+.marketplace-course-cover.has-asset::after,
+.marketplace-detail-cover.has-asset::after {
+  z-index: 2;
+  background:
+    linear-gradient(180deg, rgba(2, 6, 23, 0.03), rgba(2, 6, 23, 0.28)),
+    radial-gradient(circle at 78% 18%, rgba(255, 255, 255, 0.36) 0 1px, transparent 1.5px);
+  opacity: 1;
 }
 .marketplace-course-cover::after,
 .marketplace-detail-cover::after {
@@ -2194,13 +2259,17 @@ body.document-reader-open .library-chat { display: none; }
 .marketplace-course-cover span,
 .marketplace-detail-cover span {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   color: rgba(255, 255, 255, 0.9);
   font-family: var(--font-display, var(--font-sans));
   font-size: 1.8rem;
   font-weight: 800;
   line-height: 1;
   text-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+}
+.marketplace-course-cover.has-asset > span,
+.marketplace-detail-cover.has-asset > span {
+  opacity: 0;
 }
 .marketplace-detail-cover span { font-size: 2rem; }
 .marketplace-course-cover-aurora { background: radial-gradient(circle at 28% 18%, rgba(196, 181, 253, 0.36), transparent 32%), linear-gradient(135deg, #4338ca, #334b93 55%, #111319); }
@@ -2214,6 +2283,12 @@ body.document-reader-open .library-chat { display: none; }
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+.marketplace-card-action {
+  margin-top: auto;
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 800;
 }
 .marketplace-course-kicker {
   color: var(--text-tertiary);
@@ -3917,6 +3992,7 @@ body {
 /* ---------- Responsive ---------- */
 @media (max-width: 1200px) {
   .document-reader { max-width: 50vw; }
+  #marketplace-library-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .library-layout {
     grid-template-columns:
       var(--library-spaces-width, 220px)
@@ -3970,6 +4046,7 @@ body {
 @media (max-width: 900px) {
   :root { --sidebar-width: 220px; }
   .app-sidebar { width: var(--sidebar-width); }
+  #marketplace-library-list { grid-template-columns: 1fr; }
   .document-reader {
     position: fixed;
     z-index: 60;
@@ -4101,6 +4178,17 @@ body {
   .marketplace-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+  .marketplace-overview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .marketplace-course-card {
+    grid-template-columns: 82px minmax(0, 1fr);
+    min-height: 178px;
+  }
+  .marketplace-course-cover {
+    width: 82px;
+    min-height: 116px;
   }
   .marketplace-search-field,
   .marketplace-course-field {

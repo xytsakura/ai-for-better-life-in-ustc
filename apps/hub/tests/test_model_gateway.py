@@ -810,6 +810,36 @@ def test_revoke_disable_and_binding_change_invalidate_delegations_and_grants(
     assert generate_after_key_rotation.json()["detail"]["error"] == "model_grant_revoked"
 
 
+def test_grant_rechecks_that_bound_model_is_still_chat_eligible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    client = model_client(tmp_path)
+    submit_and_approve(client, platform_manifest())
+    profile_id = create_profile(client)
+    discover_and_bind(client, profile_id)
+    basic, delegation_token, _ = issue_workspace_delegation(client)
+
+    with database(tmp_path / "hub.sqlite3") as conn:
+        conn.execute(
+            """
+            UPDATE hub_model_profile_models
+            SET chat_eligible = 0
+            WHERE profile_id = ? AND model_id = 'gpt-5.6'
+            """,
+            (profile_id,),
+        )
+
+    rejected = client.post(
+        "/api/model-gateway/grants/exchange",
+        json={"model_delegation_token": delegation_token, "request_id": "stale-model-binding"},
+        headers={"Authorization": basic},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error"] == "model_not_allowed"
+
+
 def test_profile_key_rotation_reads_previous_key_and_writes_current_envelope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

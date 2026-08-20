@@ -14,6 +14,7 @@ courses:
     demo_kind: real
     cover_icon: ∫
     cover_theme: aurora
+    cover_asset: /assets/course-covers/math-analysis-b1.png
     empty_state: 尚未导入数学分析资料，请先运行 math-analysis-b1 manifest 导入。
     sort_order: 10
 
@@ -25,10 +26,11 @@ courses:
     course: 线性代数 B1
     short_description: 矩阵计算、线性空间、特征值与典型题型索引
     description: 演示知识库：展示未来可接入的线性代数复习资料组织形态，当前资料待补充。
-    tags: [演示知识库, 矩阵, 特征值, 往年题]
+    tags: [矩阵, 特征值, 往年题, 期末复习]
     demo_kind: demo-placeholder
     cover_icon: A
     cover_theme: violet
+    cover_asset: /assets/course-covers/linear-algebra-b1.png
     empty_state: 线性代数资料待补充；当前仅用于展示课程集市入口。
     sort_order: 20
 
@@ -40,10 +42,11 @@ courses:
     course: 概率论与数理统计
     short_description: 分布、极限定理、参数估计与复习笔记入口
     description: 演示知识库：等待完成来源、许可和解析审计后，再纳入真实 RAG。
-    tags: [演示知识库, 分布, 极限定理, 参数估计]
+    tags: [分布, 极限定理, 参数估计, 期末复习]
     demo_kind: demo-placeholder
     cover_icon: P
     cover_theme: cyan
+    cover_asset: /assets/course-covers/probability-statistics.png
     empty_state: 概率论资料待完成来源与许可审计，暂不参与检索问答。
     sort_order: 30
 
@@ -55,10 +58,11 @@ courses:
     course: 大学物理
     short_description: 力学、电磁学、实验与复习提纲的演示入口
     description: 演示知识库：用于展示理工基础课资料如何接入瀚海行，当前资料待补充。
-    tags: [演示知识库, 力学, 电磁学, 复习提纲]
+    tags: [力学, 电磁学, 复习提纲, 实验]
     demo_kind: demo-placeholder
     cover_icon: Φ
     cover_theme: blue
+    cover_asset: /assets/course-covers/college-physics.png
     empty_state: 大学物理资料待补充；当前仅展示课程入口和后续规划。
     sort_order: 40
 
@@ -70,10 +74,11 @@ courses:
     course: 数据结构
     short_description: 算法专题、实验提示、复杂度分析与考试题型
     description: 演示知识库：未来可沉淀链表、树、图、排序和查找等专题资料，当前资料待补充。
-    tags: [演示知识库, 算法专题, 实验, 题型]
+    tags: [算法专题, 实验, 题型, 复杂度]
     demo_kind: demo-placeholder
     cover_icon: ⟡
     cover_theme: emerald
+    cover_asset: /assets/course-covers/data-structures.png
     empty_state: 数据结构资料待补充；当前仅用于演示课程卡片。
     sort_order: 50
 
@@ -85,9 +90,10 @@ courses:
     course: 程序设计基础
     short_description: 语法、实验、调试技巧和常见题型的统一入口
     description: 演示知识库：用于展示编程类课程资料和答疑记录的组织方式，当前资料待补充。
-    tags: [演示知识库, 语法, 实验, 常见题型]
+    tags: [语法, 实验, 常见题型, 调试]
     demo_kind: demo-placeholder
     cover_icon: "{ }"
     cover_theme: amber
+    cover_asset: /assets/course-covers/programming-fundamentals.png
     empty_state: 程序设计基础资料待补充；当前不参与检索问答。
     sort_order: 60

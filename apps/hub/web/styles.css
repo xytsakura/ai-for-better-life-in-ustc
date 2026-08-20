@@ -1589,6 +1589,94 @@ body[data-route='portal'] .hub-topbar .hub-search {
   color: var(--warning);
 }
 
+.model-settings__overview {
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 14% 18%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 34%),
+    color-mix(in srgb, var(--surface) 96%, transparent);
+}
+
+.model-settings__overview-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.model-settings__overview-head h2 {
+  margin-top: 2px;
+}
+
+.model-settings__steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.model-settings__steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 70px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-soft);
+}
+
+.model-settings__step-index {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--muted-strong);
+  font-weight: 800;
+}
+
+.model-settings__steps li.done {
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border));
+  background: color-mix(in srgb, var(--success-soft) 74%, var(--bg-soft));
+}
+
+.model-settings__steps li.done .model-settings__step-index {
+  background: var(--success);
+  color: white;
+}
+
+.model-settings__steps strong,
+.model-settings__steps small {
+  display: block;
+}
+
+.model-settings__steps small,
+.model-settings__summary {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-settings__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.model-settings__summary span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
 .model-settings__grid {
   display: grid;
   grid-template-columns: minmax(260px, 0.36fr) minmax(0, 0.64fr);
@@ -1790,7 +1878,8 @@ body[data-route='portal'] .hub-topbar .hub-search {
 
   .model-settings__grid,
   .model-settings__two-col,
-  .model-binding-form {
+  .model-binding-form,
+  .model-settings__steps {
     grid-template-columns: 1fr;
   }
 

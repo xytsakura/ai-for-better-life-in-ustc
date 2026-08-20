@@ -10,8 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import course_agent.main as course_agent_main
-from course_agent.cli import seed_marketplace
+from course_agent.cli import marketplace_cover_asset, seed_marketplace
 from course_agent.config import Settings
+from course_agent.db import init_database
 from course_agent.llm import FakeLLMAdapter, LLMResult
 from course_agent.main import create_app
 from course_agent.ocr import OcrPage, file_sha256 as ocr_file_sha256, sidecar_path_for, write_ocr_sidecar
@@ -292,8 +293,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260819-2' in html
-    assert '/assets/app.js?v=20260818-2' in html
+    assert '/assets/styles.css?v=20260820-2' in html
+    assert '/assets/app.js?v=20260820-2' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -1913,6 +1914,7 @@ courses:
     demo_kind: real
     cover_icon: ∫
     cover_theme: aurora
+    cover_asset: /assets/course-covers/math-analysis-b1.png
     sort_order: 10
   - slug: linear-algebra-b1
     library_id: marketplace-library-linear-algebra-b1
@@ -1933,6 +1935,8 @@ courses:
     )
 
     first = seed_marketplace(settings, manifest)
+    with sqlite3.connect(settings.database_path) as conn:
+        conn.execute("UPDATE marketplace_course_metadata SET updated_at = '2020-01-02 03:04:05'")
     second = seed_marketplace(settings, manifest)
 
     assert first["created"] == 2
@@ -1945,6 +1949,10 @@ courses:
 
     with sqlite3.connect(settings.database_path) as conn:
         assert conn.execute("SELECT count(*) FROM marketplace_course_metadata").fetchone()[0] == 2
+        assert {
+            row[0]
+            for row in conn.execute("SELECT updated_at FROM marketplace_course_metadata")
+        } == {"2020-01-02 03:04:05"}
         assert conn.execute("SELECT count(*) FROM published_libraries").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM publication_versions").fetchone()[0] == 2
         assert conn.execute("SELECT count(*) FROM publication_documents").fetchone()[0] == 1
@@ -1965,8 +1973,10 @@ courses:
     empty = items[1]
     assert math["document_count"] == 1
     assert math["marketplace"]["demo_kind"] == "real"
+    assert math["marketplace"]["cover_asset"] == "/assets/course-covers/math-analysis-b1.png"
     assert empty["document_count"] == 0
     assert empty["marketplace"]["demo_kind"] == "demo-placeholder"
+    assert empty["marketplace"]["cover_asset"] == "/assets/course-covers/linear-algebra-b1.png"
     assert empty["marketplace"]["empty_state"] == "线性代数资料待补充"
 
     empty_detail = client.get("/api/marketplace/libraries/marketplace-library-linear-algebra-b1")
@@ -1985,3 +1995,43 @@ courses:
     assert math_document["use_in_rag"] is True
     assert math_document["can_preview"] is True
     assert math_document["can_download"] is False
+
+
+def test_init_database_adds_cover_asset_to_legacy_marketplace_metadata(tmp_path: Path):
+    settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
+    settings.ensure_directories()
+    with sqlite3.connect(settings.database_path) as conn:
+        conn.execute(
+            """CREATE TABLE marketplace_course_metadata (
+                   library_id TEXT PRIMARY KEY,
+                   slug TEXT NOT NULL UNIQUE,
+                   demo_kind TEXT NOT NULL DEFAULT 'demo-placeholder',
+                   cover_icon TEXT NOT NULL DEFAULT '◇',
+                   cover_theme TEXT NOT NULL DEFAULT 'indigo',
+                   short_description TEXT NOT NULL DEFAULT '',
+                   empty_state TEXT NOT NULL DEFAULT '资料待补充',
+                   sort_order INTEGER NOT NULL DEFAULT 100,
+                   seed_version INTEGER NOT NULL DEFAULT 1,
+                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+               )"""
+        )
+
+    init_database(settings)
+
+    with sqlite3.connect(settings.database_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(marketplace_course_metadata)")}
+    assert "cover_asset" in columns
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://example.com/cover.png",
+        "/assets/course-covers/../secret.png",
+        "/assets/course-covers/not-an-image.svg",
+    ),
+)
+def test_marketplace_cover_asset_rejects_non_local_or_unsafe_paths(value: str):
+    with pytest.raises(ValueError):
+        marketplace_cover_asset({"cover_asset": value}, "safe-slug")

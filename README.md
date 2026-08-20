@@ -4,7 +4,7 @@
 
 本项目参加中国科学技术大学“一〇七”杯算力与智能体开发大赛本科生组智能体赛道。当前方案先把“课程资料整理与复习 Agent”做深，再把它的接入方式沉淀为统一 Contract、Registry、Gateway 和 Agent Portal，让其他独立校园 Agent 能以插件形式接入同一平台。
 
-> 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.8.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、统一聊天和 Featured 工作台授权；瀚海行保留数学分析 B1 知识库、引用、OCR 资料和完整工作台。
+> 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.9.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、统一聊天、Featured 工作台授权和多模型配置中心；瀚海行保留数学分析 B1 知识库、引用、OCR 资料、课程知识广场和完整工作台。
 
 > 新电脑部署：安装 Docker 后运行 `./deploy/run-demo.ps1`，即可构建三项服务、注册并审核两个 Agent、生成运行时凭据并导入 25 份数学分析资料。模型 API 只填写在本地 `.env`，不得提交到 Git。
 

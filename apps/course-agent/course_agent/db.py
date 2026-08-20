@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS marketplace_course_metadata (
         CHECK (demo_kind IN ('real', 'demo-placeholder')),
     cover_icon TEXT NOT NULL DEFAULT '◇',
     cover_theme TEXT NOT NULL DEFAULT 'indigo',
+    cover_asset TEXT NOT NULL DEFAULT '',
     short_description TEXT NOT NULL DEFAULT '',
     empty_state TEXT NOT NULL DEFAULT '资料待补充',
     sort_order INTEGER NOT NULL DEFAULT 100,
@@ -249,6 +250,12 @@ def init_database(settings: Settings) -> None:
         }.items():
             if column not in version_columns:
                 conn.execute(ddl)
+        marketplace_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(marketplace_course_metadata)").fetchall()
+        }
+        if "cover_asset" not in marketplace_columns:
+            conn.execute("ALTER TABLE marketplace_course_metadata ADD COLUMN cover_asset TEXT NOT NULL DEFAULT ''")
         conn.executemany(
             "INSERT OR IGNORE INTO users(id, display_name, is_demo) VALUES (?, ?, ?)",
             DEMO_USERS,

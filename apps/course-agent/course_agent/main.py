@@ -623,7 +623,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="瀚海行Agent", version="0.7.0")
+    app = FastAPI(title="瀚海行Agent", version="0.9.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
@@ -653,6 +653,13 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     static_dir = Path(__file__).resolve().parent / "web"
     if static_dir.exists():
+        course_covers_dir = static_dir / "assets" / "course-covers"
+        if course_covers_dir.exists():
+            app.mount(
+                "/assets/course-covers",
+                StaticFiles(directory=course_covers_dir),
+                name="course-covers",
+            )
         app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
 
     @app.exception_handler(HTTPException)
@@ -850,6 +857,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "demo_kind": metadata["demo_kind"],
                 "cover_icon": metadata["cover_icon"],
                 "cover_theme": metadata["cover_theme"],
+                "cover_asset": metadata["cover_asset"],
                 "short_description": metadata["short_description"],
                 "empty_state": metadata["empty_state"],
                 "sort_order": int(metadata["sort_order"] or 100),

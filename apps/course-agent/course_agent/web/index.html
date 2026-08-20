@@ -11,7 +11,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v2">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260819-2">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260820-2">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -416,13 +416,15 @@
           <button class="button button-primary" id="marketplace-search-submit" type="button">搜索</button>
         </div>
 
+        <div id="marketplace-overview" class="marketplace-overview" aria-label="知识广场概览"></div>
+
         <nav class="marketplace-tabs" role="tablist" aria-label="知识广场视图">
           <button class="marketplace-tab active" type="button" role="tab" aria-selected="true" data-marketplace-tab="browse">广场</button>
           <button class="marketplace-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="mine">我的投稿</button>
           <button class="marketplace-tab hidden" id="marketplace-review-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="review">待审核</button>
         </nav>
 
-        <div class="marketplace-layout" id="marketplace-tab-browse">
+        <div class="marketplace-layout marketplace-browse-layout" id="marketplace-tab-browse">
           <section class="marketplace-list-panel" aria-label="公开知识库列表">
             <div class="marketplace-panel-title">
               <h2>公开知识库</h2>
@@ -1036,6 +1038,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=20260809-1" defer></script>
-  <script src="/assets/app.js?v=20260818-2" defer></script>
+  <script src="/assets/app.js?v=20260820-2" defer></script>
 </body>
 </html>
