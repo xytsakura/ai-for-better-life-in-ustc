@@ -97,8 +97,8 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     client = make_client(tmp_path)
 
     main_html = client.get("/").text
-    assert main_html.count('src="/assets/product-logo.png?v=product-logo-v1"') == 2
-    assert '<link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">' in main_html
+    assert main_html.count('src="/assets/product-logo.png?v=product-logo-v2"') == 2
+    assert '<link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v2">' in main_html
     assert '<div class="brand-mark">107</div>' not in main_html
     assert '<div class="home-logo-mark">107</div>' not in main_html
     assert '<title>瀚海行Agent</title>' in main_html
@@ -114,8 +114,8 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     assert client.get("/openapi.json").json()["info"]["title"] == "瀚海行Agent"
 
     preview_html = client.get("/assets/avatar-preview.html").text
-    assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v1"') == 1
-    assert '/assets/avatar-preview.css?v=product-logo-v1' in preview_html
+    assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v2"') == 1
+    assert '/assets/avatar-preview.css?v=product-logo-v2' in preview_html
     assert '<span class="preview-brand-mark" aria-hidden="true">107</span>' not in preview_html
     assert '<title>虚拟形象预览 · 瀚海行Agent</title>' in preview_html
     assert '<div class="preview-brand" role="img" aria-label="瀚海行Agent，虚拟形象预览">' in preview_html
