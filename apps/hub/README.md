@@ -36,8 +36,11 @@ Compose 会 seed 瀚海行和校园助手 Demo、完成审核、创建 Featured 
 - `POST /api/admin/agents/{agent_id}/suspend|restore|rollback|deprecate`：治理状态操作；
 - `POST /api/admin/agents/{agent_id}/credentials` 与凭据状态接口：创建、轮换或撤销 Featured 服务凭据；
 - `GET /.well-known/jwks.json`：Ed25519/EdDSA JWT 公钥；
+- `POST /api/home-assistant/chat`：首页助手；`instant` 使用用户全局模型流式回答，`route` 从受控功能表推荐当前 active Agent；
 - `POST /api/gateway/agents/{agent_id}/runs`：按 Registry 目标转发 AG-UI 或 simple-chat；
 - `POST /api/agents/{agent_id}/workspace/start` 与 `POST /oauth/token`：Featured Agent 工作台一次性授权码启动。
+
+首页需求路由规则维护在 [`skills/agent-routing/SKILL.md`](./skills/agent-routing/SKILL.md)，简短能力清单维护在 [`skills/agent-routing/AGENT_CATALOG.md`](./skills/agent-routing/AGENT_CATALOG.md)。模型输出的 URL 不可信且不会使用；服务端只接受功能表与运行时 Registry 交集中仍为 active 的 `agent_id`，最终入口由前端复用平台既有激活流程生成。
 
 第三方外部 Agent 默认只允许公网 HTTPS Endpoint。内网或本地演示 Endpoint 需要在提交请求外层将 `trust_level` 设为 `first_party_internal`，并通过 `HUB_INTERNAL_URL_ALLOWLIST` 精确放行；Manifest 本身保持与 `contracts/campus-agent-hub/v1/manifest.schema.json` 完全一致。
 
@@ -71,7 +74,7 @@ Compose 会 seed 瀚海行和校园助手 Demo、完成审核、创建 Featured 
 ```powershell
 cd apps/hub
 python -m pytest
-node --test tests-js/hub-core.test.mjs
+node --test tests-js/*.test.mjs
 
 cd ../../contracts/campus-agent-hub/v1
 npm install

@@ -4,7 +4,7 @@
 
 本项目参加中国科学技术大学“一〇七”杯算力与智能体开发大赛本科生组智能体赛道。当前方案先把“课程资料整理与复习 Agent”做深，再把它的接入方式沉淀为统一 Contract、Registry、Gateway 和 Agent Portal，让其他独立校园 Agent 能以插件形式接入同一平台。
 
-> 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.9.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、统一聊天、Featured 工作台授权和多模型配置中心；瀚海行保留数学分析 B1 知识库、引用、OCR 资料、课程知识广场和完整工作台。
+> 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.9.0` 和独立校园助手 Demo 已形成三服务闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、首页即时对话与需求路由、统一聊天、Featured 工作台授权和多模型配置中心；瀚海行保留数学分析 B1 知识库、引用、OCR 资料、课程知识广场和完整工作台。
 
 > 新电脑部署：安装 Docker 后运行 `./deploy/run-demo.ps1`，即可构建三项服务、注册并审核两个 Agent、生成运行时凭据并导入 25 份数学分析资料。模型 API 只填写在本地 `.env`，不得提交到 Git。
 
@@ -21,17 +21,21 @@
 1. **课程资料整理与复习 Agent**：围绕个人知识库、共享知识库和订阅的第三方知识库，完成资料导入、权限隔离、模型直答、按用户所选资料检索、引用和删除失效闭环。
 2. **插件化 Agent 接入平台**：用统一接入契约管理 Agent 的注册、审核、展示和访问，使新 Agent 接入时不需要修改 Gateway 业务路由代码。
 
-当前版本采用用户主动选择 Agent 的产品模式：
+当前版本仍由用户最终确认要进入哪个 Agent，并新增首页助手缩短发现路径：
 
-- 用户先在 Agent Portal 查看已审核并启用的 Agent；
+- 首页“即时对话”使用当前用户配置的全局模型快速回答普通问题；
+- 首页“需求路由”只从静态功能检索表与运行时已审核、已启用 Agent 的交集中给出推荐；
+- 模型只返回候选 `agent_id` 和理由，平台后端再次校验，前端生成受控直达入口；
+- 用户点击推荐卡片后才会进入对应 Agent，不自动替用户调用或执行任务；
 - 用户主动进入某个 Agent 的详情页和统一交互容器；
 - Gateway 根据用户已选择的 `agent_id` 做确定性代理、鉴权、超时、取消和审计；
 - 每个 Agent 独立运行，拥有自己的业务逻辑、知识库和运行边界；
-- 平台不设置 Main Agent，不自动进行语义路由，也不允许 Agent 之间相互调用。
+- 平台不设置可执行任务的 Main Agent，也不允许 Agent 之间相互调用或递归委派。
 
 ```mermaid
 flowchart LR
-    U["学生用户"] --> P["Agent Portal"]
+    U["学生用户"] --> H["首页即时对话 / 需求路由"]
+    H --> P["Agent Portal / 受控推荐入口"]
     P --> UI["详情页与统一交互容器"]
     UI --> G["Platform Gateway"]
     G --> R["Agent Registry"]
@@ -85,6 +89,7 @@ flowchart LR
 | Review | 执行 Schema、连通性、协议与基础安全验收 |
 | Gateway | 按已选择的 `agent_id` 代理请求，并处理鉴权、超时、取消和日志 |
 | Agent Portal | 展示已审核并启用的 Agent，支持筛选和主动选择 |
+| 首页助手 | 使用全局模型即时回答，或从受控功能表推荐当前 active Agent；不自动执行 Agent |
 | 统一交互容器 | 提供消息、流式输出、文件、引用、状态、取消和错误展示 |
 
 Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput` 与 SSE 事件。能力完整的 Agent 直接实现 AG-UI；简单 Agent 可实现 `simple-chat` JSON，由 Gateway 通用适配成 AG-UI。MCP 只用于 Agent 内部连接工具或知识源，不是 Hub 的必需协议；A2A 和跨 Agent 编排不在 v1 范围内。
@@ -107,7 +112,7 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 
 ## 当前不做
 
-- Main Agent、Supervisor 或自动语义路由；
+- 能自动执行任务的 Main Agent、Supervisor 或未经用户确认的 Agent 调用；
 - Agent 间通信、多 Agent 规划、递归委派和协作网络；
 - 无审核的开放 Agent 市场；
 - 自动运行未知第三方代码；
@@ -120,6 +125,7 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 - [项目产品文档](./项目产品文档.md)：当前产品定义、架构边界、MVP、评测、分工和风险，是现阶段实施依据。
 - [Hub 顶层设计](./docs/superpowers/specs/2026-08-05-campus-agent-hub-top-level-design.md)：当前实现的安全边界、身份协议与三种接入等级。
 - [USTC-Agent-Hub Contract v1](./contracts/campus-agent-hub/v1/README.md)：Manifest、Health、simple-chat Schema、示例和契约测试。
+- [首页需求路由 Skill](./apps/hub/skills/agent-routing/SKILL.md) 与 [Agent 功能检索表](./apps/hub/skills/agent-routing/AGENT_CATALOG.md)：维护需求匹配规则与可推荐 Agent 的简短公开能力摘要。
 - [一键演示部署](./deploy/README.md)：Hub、瀚海行、示例 Agent 的 Docker Compose 启动与运行时 seed。
 - [课程复习 Agent 部署与审计指南](./docs/COURSE_AGENT_DEPLOYMENT.md)：面向新电脑、队友和代码 Agent 的逐步安装、配置、资料导入、验收、Docker 与排障说明。
 - [订阅知识库广场设计](./docs/superpowers/specs/2026-08-04-subscription-library-marketplace-design.md)：投稿快照、审核状态机、权限矩阵、版本切换和 API 契约。

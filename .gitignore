@@ -45,5 +45,7 @@ Desktop.ini
 *.db
 *.log
 var/
+# Local browser audit session artifacts
+.playwright-cli/
 # Local visual brainstorming previews
 .superpowers/

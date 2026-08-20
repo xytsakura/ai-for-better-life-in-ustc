@@ -28,8 +28,9 @@
 当前方案的关键边界：
 
 - 用户在 Agent Portal 主动选择 Agent；
-- Gateway 根据已选择的 `agent_id` 做确定性代理和治理，不做自然语言意图识别；
-- 平台不设置 Main Agent、Supervisor 或自动任务路由器；
+- Gateway 根据用户最终确认的 `agent_id` 做确定性代理和治理，不自行理解或改写 Agent 业务；
+- Hub 首页提供显式双模式助手：即时模式使用用户全局模型，需求路由模式只从功能检索表与运行时 active Registry 的交集中推荐 Agent；
+- 路由模型只返回候选 `agent_id` 和理由，后端二次校验，用户点击受控入口后才进入 Agent；平台不设置可执行任务的 Main Agent 或 Supervisor；
 - Agent 之间相互独立，不互相发现、调用、协作或递归委派；
 - 课程资料 Agent 是首个第一方参考实现；
 - 另接一个独立进程的极简第三方 Agent，证明接入新 Agent 时 Gateway 业务路由代码修改为 0 行；

@@ -20,6 +20,7 @@ from .conformance import resolve_safe_launch_url, run_version_checks
 from .db import database, init_db
 from .gateway import gateway_stream
 from .health import check_agent_health
+from .home_assistant import HomeAssistantChatRequest, home_assistant_chat
 from .identity import (
     IdentityService,
     authenticate_client_secret_basic,
@@ -526,6 +527,14 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 ],
             }
             return result
+
+    @app.post("/api/home-assistant/chat")
+    async def api_home_assistant_chat(
+        body: HomeAssistantChatRequest,
+        user: dict[str, str] = Depends(current_user),
+    ):
+        with database(settings.database_path) as conn:
+            return await home_assistant_chat(conn, model_service, user=user, body=body)
 
     @app.put("/api/model-bindings/agents/{agent_id}")
     def api_bind_agent_model(

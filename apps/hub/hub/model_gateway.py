@@ -112,6 +112,13 @@ class ModelGenerateRequest(BaseModel):
 
 
 @dataclass(frozen=True)
+class PlatformModelResult:
+    output_text: str
+    usage: dict[str, int]
+    model: str
+
+
+@dataclass(frozen=True)
 class ModelProfileService:
     settings: Settings
     identity: IdentityService
@@ -977,6 +984,146 @@ def delegated_model_catalog(
         "default_model_id": default_model_id,
         "models": [_delegated_model_to_dict(row) for row in rows],
     }
+
+
+def _resolve_user_global_binding(
+    conn: sqlite3.Connection,
+    service: ModelProfileService,
+    *,
+    user_id: str,
+) -> tuple[str, str, sqlite3.Row]:
+    service.require_enabled()
+    row = conn.execute(
+        """
+        SELECT b.profile_id, b.model_id, p.*, m.model_id AS eligible_model_id
+        FROM hub_model_bindings b
+        JOIN hub_model_profiles p ON p.profile_id = b.profile_id
+        LEFT JOIN hub_model_profile_models m
+          ON m.profile_id = b.profile_id
+         AND m.model_id = b.model_id
+         AND m.chat_eligible = 1
+        WHERE b.owner_user_id = ? AND b.agent_id = ''
+        LIMIT 1
+        """,
+        (user_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"error": "model_binding_not_found"})
+    if row["status"] != "active":
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_profile_disabled"})
+    if row["eligible_model_id"] is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
+    return row["profile_id"], row["model_id"], row
+
+
+def _platform_internal_grant(
+    *,
+    user_id: str,
+    agent_id: str,
+    profile_id: str,
+    model_id: str,
+    request_id: str,
+) -> dict[str, Any]:
+    return {
+        "user_id": user_id,
+        "agent_id": agent_id,
+        "profile_id": profile_id,
+        "model_id": model_id,
+        "delegation_id": "platform-internal",
+        "request_id": request_id,
+    }
+
+
+async def call_user_global_model(
+    conn: sqlite3.Connection,
+    service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    instructions: str,
+    messages: list[ModelMessage],
+    max_output_tokens: int | None = None,
+) -> PlatformModelResult:
+    profile_id, model_id, profile = _resolve_user_global_binding(conn, service, user_id=user_id)
+    api_key = service.decrypt_key(profile)
+    body = ModelGenerateRequest(
+        instructions=instructions,
+        messages=messages,
+        max_output_tokens=max_output_tokens,
+        stream=False,
+    )
+    grant = _platform_internal_grant(
+        user_id=user_id,
+        agent_id="hub-home-assistant",
+        profile_id=profile_id,
+        model_id=model_id,
+        request_id=request_id,
+    )
+    started = time.perf_counter()
+    try:
+        text, usage = await _call_provider_non_stream(service, grant, dict(profile), api_key, body)
+    except HTTPException as exc:
+        record_model_audit(
+            conn,
+            "home_assistant_model_error",
+            actor=user_id,
+            agent_id="hub-home-assistant",
+            profile_id=profile_id,
+            model_id=model_id,
+            request_id=request_id,
+            error_code=_error_code(exc),
+        )
+        raise
+    record_model_audit(
+        conn,
+        "home_assistant_model_completed",
+        actor=user_id,
+        agent_id="hub-home-assistant",
+        profile_id=profile_id,
+        model_id=model_id,
+        request_id=request_id,
+        safe_detail={"duration_ms": int((time.perf_counter() - started) * 1000), "usage": usage},
+    )
+    return PlatformModelResult(output_text=text, usage=usage, model=model_id)
+
+
+async def stream_user_global_model(
+    conn: sqlite3.Connection,
+    service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    instructions: str,
+    messages: list[ModelMessage],
+    max_output_tokens: int | None = None,
+) -> StreamingResponse:
+    profile_id, model_id, profile = _resolve_user_global_binding(conn, service, user_id=user_id)
+    api_key = service.decrypt_key(profile)
+    body = ModelGenerateRequest(
+        instructions=instructions,
+        messages=messages,
+        max_output_tokens=max_output_tokens,
+        stream=True,
+    )
+    grant = _platform_internal_grant(
+        user_id=user_id,
+        agent_id="hub-home-assistant",
+        profile_id=profile_id,
+        model_id=model_id,
+        request_id=request_id,
+    )
+    return StreamingResponse(
+        _stream_provider(
+            conn_path=service.settings.database_path,
+            service=service,
+            grant=grant,
+            profile=dict(profile),
+            api_key=api_key,
+            body=body,
+        ),
+        media_type="text/event-stream",
+        headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+    )
 
 
 def create_gateway_grant(

@@ -6,19 +6,22 @@
 
 Campus Agent Hub 是校园 Agent 的应用广场、统一接入协议和治理平台。瀚海行是首个 Featured Agent，不是 Hub 本体；其他队伍的校园 Agent 可以用相同 Contract 接入。
 
-平台只做确定性接入和治理：
+平台的执行链仍只做确定性接入和治理；首页另提供不执行任务的发现助手：
 
-- 用户主动选择 Agent；
+- 首页即时模式使用用户全局模型提供普通对话；
+- 首页路由模式将需求匹配到“静态功能表 ∩ 运行时 active Registry”，模型只返回候选 `agent_id` 和理由；
+- 后端拒绝伪造、下线或不在功能表中的 `agent_id`，用户点击受控推荐入口后才进入 Agent；
 - Gateway 根据 URL 中的 `agent_id` 查询 Registry 并转发；
 - Hub、瀚海行和第三方 Agent 是独立 HTTP 服务和独立数据边界；
 - Hub 不理解具体 Agent 的业务，不修改其回答语义；
-- 平台没有 Main Agent、语义路由、递归委派、A2A 或 Agent 间调用。
+- 平台没有可执行任务的 Main Agent、递归委派、A2A 或 Agent 间调用；首页需求路由只做推荐，不调用目标 Agent。
 
 ## 2. 系统结构
 
 ```mermaid
 flowchart LR
-    U["学生用户"] --> P["Agent Portal"]
+    U["学生用户"] --> Q["首页即时对话 / 需求路由"]
+    Q --> P["Agent Portal / 受控推荐入口"]
     P --> D["详情页 / 统一聊天 / 独立工作台入口"]
     D --> G["Hub Gateway"]
     G --> R["Registry + Review + Audit"]
@@ -218,10 +221,11 @@ Copy-Item .env.example .env
 5. 瀚海行能从统一聊天进入完整知识库工作台；
 6. Gateway 中没有具体 Agent 的业务分支；
 7. 公共接口不泄露内部 Endpoint 或凭据。
+8. 首页普通问题可由全局模型流式回答，专业需求可推荐已上线 Agent，并由用户一键进入；模型伪造的 Agent ID 不会生成入口。
 
 ## 12. v1 明确不做
 
-- Main Agent、Supervisor、语义自动路由；
+- 能自动执行任务的 Main Agent、Supervisor、未经用户确认的 Agent 调用；
 - Agent 之间发现、通信、规划、递归调用或 A2A；
 - 自动运行未知第三方代码；
 - 无审核的开放市场；

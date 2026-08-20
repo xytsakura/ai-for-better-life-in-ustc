@@ -22,6 +22,7 @@ export const HUB_API = Object.freeze({
   modelBindings: '/api/model-bindings',
   modelBindingGlobal: '/api/model-bindings/global',
   modelBindingAgent: (id) => `/api/model-bindings/agents/${encodeURIComponent(id)}`,
+  homeAssistant: '/api/home-assistant/chat',
 });
 
 export const ACCESS_LEVELS = Object.freeze({
@@ -62,6 +63,14 @@ export const ERROR_MESSAGES = Object.freeze({
   conformance_checks_not_passed: '机器验收尚未通过，不能批准这个版本。',
   request_too_large: '本次请求超过平台允许的大小。',
   response_too_large: 'Agent 返回内容超过平台允许的大小。',
+  model_binding_not_found: '请先在模型配置中设置全局默认模型。',
+  model_profile_disabled: '当前模型配置已停用，请在模型配置中重新启用或切换。',
+  model_not_allowed: '当前选择的模型不可用，请重新发现模型或更新全局绑定。',
+  provider_auth_failed: '模型服务认证失败，请检查 API Key。',
+  provider_rate_limited: '模型服务请求过于频繁，请稍后再试。',
+  provider_unreachable: '暂时无法连接模型服务，请稍后重试。',
+  model_gateway_timeout: '模型响应超时，请稍后重试。',
+  router_output_invalid: '需求路由暂时无法给出可靠推荐，请换一种说法再试。',
 });
 
 export const DEMO_USERS = Object.freeze([

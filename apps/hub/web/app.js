@@ -18,7 +18,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js?v=20260820-2';
+} from './hub-core.js?v=20260820-3';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
@@ -52,6 +52,7 @@ const userNickname = document.querySelector('#userNickname');
 const themeToggle = document.querySelector('#themeToggle');
 const mobileNavToggle = document.querySelector('.mobile-nav-toggle');
 let portalStarfield = null;
+const portalAssistantSessions = new Map();
 
 init();
 
@@ -251,7 +252,7 @@ async function renderPortal() {
   state.loading = true;
   view.innerHTML = renderPortalStage();
   mountPortalEffects();
-  bindPortalSearch();
+  bindPortalAssistant();
   const [agentsResult, modelsResult] = await Promise.allSettled([
     loadAgents(),
     loadModelProfiles(),
@@ -263,22 +264,209 @@ async function renderPortal() {
 }
 
 function renderPortalStage() {
+  const session = getPortalAssistantSession();
   return `
     <section class="portal-stage" data-starfield>
       <div class="portal-stage__content">
         <p class="portal-kicker">AI FOR USTCERS</p>
         <h1>为科大学生服务的智能 <span class="latin">Agent</span></h1>
-        <label class="portal-search" aria-label="搜索校园 Agent">
-          <span class="portal-search__plus" aria-hidden="true">＋</span>
-          <input id="portalSearch" type="search" placeholder="搜索 Agent、课程或校园服务" value="${escapeAttr(state.query)}" autocomplete="off" />
-          <span class="portal-search__send" aria-hidden="true">↑</span>
-        </label>
+        <section class="portal-assistant" aria-label="平台 AI 助手">
+          <header class="portal-assistant__header">
+            <div class="portal-assistant__modes" role="tablist" aria-label="对话模式">
+              <button type="button" role="tab" data-assistant-mode="instant" aria-selected="${session.mode === 'instant'}">即时对话</button>
+              <button type="button" role="tab" data-assistant-mode="route" aria-selected="${session.mode === 'route'}">需求路由</button>
+            </div>
+            <span class="portal-assistant__mode-note">${session.mode === 'route' ? '匹配已验收 Agent，并给出直达入口' : '使用全局模型，快速回答日常问题'}</span>
+          </header>
+          <div id="portalAssistantMessages" class="portal-assistant__messages" aria-live="polite">
+            ${renderPortalAssistantMessages(session)}
+          </div>
+          <form id="portalAssistantForm" class="portal-assistant__composer">
+            <textarea id="portalAssistantPrompt" rows="1" maxlength="8000" placeholder="${session.mode === 'route' ? '描述你想完成的事情，我来匹配合适的 Agent' : '随时问我，Enter 发送，Shift+Enter 换行'}" aria-label="向平台 AI 助手提问"></textarea>
+            <button class="portal-assistant__cancel" type="button" data-assistant-cancel ${session.pending ? '' : 'hidden'} aria-label="取消本轮回答" title="取消">×</button>
+            <button class="portal-assistant__send" type="submit" ${session.pending ? 'disabled' : ''} aria-label="发送" title="发送">↑</button>
+          </form>
+        </section>
         <section id="portalModelStatus" class="portal-model-status is-loading" aria-label="当前模型配置" aria-live="polite">
           <span>正在读取模型配置…</span>
         </section>
       </div>
     </section>
   `;
+}
+
+function getPortalAssistantSession() {
+  const key = state.user?.id || 'anonymous';
+  if (!portalAssistantSessions.has(key)) {
+    portalAssistantSessions.set(key, {
+      mode: 'instant',
+      pending: false,
+      threads: { instant: [], route: [] },
+    });
+  }
+  return portalAssistantSessions.get(key);
+}
+
+function renderPortalAssistantMessages(session = getPortalAssistantSession()) {
+  const messages = session.threads[session.mode] || [];
+  if (!messages.length) {
+    return `
+      <div class="portal-assistant__welcome">
+        <strong>${session.mode === 'route' ? '告诉我目标，不必先逛 Agent 广场' : '现在就可以开始对话'}</strong>
+        <span>${session.mode === 'route' ? '我只推荐当前已注册、已上线且能力匹配的 Agent。' : '这里使用你在平台配置的全局默认模型。'}</span>
+      </div>
+    `;
+  }
+  return messages.map((message, index) => {
+    const role = message.role === 'user' ? 'user' : message.role === 'error' ? 'error' : 'assistant';
+    const recommendation = message.recommendation ? `
+      <div class="portal-agent-recommendation">
+        <div>
+          <span class="portal-agent-recommendation__eyebrow">推荐 Agent</span>
+          <strong>${escapeHtml(message.recommendation.name)}</strong>
+          <p>${escapeHtml(message.recommendation.description || '')}</p>
+          <p class="portal-agent-recommendation__reason">推荐理由：${escapeHtml(message.recommendation.reason || '与当前需求高度匹配。')}</p>
+        </div>
+        <button type="button" data-route-agent-id="${escapeAttr(message.recommendation.agent_id)}">直达 ${escapeHtml(message.recommendation.name)} <span aria-hidden="true">→</span></button>
+      </div>
+    ` : '';
+    const content = message.content
+      ? `<div class="markdown">${renderMarkdownSafe(message.content)}</div>`
+      : '<span class="portal-assistant__thinking">正在生成…</span>';
+    return `<article class="portal-assistant__message portal-assistant__message--${role}" data-assistant-message="${index}">${content}${recommendation}</article>`;
+  }).join('');
+}
+
+function paintPortalAssistantMessages() {
+  const container = document.querySelector('#portalAssistantMessages');
+  if (!container) return;
+  container.innerHTML = renderPortalAssistantMessages();
+  container.scrollTop = container.scrollHeight;
+  container.querySelectorAll('[data-route-agent-id]').forEach((button) => {
+    button.addEventListener('click', () => activateAgentById(button.dataset.routeAgentId));
+  });
+}
+
+function bindPortalAssistant() {
+  const session = getPortalAssistantSession();
+  const form = document.querySelector('#portalAssistantForm');
+  const prompt = document.querySelector('#portalAssistantPrompt');
+  document.querySelectorAll('[data-assistant-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (session.pending || button.dataset.assistantMode === session.mode) return;
+      session.mode = button.dataset.assistantMode;
+      renderPortal();
+    });
+  });
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = prompt?.value.trim() || '';
+    if (!text || session.pending) return;
+    prompt.value = '';
+    sendPortalAssistantMessage(text);
+  });
+  prompt?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      form?.requestSubmit();
+    }
+  });
+  document.querySelector('[data-assistant-cancel]')?.addEventListener('click', () => {
+    if (state.activeController) state.activeController.abort();
+  });
+  paintPortalAssistantMessages();
+}
+
+async function sendPortalAssistantMessage(text) {
+  const session = getPortalAssistantSession();
+  const mode = session.mode;
+  const thread = session.threads[mode];
+  const history = thread
+    .filter((message) => message.role === 'user' || message.role === 'assistant')
+    .slice(-11)
+    .map(({ role, content }) => ({ role, content }));
+  thread.push({ role: 'user', content: text });
+  const assistantMessage = { role: 'assistant', content: '' };
+  thread.push(assistantMessage);
+  session.pending = true;
+  paintPortalAssistantMessages();
+  syncPortalAssistantPending(true);
+
+  const generation = state.generation;
+  const controller = new AbortController();
+  state.activeController = controller;
+  try {
+    const response = await fetch(HUB_API.homeAssistant, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': mode === 'instant' ? 'text/event-stream' : 'application/json',
+        'X-Hub-User': state.user.id,
+      },
+      body: JSON.stringify({ mode, messages: [...history, { role: 'user', content: text }] }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw await normalizeHttpError(response);
+    if (mode === 'instant') {
+      if (!response.body) throw { code: 'provider_protocol_error' };
+      await consumePortalAssistantStream(response.body, {
+        generation,
+        onDelta(delta) {
+          assistantMessage.content += delta;
+          if (state.route.name === 'portal') paintPortalAssistantMessages();
+        },
+      });
+      if (!assistantMessage.content.trim()) throw { code: 'provider_protocol_error' };
+    } else {
+      const payload = await response.json();
+      assistantMessage.content = payload.message || '当前没有找到足够匹配的 Agent。';
+      assistantMessage.recommendation = payload.recommendation || null;
+      if (state.route.name === 'portal') paintPortalAssistantMessages();
+    }
+  } catch (error) {
+    if (generation !== state.generation) return;
+    if (error.name === 'AbortError') {
+      assistantMessage.content = assistantMessage.content || '已取消本轮回答。';
+    } else {
+      assistantMessage.role = 'error';
+      assistantMessage.content = readableError(error);
+    }
+    if (state.route.name === 'portal') paintPortalAssistantMessages();
+  } finally {
+    if (state.activeController === controller) state.activeController = null;
+    session.pending = false;
+    if (state.route.name === 'portal' && generation === state.generation) syncPortalAssistantPending(false);
+  }
+}
+
+async function consumePortalAssistantStream(stream, handlers) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const parsed = parseSseBuffer(done ? `${buffer}\n\n` : buffer);
+    buffer = parsed.rest;
+    for (const event of parsed.events) {
+      if (handlers.generation !== state.generation) return;
+      if (event.type === 'model.output_text.delta' && typeof event.delta === 'string') handlers.onDelta(event.delta);
+      if (event.type === 'model.error') throw { code: event.error || 'upstream_error' };
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) throw { code: 'provider_protocol_error' };
+}
+
+function syncPortalAssistantPending(pending) {
+  const session = getPortalAssistantSession();
+  session.pending = pending;
+  const send = document.querySelector('.portal-assistant__send');
+  const cancel = document.querySelector('[data-assistant-cancel]');
+  const form = document.querySelector('#portalAssistantForm');
+  if (send) send.disabled = pending;
+  if (cancel) cancel.hidden = !pending;
+  if (form) form.toggleAttribute('aria-busy', pending);
 }
 
 function paintPortalModelStatus(payload) {
@@ -364,15 +552,6 @@ function renderQuickRowCards() {
       </button>
     `;
   }).join('');
-}
-
-function bindPortalSearch() {
-  const portalSearch = document.querySelector('#portalSearch');
-  portalSearch?.addEventListener('input', () => {
-    state.query = portalSearch.value;
-    syncSearchInputs(portalSearch);
-    updateAgentGrid();
-  });
 }
 
 function bindQuickRowCards() {

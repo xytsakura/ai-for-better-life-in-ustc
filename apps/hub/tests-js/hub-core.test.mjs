@@ -182,6 +182,7 @@ test('model profile API constants use the approved T4 contract paths', () => {
   assert.equal(HUB_API.modelBindings, '/api/model-bindings');
   assert.equal(HUB_API.modelBindingGlobal, '/api/model-bindings/global');
   assert.equal(HUB_API.modelBindingAgent('hanhai-course-agent'), '/api/model-bindings/agents/hanhai-course-agent');
+  assert.equal(HUB_API.homeAssistant, '/api/home-assistant/chat');
 });
 
 test('normalizes model profiles from wrapped payloads without exposing raw keys', () => {

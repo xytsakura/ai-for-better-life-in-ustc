@@ -39,7 +39,7 @@ test('T4 legacy migration is explicit and rejects non-local plain HTTP secrets',
 test('T4 keeps request identity aligned with active demo user and bumps module cache versions', () => {
   assert.match(appSource, /'X-Hub-User':\s*state\.user\.id/);
   assert.doesNotMatch(appSource, /options\.admin\s*\?\s*['"]demo-a['"]/);
-  assert.match(appSource, /hub-core\.js\?v=20260820-2/);
+  assert.match(appSource, /hub-core\.js\?v=20260820-3/);
   assert.match(indexSource, /styles\.css\?v=20260820-3/);
   assert.match(indexSource, /app\.js\?v=20260820-3/);
 });
