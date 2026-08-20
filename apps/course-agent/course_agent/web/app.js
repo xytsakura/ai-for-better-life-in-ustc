@@ -441,6 +441,7 @@ function normalizeModelCatalog(payload = {}) {
     : [];
   return {
     models,
+    defaultModelId: String(payload.default_model_id || '').trim(),
     discoverySource: payload.discovery_source || null,
     cached: Boolean(payload.cached),
   };
@@ -4308,17 +4309,12 @@ function modelSelectOptions(selectedModel) {
 function renderModelControls() {
   const selectedModel = state.currentModel || '';
   const homeModel = $('#home-model-input');
-  const homeModelList = $('#home-model-list');
   const settingModel = $('#setting-model');
   if (homeModel) {
+    homeModel.innerHTML = modelSelectOptions(selectedModel);
     homeModel.value = selectedModel;
     homeModel.disabled = state.isQuerying;
-    homeModel.title = selectedModel || '请填写或选择模型';
-    homeModel.placeholder = '输入模型名，如 gpt-5';
-  }
-  if (homeModelList) {
-    const datalist = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
-    homeModelList.innerHTML = datalist;
+    homeModel.title = selectedModel || '请选择模型';
   }
   if (settingModel) {
     const defaultModel = state.settings.llm_model || selectedModel;
@@ -4438,9 +4434,12 @@ function renderModelCatalogList() {
 
 function applyModelCatalog(payload) {
   state.modelCatalog = normalizeModelCatalog(payload);
-  // 去掉默认模型：用户需自行填写或选择模型名
-  if (!state.currentModel) {
-    state.currentModel = state.settings.llm_model || '';
+  const eligible = chatEligibleModels();
+  if (!state.currentModel || !eligible.some(model => model.id === state.currentModel)) {
+    state.currentModel = state.modelCatalog.defaultModelId
+      || state.settings.llm_model
+      || eligible[0]?.id
+      || '';
   }
   if (!state.currentReasoningEffort) {
     state.currentReasoningEffort = defaultReasoningForModel();
@@ -6212,7 +6211,7 @@ function initEventListeners() {
       handleHomeSubmit(e);
     }
   });
-  $('#home-model-input').addEventListener('input', event => setCurrentModel(event.currentTarget.value.trim()));
+  $('#home-model-input').addEventListener('change', event => setCurrentModel(event.currentTarget.value.trim()));
   $('#home-reasoning-effort').addEventListener('change', event => setCurrentReasoningEffort(event.currentTarget.value || null));
   $('#document-reader-close').addEventListener('click', closeReferenceViewer);
   $('#document-reader-prev').addEventListener('click', () => changeReferenceViewerPage(-1));

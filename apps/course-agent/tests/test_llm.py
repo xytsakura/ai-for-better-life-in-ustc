@@ -208,7 +208,7 @@ def test_direct_mode_does_not_require_citations(monkeypatch, tmp_path):
     assert result.error_code is None
 
 
-def test_platform_gateway_direct_call_uses_delegation_not_browser_model(monkeypatch, tmp_path):
+def test_platform_gateway_direct_call_uses_delegation_and_selected_model(monkeypatch, tmp_path):
     settings = _platform_settings(tmp_path)
     original_client = httpx.Client
     observed: dict[str, dict] = {}
@@ -221,7 +221,8 @@ def test_platform_gateway_direct_call_uses_delegation_not_browser_model(monkeypa
             assert auth.startswith("Basic ")
             assert body["model_delegation_token"] == "opaque-delegation"
             assert body["request_id"] == "req-platform-1"
-            assert set(body) == {"model_delegation_token", "request_id"}
+            assert body["requested_model_id"] == "browser-picked-model"
+            assert set(body) == {"model_delegation_token", "request_id", "requested_model_id"}
             assert "delegation_token" not in body
             assert "model" not in body
             return httpx.Response(
@@ -690,7 +691,8 @@ def test_platform_gateway_stream_direct_parses_model_events(monkeypatch, tmp_pat
             body = json.loads(request.content)
             assert body["model_delegation_token"] == "opaque-delegation"
             assert body["request_id"] == "req-platform-1"
-            assert set(body) == {"model_delegation_token", "request_id"}
+            assert body["requested_model_id"] == "browser-picked-model"
+            assert set(body) == {"model_delegation_token", "request_id", "requested_model_id"}
             return httpx.Response(
                 200,
                 json={

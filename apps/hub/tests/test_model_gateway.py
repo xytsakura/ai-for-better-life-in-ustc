@@ -136,7 +136,44 @@ class FakeStreamContext:
         return None
 
 
+class FakeResponsesCompletedOnlyStreamResponse:
+    status_code = 200
+
+    async def aiter_lines(self):
+        yield "event: response.completed"
+        yield "data: " + json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "完成事件兜底"}],
+                        }
+                    ],
+                    "usage": {
+                        "input_tokens": 5,
+                        "output_tokens": 3,
+                        "total_tokens": 8,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        )
+        yield ""
+
+
+class FakeResponsesCompletedOnlyStreamContext:
+    async def __aenter__(self) -> FakeResponsesCompletedOnlyStreamResponse:
+        return FakeResponsesCompletedOnlyStreamResponse()
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+
 class FakeProviderClient:
+    last_model: str | None = None
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
@@ -153,6 +190,9 @@ class FakeProviderClient:
             {
                 "data": [
                     {"id": "gpt-5.6", "owned_by": "fixture"},
+                    {"id": "gpt-5.6-luna", "owned_by": "fixture"},
+                    {"id": "gpt-5.6-sol", "owned_by": "fixture"},
+                    {"id": "gpt-5.6-terra", "owned_by": "fixture"},
                     {"id": "text-embedding-3-large"},
                     {"id": "gpt-image-1"},
                     {"id": "gpt-4o-realtime-preview"},
@@ -165,7 +205,13 @@ class FakeProviderClient:
         assert kwargs["headers"]["authorization"] == "Bearer sk-test-secret"
         body = kwargs["json"]
         if url.endswith("/responses"):
-            assert body["model"] == "gpt-5.6"
+            assert body["model"] in {
+                "gpt-5.6",
+                "gpt-5.6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+            }
+            FakeProviderClient.last_model = body["model"]
             assert "profile_id" not in body
             return FakeModelResponse(
                 {
@@ -184,8 +230,21 @@ class FakeProviderClient:
     def stream(self, method: str, url: str, **kwargs: Any) -> FakeStreamContext:
         assert method == "POST"
         assert url.endswith("/chat/completions")
-        assert kwargs["json"]["model"] == "gpt-5.6"
+        assert kwargs["json"]["model"] in {
+            "gpt-5.6",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+        }
         return FakeStreamContext()
+
+
+class FakeResponsesCompletedOnlyProviderClient(FakeProviderClient):
+    def stream(self, method: str, url: str, **kwargs: Any) -> FakeResponsesCompletedOnlyStreamContext:
+        assert method == "POST"
+        assert url.endswith("/responses")
+        assert kwargs["json"]["model"] == "gpt-5.6"
+        return FakeResponsesCompletedOnlyStreamContext()
 
 
 def discover_and_bind(
@@ -204,15 +263,19 @@ def discover_and_bind(
     by_id = {model["id"]: model for model in models}
     assert set(by_id) == {
         "gpt-5.6",
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
         "text-embedding-3-large",
         "gpt-image-1",
         "gpt-4o-realtime-preview",
         "codex-auto-review",
     }
-    assert by_id["gpt-5.6"]["chat_eligible"] is True
+    chat_models = {"gpt-5.6", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
+    assert all(by_id[model_id]["chat_eligible"] is True for model_id in chat_models)
     assert all(
         by_id[model_id]["chat_eligible"] is False
-        for model_id in set(by_id) - {"gpt-5.6"}
+        for model_id in set(by_id) - chat_models
     )
     bound = client.put(
         f"/api/model-bindings/agents/{agent_id}",
@@ -224,7 +287,12 @@ def discover_and_bind(
     assert bound.json()["binding"]["model_id"] == "gpt-5.6"
 
 
-def issue_workspace_delegation(client: TestClient, *, agent_id: str = "hanhai-agent") -> tuple[str, str, str]:
+def issue_workspace_delegation(
+    client: TestClient,
+    *,
+    agent_id: str = "hanhai-agent",
+    include_payload: bool = False,
+) -> tuple[str, str, str] | tuple[str, str, str, dict[str, Any]]:
     credential = client.post(
         f"/api/admin/agents/{agent_id}/credentials",
         headers={"X-Hub-User": "demo-a"},
@@ -247,6 +315,8 @@ def issue_workspace_delegation(client: TestClient, *, agent_id: str = "hanhai-ag
         },
         headers={"Authorization": basic},
     ).json()
+    if include_payload:
+        return basic, payload["model_delegation_token"], payload["access_token"], payload
     return basic, payload["model_delegation_token"], payload["access_token"]
 
 
@@ -457,7 +527,10 @@ def test_featured_agent_can_exchange_workspace_token_for_model_grant(
     submit_and_approve(client, platform_manifest())
     profile_id = create_profile(client)
     discover_and_bind(client, profile_id)
-    basic, token, access_token = issue_workspace_delegation(client)
+    basic, token, access_token, delegation_payload = issue_workspace_delegation(
+        client,
+        include_payload=True,
+    )
     with database(client.app.state.settings.database_path) as conn:
         stored = conn.execute("SELECT token_hash FROM hub_model_delegations").fetchone()
         assert stored is not None
@@ -477,6 +550,11 @@ def test_featured_agent_can_exchange_workspace_token_for_model_grant(
     encoded = json.dumps(body)
     assert "sk-test-secret" not in encoded
     assert "encrypted_api_key" not in encoded
+    assert {item["id"] for item in delegation_payload["model_delegation_models"]} >= {
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    }
 
     workspace_access_token_rejected = client.post(
         "/api/model-gateway/grants/exchange",
@@ -497,6 +575,50 @@ def test_featured_agent_can_exchange_workspace_token_for_model_grant(
         headers={"Authorization": basic},
     )
     assert forged.status_code == 422
+
+
+def test_featured_workspace_can_select_another_bound_model_and_reject_unbound_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    client = model_client(tmp_path)
+    submit_and_approve(client, platform_manifest())
+    profile_id = create_profile(client)
+    discover_and_bind(client, profile_id)
+    basic, token, _, _ = issue_workspace_delegation(client, include_payload=True)
+
+    selected = client.post(
+        "/api/model-gateway/grants/exchange",
+        json={
+            "model_delegation_token": token,
+            "request_id": "workspace-terra-0001",
+            "requested_model_id": "gpt-5.6-terra",
+        },
+        headers={"Authorization": basic},
+    )
+    assert selected.status_code == 200, selected.text
+    assert selected.json()["model_id"] == "gpt-5.6-terra"
+    grant = selected.json()["access_token"]
+    generated = client.post(
+        "/api/model-gateway/v1/generate",
+        json={"messages": [{"role": "user", "content": "选择模型"}]},
+        headers={"Authorization": f"Bearer {grant}"},
+    )
+    assert generated.status_code == 200, generated.text
+    assert FakeProviderClient.last_model == "gpt-5.6-terra"
+
+    rejected = client.post(
+        "/api/model-gateway/grants/exchange",
+        json={
+            "model_delegation_token": token,
+            "request_id": "workspace-embedding-0001",
+            "requested_model_id": "text-embedding-3-large",
+        },
+        headers={"Authorization": basic},
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error"] == "model_not_allowed"
 
 
 def test_chat_completions_stream_is_normalized_to_model_sse(
@@ -524,6 +646,37 @@ def test_chat_completions_stream_is_normalized_to_model_sse(
     assert '"delta":"你"' in response.text
     assert '"delta":"好"' in response.text
     assert "event: model.usage" in response.text
+    assert "event: model.completed" in response.text
+
+
+def test_responses_stream_recovers_text_and_usage_from_completed_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "hub.model_gateway.httpx.AsyncClient",
+        FakeResponsesCompletedOnlyProviderClient,
+    )
+    client = model_client(tmp_path)
+    submit_and_approve(client, platform_manifest())
+    profile_id = create_profile(client)
+    discover_and_bind(client, profile_id)
+    basic, delegation_token, _ = issue_workspace_delegation(client)
+    grant = exchange_grant(
+        client,
+        basic=basic,
+        token=delegation_token,
+        request_id="request-responses-completed-only",
+    )
+    response = client.post(
+        "/api/model-gateway/v1/generate",
+        json={"messages": [{"role": "user", "content": "你好"}], "stream": True},
+        headers={"Authorization": f"Bearer {grant}"},
+    )
+    assert response.status_code == 200, response.text
+    assert '"delta":"完成事件兜底"' in response.text
+    assert '"input_tokens":5' in response.text
+    assert '"output_tokens":3' in response.text
     assert "event: model.completed" in response.text
 
 

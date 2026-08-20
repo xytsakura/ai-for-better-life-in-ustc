@@ -150,6 +150,8 @@ class LLMAdapter:
         )
         if platform_result is not None:
             return platform_result
+        if platform_context is not None:
+            selected_model, payload = self._local_fallback_payload(payload)
         text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
             return self._direct_degraded(error_code, error_message, selected_model)
@@ -200,6 +202,8 @@ class LLMAdapter:
         )
         if platform_result is not None:
             return platform_result
+        if platform_context is not None:
+            selected_model, payload = self._local_fallback_payload(payload)
         text, usage, error_code, error_message = self._response_text(payload)
         if error_code:
             return self._degraded(sources, error_code, error_message, selected_model)
@@ -338,7 +342,12 @@ class LLMAdapter:
         platform_context: HubModelContext | None,
     ) -> str:
         if platform_context is not None:
-            return (self.settings.llm_model or "").strip()
+            return (
+                model
+                or platform_context.default_model_id
+                or self.settings.llm_model
+                or ""
+            ).strip()
         return (model or self.settings.llm_model or "").strip()
 
     def _try_platform_generate(
@@ -358,6 +367,7 @@ class LLMAdapter:
                 messages=self._gateway_messages(payload),
                 reasoning_effort=self._gateway_reasoning(payload),
                 max_output_tokens=self._max_output_tokens(),
+                model_id=selected_model,
             )
         except HubModelGatewayError as exc:
             if exc.allow_fallback:
@@ -422,6 +432,7 @@ class LLMAdapter:
                 messages=self._gateway_messages(payload),
                 reasoning_effort=self._gateway_reasoning(payload),
                 max_output_tokens=self._max_output_tokens(),
+                model_id=selected_model,
             ):
                 event_type = event.get("type")
                 if event_type == "model.started":
@@ -491,12 +502,7 @@ class LLMAdapter:
                     return
         except HubModelGatewayError as exc:
             if exc.allow_fallback:
-                fallback = self.stream_direct(
-                    question=self._question_from_gateway_payload(payload),
-                    history=None,
-                    system=str(payload.get("instructions") or ""),
-                    model=selected_model,
-                )
+                selected_model, payload = self._local_fallback_payload(payload)
                 # Avoid recursively trying the platform path while preserving the
                 # existing local fallback behavior for configured Agent models.
                 async for event in self._response_text_stream_without_platform(payload, selected_model, sources):
@@ -559,6 +565,10 @@ class LLMAdapter:
                 )
                 yield LLMStreamComplete(result)
             return
+
+    def _local_fallback_payload(self, payload: dict) -> tuple[str, dict]:
+        selected_model = (self.settings.llm_model or "").strip()
+        return selected_model, {**payload, "model": selected_model}
 
     @staticmethod
     def _gateway_messages(payload: dict) -> list[dict[str, Any]]:

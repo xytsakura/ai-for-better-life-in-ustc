@@ -293,8 +293,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260820-2' in html
-    assert '/assets/app.js?v=20260820-2' in html
+    assert '/assets/styles.css?v=20260820-3' in html
+    assert '/assets/app.js?v=20260820-3' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -449,7 +449,8 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
 
     html = client.get("/").text
     assert 'id="home-model-input"' in html
-    assert 'id="home-model-list"' in html
+    assert '<select id="home-model-input"' in html
+    assert 'id="home-model-list"' not in html
     assert 'id="home-reasoning-effort"' in html
     assert 'id="home-context-meter"' in html
     assert 'id="home-mode-label"' not in html

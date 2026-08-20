@@ -11,7 +11,7 @@
   </script>
   <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v2">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260820-2">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260820-3">
 </head>
 <body>
   <aside class="app-sidebar">
@@ -94,8 +94,10 @@
           <div class="home-conversation" id="home-conversation">
             <div class="home-greeting" id="home-greeting">
               <div class="home-logo">
-                <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v2" alt="瀚海行Agent" width="72" height="72">
-                <div class="home-logo-badge">真理如瀚海求索亦行舟</div>
+                <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v2" alt="瀚海行Agent" width="88" height="88">
+                <div class="home-logo-badge" aria-label="真理如瀚海 求索亦行舟">
+                  <span>真理如瀚海</span><span>求索亦行舟</span>
+                </div>
               </div>
             </div>
           </div>
@@ -132,8 +134,7 @@
                 <div class="home-input-actions">
                   <label class="compact-field home-model-field" for="home-model-input">
                     <span class="visually-hidden">模型</span>
-                    <input id="home-model-input" type="text" list="home-model-list" placeholder="输入模型名，如 gpt-5" autocomplete="off" aria-label="当前对话模型" />
-                    <datalist id="home-model-list"></datalist>
+                    <select id="home-model-input" aria-label="当前对话模型"></select>
                   </label>
                   <span id="home-model-source" class="model-source-badge" title="当前模型来源">Agent 本地回退</span>
                   <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
@@ -1038,6 +1039,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=20260809-1" defer></script>
-  <script src="/assets/app.js?v=20260820-2" defer></script>
+  <script src="/assets/app.js?v=20260820-3" defer></script>
 </body>
 </html>

@@ -82,6 +82,7 @@ class ModelGrantExchangeRequest(BaseModel):
 
     model_delegation_token: str = Field(min_length=20, max_length=4096)
     request_id: str = Field(min_length=8, max_length=128)
+    requested_model_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class ModelDelegationRevokeRequest(BaseModel):
@@ -98,7 +99,7 @@ class ModelMessage(BaseModel):
 class ModelGenerateRequest(BaseModel):
     instructions: str | None = Field(default=None, max_length=64_000)
     messages: list[ModelMessage] = Field(default_factory=list, max_length=64)
-    reasoning_effort: Literal["minimal", "low", "medium", "high", "max"] | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] | None = None
     max_output_tokens: int | None = Field(default=None, ge=1, le=16_384)
     stream: bool = False
 
@@ -369,6 +370,15 @@ def _model_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "chat_eligible": bool(row["chat_eligible"]),
         "discovered_at": row["discovered_at"],
         "metadata": json.loads(row["metadata_json"] or "{}"),
+    }
+
+
+def _delegated_model_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    """Return only fields that are safe to expose to a delegated workspace."""
+    return {
+        "id": row["model_id"],
+        "display_name": row["display_name"],
+        "chat_eligible": True,
     }
 
 
@@ -906,19 +916,6 @@ def resolve_binding_for_grant(
     profile_id: str | None = None,
     model_id: str | None = None,
 ) -> tuple[str, str, sqlite3.Row]:
-    if profile_id and model_id:
-        profile = _active_profile(conn, profile_id, user_id)
-        model = conn.execute(
-            """
-            SELECT model_id FROM hub_model_profile_models
-            WHERE profile_id = ? AND model_id = ? AND chat_eligible = 1
-            """,
-            (profile_id, model_id),
-        ).fetchone()
-        if model is None:
-            raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
-        ensure_agent_accepts_platform_model(conn, agent_id, api_style=profile["api_style"])
-        return profile_id, model_id, profile
     row = conn.execute(
         """
         SELECT b.profile_id, b.model_id, p.*, m.model_id AS eligible_model_id
@@ -940,8 +937,46 @@ def resolve_binding_for_grant(
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_profile_disabled"})
     if row["eligible_model_id"] is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
+    if profile_id is not None and profile_id != row["profile_id"]:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
+    resolved_model_id = model_id or row["model_id"]
+    eligible = conn.execute(
+        """
+        SELECT model_id FROM hub_model_profile_models
+        WHERE profile_id = ? AND model_id = ? AND chat_eligible = 1
+        """,
+        (row["profile_id"], resolved_model_id),
+    ).fetchone()
+    if eligible is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail={"error": "model_not_allowed"})
     ensure_agent_accepts_platform_model(conn, agent_id, api_style=row["api_style"])
-    return row["profile_id"], row["model_id"], row
+    return row["profile_id"], resolved_model_id, row
+
+
+def delegated_model_catalog(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    profile_id, default_model_id, _ = resolve_binding_for_grant(
+        conn,
+        user_id=user_id,
+        agent_id=agent_id,
+    )
+    rows = conn.execute(
+        """
+        SELECT model_id, display_name
+        FROM hub_model_profile_models
+        WHERE profile_id = ? AND chat_eligible = 1
+        ORDER BY lower(display_name), lower(model_id)
+        """,
+        (profile_id,),
+    ).fetchall()
+    return {
+        "default_model_id": default_model_id,
+        "models": [_delegated_model_to_dict(row) for row in rows],
+    }
 
 
 def create_gateway_grant(
@@ -952,11 +987,13 @@ def create_gateway_grant(
     agent_id: str,
     delegation_id: str,
     request_id: str,
+    model_id: str | None = None,
 ) -> dict[str, Any]:
     resolved_profile_id, resolved_model_id, profile = resolve_binding_for_grant(
         conn,
         user_id=user_id,
         agent_id=agent_id,
+        model_id=model_id,
     )
     try:
         token = service.sign_gateway_grant(
@@ -1027,6 +1064,7 @@ def exchange_model_grant(
         agent_id=agent_id,
         delegation_id=delegation_id,
         request_id=body.request_id,
+        model_id=body.requested_model_id,
     )
 
 
@@ -1081,9 +1119,15 @@ def create_model_delegation_if_supported(
         agent_id=agent_id,
         safe_detail={"version_id": version_id, "ttl_seconds": ttl},
     )
+    try:
+        catalog = delegated_model_catalog(conn, user_id=user_id, agent_id=agent_id)
+    except HTTPException:
+        catalog = {"default_model_id": None, "models": []}
     return {
         "model_delegation_token": token,
         "model_delegation_expires_in": ttl,
+        "model_delegation_default_model_id": catalog["default_model_id"],
+        "model_delegation_models": catalog["models"],
     }
 
 
@@ -1441,6 +1485,8 @@ def consume_gateway_grant(
         conn,
         user_id=row["user_id"],
         agent_id=row["agent_id"],
+        profile_id=row["profile_id"],
+        model_id=row["model_id"],
     )
     if binding_profile_id != row["profile_id"] or binding_model_id != row["model_id"]:
         conn.execute(
@@ -1545,6 +1591,7 @@ async def _stream_provider(
     started = time.perf_counter()
     yield _model_sse("model.started", {"model": grant["model_id"], "request_id": grant["request_id"]})
     usage: dict[str, int] = {}
+    emitted_text: list[str] = []
     error_code: str | None = None
     try:
         url, payload = _provider_request(profile, grant, body)
@@ -1580,7 +1627,15 @@ async def _stream_provider(
                         return
                     delta = _stream_delta(profile["api_style"], item)
                     if delta:
+                        emitted_text.append(delta)
                         yield _model_sse("model.output_text.delta", {"delta": delta})
+                    final_text = _stream_final_text(profile["api_style"], item)
+                    if final_text:
+                        emitted = "".join(emitted_text)
+                        recovered = final_text[len(emitted) :] if final_text.startswith(emitted) else ""
+                        if recovered:
+                            emitted_text.append(recovered)
+                            yield _model_sse("model.output_text.delta", {"delta": recovered})
                     item_usage = _stream_usage(profile["api_style"], item)
                     if item_usage:
                         usage = item_usage
@@ -1668,8 +1723,23 @@ def _stream_delta(api_style: str, item: dict[str, Any]) -> str:
     return ""
 
 
+def _stream_final_text(api_style: str, item: dict[str, Any]) -> str:
+    if api_style != "responses":
+        return ""
+    if item.get("type") == "response.output_text.done" and isinstance(item.get("text"), str):
+        return item["text"]
+    response = item.get("response")
+    if item.get("type") != "response.completed" or not isinstance(response, dict):
+        return ""
+    text, _ = _extract_text_and_usage("responses", response)
+    return text
+
+
 def _stream_usage(api_style: str, item: dict[str, Any]) -> dict[str, int]:
     usage = item.get("usage")
+    if api_style == "responses" and not isinstance(usage, dict):
+        response = item.get("response")
+        usage = response.get("usage") if isinstance(response, dict) else None
     if not isinstance(usage, dict):
         return {}
     return _normalize_responses_usage(usage) if api_style == "responses" else _normalize_chat_usage(usage)

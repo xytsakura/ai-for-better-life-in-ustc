@@ -67,6 +67,8 @@ class HubModelDelegation:
     course_user_id: str
     display_name: str
     expires_at: float
+    models: tuple[dict[str, Any], ...] = ()
+    default_model_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,8 @@ class HubModelContext:
     display_name: str
     delegate_token: str
     request_id: str
+    allowed_model_ids: tuple[str, ...] = ()
+    default_model_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,10 +132,31 @@ class HubModelDelegationStore:
         identity: VerifiedHubIdentity,
         expires_in: int,
         max_ttl_seconds: int,
+        models: Any = None,
+        default_model_id: str | None = None,
     ) -> str:
         self.prune()
         ttl = max(1, min(int(expires_in or max_ttl_seconds), max_ttl_seconds))
         delegation_id = f"hubdlg_{uuid.uuid4().hex}"
+        safe_models: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in models if isinstance(models, list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if not model_id or len(model_id) > 128 or model_id in seen:
+                continue
+            seen.add(model_id)
+            safe_models.append(
+                {
+                    "id": model_id,
+                    "display_name": str(item.get("display_name") or model_id)[:160],
+                    "chat_eligible": item.get("chat_eligible") is not False,
+                }
+            )
+        safe_default = str(default_model_id or "").strip() or None
+        if safe_default not in seen:
+            safe_default = safe_models[0]["id"] if safe_models else None
         self._items[delegation_id] = HubModelDelegation(
             delegation_id=delegation_id,
             access_token=access_token,
@@ -139,6 +164,8 @@ class HubModelDelegationStore:
             course_user_id=identity.course_user_id,
             display_name=identity.display_name,
             expires_at=time.time() + ttl,
+            models=tuple(safe_models),
+            default_model_id=safe_default,
         )
         return delegation_id
 
@@ -463,8 +490,9 @@ class HubModelGatewayClient:
         messages: list[dict[str, Any]],
         reasoning_effort: str | None,
         max_output_tokens: int,
+        model_id: str | None = None,
     ) -> HubModelGatewayResult:
-        grant = self._exchange_grant(context)
+        grant = self._exchange_grant(context, model_id=model_id)
         payload = self._gateway_payload(
             instructions=instructions,
             messages=messages,
@@ -516,8 +544,9 @@ class HubModelGatewayClient:
         messages: list[dict[str, Any]],
         reasoning_effort: str | None,
         max_output_tokens: int,
+        model_id: str | None = None,
     ):
-        grant = await self._exchange_grant_async(context)
+        grant = await self._exchange_grant_async(context, model_id=model_id)
         payload = self._gateway_payload(
             instructions=instructions,
             messages=messages,
@@ -558,14 +587,19 @@ class HubModelGatewayClient:
                 allow_fallback=True,
             ) from exc
 
-    def _exchange_grant(self, context: HubModelContext) -> HubModelGrant:
+    def _exchange_grant(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> HubModelGrant:
         if not self.is_configured():
             raise HubModelGatewayError(
                 "model_gateway_not_configured",
                 "Hub Model Gateway 未配置",
                 allow_fallback=True,
             )
-        payload = self._grant_payload(context)
+        payload = self._grant_payload(context, model_id=model_id)
         try:
             with httpx.Client(timeout=8.0, follow_redirects=False) as client:
                 response = client.post(
@@ -584,14 +618,19 @@ class HubModelGatewayClient:
             raise self._http_error(response, default_code="model_grant_failed")
         return self._parse_grant(response)
 
-    async def _exchange_grant_async(self, context: HubModelContext) -> HubModelGrant:
+    async def _exchange_grant_async(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> HubModelGrant:
         if not self.is_configured():
             raise HubModelGatewayError(
                 "model_gateway_not_configured",
                 "Hub Model Gateway 未配置",
                 allow_fallback=True,
             )
-        payload = self._grant_payload(context)
+        payload = self._grant_payload(context, model_id=model_id)
         try:
             async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
                 response = await client.post(
@@ -622,11 +661,19 @@ class HubModelGatewayClient:
     def _grant_headers(self, context: HubModelContext) -> dict[str, str]:
         return self._client_secret_basic_headers()
 
-    def _grant_payload(self, context: HubModelContext) -> dict[str, Any]:
-        return {
+    def _grant_payload(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {
             "model_delegation_token": context.delegate_token,
             "request_id": context.request_id,
         }
+        if model_id:
+            payload["requested_model_id"] = model_id
+        return payload
 
     def _delegation_revoke_url(self) -> str:
         parsed = urlparse(self.settings.hub_model_grant_endpoint)

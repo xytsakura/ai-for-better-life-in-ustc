@@ -510,6 +510,12 @@ def test_workspace_exchange_keeps_model_delegation_server_side(
                     "scope": "workspace:enter",
                     "model_delegation_token": "opaque-model-delegation-secret",
                     "model_delegation_expires_in": 3600,
+                    "model_delegation_default_model_id": "gpt-5.6-sol",
+                    "model_delegation_models": [
+                        {"id": "gpt-5.6-luna", "display_name": "GPT-5.6 Luna", "chat_eligible": True},
+                        {"id": "gpt-5.6-sol", "display_name": "GPT-5.6 Sol", "chat_eligible": True},
+                        {"id": "gpt-5.6-terra", "display_name": "GPT-5.6 Terra", "chat_eligible": True},
+                    ],
                 },
             )
 
@@ -527,6 +533,16 @@ def test_workspace_exchange_keeps_model_delegation_server_side(
     settings = client.get("/api/settings").json()
     assert settings["model_runtime"]["source"] == "platform"
     assert settings["model_runtime"]["platform_available"] is True
+    models = client.get("/api/models")
+    assert models.status_code == 200
+    assert models.json()["discovery_source"] == "platform"
+    assert models.json()["default_model_id"] == "gpt-5.6-sol"
+    assert {item["id"] for item in models.json()["models"]} == {
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    }
+    assert "opaque-model-delegation-secret" not in models.text
 
 
 def test_featured_workspace_generates_unique_platform_request_id_per_query(

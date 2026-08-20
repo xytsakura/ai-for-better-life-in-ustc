@@ -57,6 +57,7 @@ from .model_catalog import (
     ModelCatalog,
     ModelCatalogError,
     SUPPORTED_REASONING_EFFORTS,
+    default_model_info,
     invalidate_model_catalog,
     validate_base_url_for_saved_config,
 )
@@ -710,10 +711,28 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             detail=_error(exc.code, exc.message, exc.retryable),
         )
 
-    def validate_query_model(payload: QueryRequest) -> tuple[str, str | None]:
-        selected = (payload.model or app.state.settings.llm_model or "").strip()
+    def validate_query_model(
+        payload: QueryRequest,
+        platform_context: HubModelContext | None = None,
+    ) -> tuple[str, str | None]:
+        selected = (
+            payload.model
+            or (platform_context.default_model_id if platform_context else None)
+            or app.state.settings.llm_model
+            or ""
+        ).strip()
         try:
-            model_info = app.state.model_catalog.model_for_query(selected)
+            if platform_context is not None:
+                if platform_context.allowed_model_ids and selected not in platform_context.allowed_model_ids:
+                    raise ModelCatalogError("model_not_available", "所选模型不在平台授权目录中")
+                model_info = default_model_info(selected)
+                if not model_info.chat_eligible:
+                    raise ModelCatalogError(
+                        model_info.disabled_reason or "model_not_available",
+                        "所选模型不适用于文本对话",
+                    )
+            else:
+                model_info = app.state.model_catalog.model_for_query(selected)
             app.state.model_catalog.validate_reasoning(model_info, payload.reasoning_effort)
         except ModelCatalogError as exc:
             raise catalog_error(exc, 422) from exc
@@ -2202,7 +2221,24 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         return settings_response(user_id, request)
 
     @app.get("/api/models")
-    def get_models(user_id: str = Depends(current_user)) -> dict:
+    def get_models(request: Request, user_id: str = Depends(current_user)) -> dict:
+        delegation = app.state.hub_model_delegations.get(
+            str(request.session.get("hub_model_delegation_id") or "")
+        )
+        if delegation is not None and delegation.models:
+            models = []
+            for delegated in delegation.models:
+                info = default_model_info(str(delegated["id"]))
+                safe = info.as_dict()
+                safe["display_name"] = str(delegated.get("display_name") or info.display_name)
+                models.append(safe)
+            return {
+                "models": models,
+                "default_model_id": delegation.default_model_id,
+                "discovery_source": "platform",
+                "cached": True,
+                "reasoning_efforts": list(SUPPORTED_REASONING_EFFORTS),
+            }
         cached = app.state.model_catalog.get_cached()
         if cached:
             return cached.as_dict()
@@ -2267,10 +2303,14 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             payload["space_id"] = prepared.space_id
         return payload
 
-    def prepare_query(payload: QueryRequest, user_id: str) -> PreparedQuery:
+    def prepare_query(
+        payload: QueryRequest,
+        user_id: str,
+        platform_context: HubModelContext | None = None,
+    ) -> PreparedQuery:
         history = [m.model_dump() for m in payload.messages]
         reference_context = _serialize_context_references(payload.context_references)
-        selected_model, selected_reasoning = validate_query_model(payload)
+        selected_model, selected_reasoning = validate_query_model(payload, platform_context)
         scope = payload.scope or ("knowledge_base" if payload.mode == "retrieval" else "general")
         if payload.mode == "direct":
             if scope != "general":
@@ -2539,6 +2579,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             display_name=delegation.display_name,
             delegate_token=delegation.access_token,
             request_id=f"workspace:{uuid.uuid4().hex}",
+            allowed_model_ids=tuple(str(item["id"]) for item in delegation.models),
+            default_model_id=delegation.default_model_id,
         )
 
     def _store_model_delegation(
@@ -2562,6 +2604,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             identity=identity,
             expires_in=expires_in,
             max_ttl_seconds=settings.hub_model_delegation_ttl_seconds,
+            models=token_response.get("model_delegation_models"),
+            default_model_id=token_response.get("model_delegation_default_model_id"),
         )
 
     def _hub_query_request(payload: RunAgentInput) -> tuple[QueryRequest, str]:
@@ -2676,8 +2720,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     async def hub_chat(payload: RunAgentInput, request: Request) -> StreamingResponse:
         identity = await _hub_identity(request, "chat:invoke")
         query_payload, _question = _hub_query_request(payload)
-        prepared = prepare_query(query_payload, identity.course_user_id)
         platform_context = _platform_context_from_request(request, identity=identity)
+        prepared = prepare_query(query_payload, identity.course_user_id, platform_context)
         return StreamingResponse(
             _hub_agui_events(request, payload, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
@@ -2764,8 +2808,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         request: Request,
         user_id: str = Depends(current_user),
     ) -> dict:
-        prepared = prepare_query(payload, user_id)
         platform_context = _platform_context_from_request(request)
+        prepared = prepare_query(payload, user_id, platform_context)
         if prepared.mode == "direct":
             llm_result = app.state.llm.generate_direct(
                 prepared.question,
@@ -2797,8 +2841,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         request: Request,
         user_id: str = Depends(current_user),
     ) -> StreamingResponse:
-        prepared = prepare_query(payload, user_id)
         platform_context = _platform_context_from_request(request)
+        prepared = prepare_query(payload, user_id, platform_context)
         return StreamingResponse(
             _query_sse_events(request, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
