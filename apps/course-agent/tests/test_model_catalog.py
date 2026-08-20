@@ -37,6 +37,7 @@ class _DiscoverClient:
             200,
             json={
                 "data": [
+                    {"id": "gpt-5.6-luna"},
                     {"id": "gpt-5.6-sol"},
                     {"id": "gpt-5.6-sol"},
                     {"id": "gpt-5.6-terra"},
@@ -71,6 +72,7 @@ def test_model_discovery_falls_back_from_html_models_to_v1_and_classifies(monkey
     ]
     assert result.discovery_source == "/v1/models"
     assert [model.id for model in result.models] == [
+        "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "voice-audio-model",
@@ -189,6 +191,57 @@ def test_models_endpoint_requires_admin_and_query_validates_catalog_model(monkey
     )
     assert compatible_model.status_code == 200
     assert compatible_model.json()["model"] == "unknown-specialized-model"
+
+
+def test_models_endpoint_auto_discovers_catalog_for_standalone_users(monkeypatch, tmp_path: Path):
+    invalidate_model_catalog()
+    _DiscoverClient.urls = []
+    monkeypatch.setattr("course_agent.model_catalog.socket.getaddrinfo", _public_dns)
+    monkeypatch.setattr("course_agent.model_catalog.httpx.Client", _DiscoverClient)
+    settings = Settings(
+        runtime_dir=tmp_path,
+        session_secret="test-secret",
+        llm_api_key="secret-key",
+        llm_base_url="https://models.example.com",
+        llm_model="gpt-5.6-sol",
+    )
+    client = TestClient(create_app(settings, FakeLLMAdapter(settings)))
+    client.post("/api/session", json={"user_id": "demo-b"})
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    assert response.json()["discovery_source"] == "/v1/models"
+    assert [model["id"] for model in response.json()["models"][:3]] == [
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+    ]
+
+
+def test_models_endpoint_falls_back_to_default_when_auto_discovery_fails(monkeypatch, tmp_path: Path):
+    invalidate_model_catalog()
+    monkeypatch.setattr(
+        "course_agent.model_catalog.ModelCatalog.discover",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ModelCatalogError("model_discovery_failed", "未能发现可用模型", True)
+        ),
+    )
+    settings = Settings(
+        runtime_dir=tmp_path,
+        session_secret="test-secret",
+        llm_api_key="secret-key",
+        llm_base_url="https://models.example.com",
+        llm_model="gpt-5.6-sol",
+    )
+    client = TestClient(create_app(settings, FakeLLMAdapter(settings)))
+    client.post("/api/session", json={"user_id": "demo-b"})
+
+    response = client.get("/api/models")
+
+    assert response.status_code == 200
+    assert response.json()["discovery_source"] is None
+    assert [model["id"] for model in response.json()["models"]] == ["gpt-5.6-sol"]
 
 
 def test_query_rejects_unsupported_reasoning_for_default_model(tmp_path: Path):

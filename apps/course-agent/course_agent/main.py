@@ -2243,6 +2243,12 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         if cached:
             return cached.as_dict()
         try:
+            discovered = app.state.model_catalog.discover(force=False)
+        except ModelCatalogError:
+            discovered = None
+        if discovered is not None:
+            return discovered.as_dict()
+        try:
             default_info = app.state.model_catalog.model_for_query(app.state.settings.llm_model)
         except ModelCatalogError as exc:
             raise catalog_error(exc, 422) from exc

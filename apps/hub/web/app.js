@@ -247,17 +247,19 @@ function destroyPortalEffects() {
 }
 
 async function renderPortal() {
+  const generation = state.generation;
   state.loading = true;
   view.innerHTML = renderPortalStage();
   mountPortalEffects();
   bindPortalSearch();
-  try {
-    state.agents = await loadAgents();
-  } catch {
-    // 主页不展示 Agent 列表错误，静默忽略；用户可前往 Agent 广场查看
-  } finally {
-    state.loading = false;
-  }
+  const [agentsResult, modelsResult] = await Promise.allSettled([
+    loadAgents(),
+    loadModelProfiles(),
+  ]);
+  if (generation !== state.generation || state.route.name !== 'portal') return;
+  if (agentsResult.status === 'fulfilled') state.agents = agentsResult.value;
+  paintPortalModelStatus(modelsResult.status === 'fulfilled' ? modelsResult.value : null);
+  state.loading = false;
 }
 
 function renderPortalStage() {
@@ -271,8 +273,64 @@ function renderPortalStage() {
           <input id="portalSearch" type="search" placeholder="搜索 Agent、课程或校园服务" value="${escapeAttr(state.query)}" autocomplete="off" />
           <span class="portal-search__send" aria-hidden="true">↑</span>
         </label>
+        <section id="portalModelStatus" class="portal-model-status is-loading" aria-label="当前模型配置" aria-live="polite">
+          <span>正在读取模型配置…</span>
+        </section>
       </div>
     </section>
+  `;
+}
+
+function paintPortalModelStatus(payload) {
+  const container = document.querySelector('#portalModelStatus');
+  if (!container) return;
+  container.classList.remove('is-loading');
+  if (!payload) {
+    container.innerHTML = `
+      <div class="portal-model-status__copy">
+        <strong>模型配置暂不可用</strong>
+        <span>瀚海行仍可使用 Agent 本地回退配置。</span>
+      </div>
+      <a class="portal-model-status__action" href="/hub/settings" data-link>检查配置</a>
+    `;
+    return;
+  }
+
+  const { profiles, bindings } = payload;
+  const hanhai = state.agents.find((agent) => normalizeAgent(agent).name.includes('瀚海行'));
+  const hanhaiBinding = hanhai ? bindings.agents[normalizeAgent(hanhai).id] : null;
+  const effectiveBinding = hanhaiBinding?.profile_id ? hanhaiBinding : bindings.global;
+  const profile = profiles.find((item) => item.id === effectiveBinding?.profile_id) || profiles[0] || null;
+  const eligibleCount = (profile?.models || []).filter((model) => model.chat_eligible).length;
+
+  if (!profile) {
+    container.innerHTML = `
+      <div class="portal-model-status__copy">
+        <strong>还没有模型 Profile</strong>
+        <span>添加 API 配置后，可给瀚海行和其他兼容 Agent 统一供给模型。</span>
+      </div>
+      <a class="portal-model-status__action" href="/hub/settings" data-link>添加模型配置</a>
+    `;
+    return;
+  }
+
+  const globalModel = bindings.global?.model_id || '未设置';
+  const hanhaiModel = hanhaiBinding?.model_id || (bindings.global?.model_id ? `${bindings.global.model_id}（继承全局）` : '未设置');
+  container.innerHTML = `
+    <div class="portal-model-status__identity">
+      <span class="portal-model-status__dot" aria-hidden="true"></span>
+      <span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profile.api_key_mask || 'API Key 已安全保存')}</small></span>
+    </div>
+    <div class="portal-model-status__route">
+      <span>全局默认</span>
+      <strong>${escapeHtml(globalModel)}</strong>
+    </div>
+    <div class="portal-model-status__route">
+      <span>瀚海行Agent</span>
+      <strong>${escapeHtml(hanhaiModel)}</strong>
+    </div>
+    <div class="portal-model-status__models">${eligibleCount ? `${eligibleCount} 个可用模型` : '等待发现模型'}</div>
+    <a class="portal-model-status__action" href="/hub/settings" data-link>管理模型配置</a>
   `;
 }
 

@@ -239,11 +239,11 @@ body.resizing * {
   width: 36px;
   height: 36px;
   flex: 0 0 36px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   display: block;
-  object-fit: cover;
-  background: #ffffff;
+  object-fit: contain;
+  background: transparent;
 }
 
 .brand-text { min-width: 0; }
@@ -957,11 +957,11 @@ body.resizing * {
 .home-logo-mark {
   width: 72px;
   height: 72px;
-  border: 1px solid var(--border-2);
-  border-radius: 16px;
+  border: 0;
+  border-radius: 0;
   display: block;
-  object-fit: cover;
-  background: #ffffff;
+  object-fit: contain;
+  background: transparent;
 }
 
 .home-logo-badge {
@@ -3493,9 +3493,10 @@ body {
 .brand-mark,
 .home-logo-mark {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border-2) 80%, transparent);
-  border-radius: 12px;
-  padding: 2px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
   box-shadow: none;
 }
 
@@ -3597,8 +3598,8 @@ body {
 .home-logo-mark {
   width: 88px;
   height: 88px;
-  border-radius: 22px;
-  background: color-mix(in srgb, var(--bg-3) 60%, #ffffff);
+  border-radius: 0;
+  background: transparent;
 }
 
 .home-logo-badge {

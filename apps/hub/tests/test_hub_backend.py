@@ -508,6 +508,10 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert app_script.status_code == 200
     assert "from './hub-core.js?v=" in app_script.text
     assert "data-model-settings" in app_script.text
+    assert 'id="portalModelStatus"' in app_script.text
+    assert "paintPortalModelStatus" in app_script.text
+    assert "API Key 已安全保存" in app_script.text
+    assert "管理模型配置" in app_script.text
     assert 'name="api_key" type="password" value=""' in app_script.text
     assert "clearSettings();" in app_script.text
     assert client.get("/hub-core.js").status_code == 200
