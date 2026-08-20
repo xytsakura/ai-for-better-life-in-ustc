@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from hub.config import Settings
 from hub.db import database
 from hub.main import create_app
+from hub.home_assistant import load_agent_catalog
 
 
 def settings_for_home_assistant(tmp_path: Path) -> Settings:
@@ -247,6 +248,71 @@ def test_route_recommends_only_active_catalog_agent_without_urls_or_secrets(
     assert "http://" not in encoded
     assert "sk-home-secret" not in encoded
     assert "127.0.0.1" not in encoded
+
+
+def test_agent_catalog_includes_future_work_demos() -> None:
+    catalog = load_agent_catalog()
+    ids = {item.agent_id for item in catalog.agents}
+
+    assert {"course-review-demo", "campus-public-service-demo"}.issubset(ids)
+
+
+def test_route_recommends_course_review_future_work_agent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = '{"recommend":true,"agent_id":"course-review-demo","reason":"它能汇总课程和教师评价并辅助选课。"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(
+        client,
+        agent_id="course-review-demo",
+        name="评课社区 Agent",
+        description="课程与教师评价、量化比较和选课建议 Demo",
+    )
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "route",
+            "messages": [{"role": "user", "content": "我想看看老师评价和课程评分，再得到选课建议。"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    recommendation = response.json()["recommendation"]
+    assert recommendation["agent_id"] == "course-review-demo"
+    assert recommendation["name"] == "评课社区 Agent"
+
+
+def test_route_recommends_public_service_future_work_agent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = '{"recommend":true,"agent_id":"campus-public-service-demo","reason":"它能查询签字盖章和行政办事位置。"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(
+        client,
+        agent_id="campus-public-service-demo",
+        name="校园公共服务 Agent",
+        description="签字盖章、行政窗口、楼宇位置和办事经验 Demo",
+    )
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "route",
+            "messages": [{"role": "user", "content": "我需要找行政老师签字盖章，想知道在哪栋楼。"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    recommendation = response.json()["recommendation"]
+    assert recommendation["agent_id"] == "campus-public-service-demo"
+    assert recommendation["name"] == "校园公共服务 Agent"
 
 
 def test_route_rejects_forged_or_inactive_model_agent_id(

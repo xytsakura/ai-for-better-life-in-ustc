@@ -223,7 +223,12 @@ def verify_model_configuration(base_url: str, *, user: str, agents: list[dict[st
 def run_iteration(base_url: str, *, user: str) -> dict[str, Any]:
     agents = request_json(f"{base_url}/api/agents", user=user).get("agents", [])
     visible = sorted(_agent_id(item) for item in agents)
-    required = {"campus-helper-demo", "hanhai-course-agent"}
+    required = {
+        "campus-helper-demo",
+        "hanhai-course-agent",
+        "course-review-demo",
+        "campus-public-service-demo",
+    }
     if not required.issubset(visible):
         raise RuntimeError(f"required Agents not visible: {visible}")
     return {
@@ -231,6 +236,8 @@ def run_iteration(base_url: str, *, user: str) -> dict[str, Any]:
         "model_config": verify_model_configuration(base_url, user=user, agents=agents),
         "demo": gateway_run(base_url, "campus-helper-demo", user=user, prompt="图书馆在哪里？"),
         "hanhai": gateway_run(base_url, "hanhai-course-agent", user=user, prompt="请用一句话说明极限的直觉。"),
+        "course_review": gateway_run(base_url, "course-review-demo", user=user, prompt="请介绍课程评价和老师评价的演示能力。"),
+        "public_service": gateway_run(base_url, "campus-public-service-demo", user=user, prompt="我需要签字盖章，应该去哪里？"),
         "workspace": verify_workspace(base_url, user=user),
     }
 

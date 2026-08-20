@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "id": "course-review-demo",
+  "name": "评课社区 Agent",
+  "description": "汇总课程与教师评价，提供量化比较和建设性的选课建议（Future Work Demo）",
+  "version": "1.0.0",
+  "owner": "AI for better life In ustc",
+  "category": "课程服务",
+  "tags": ["演示", "评课社区", "选课建议", "Future Work"],
+  "integration": {
+    "mode": "connected",
+    "protocol": "simple-chat",
+    "launch_url": "http://127.0.0.1:8101/",
+    "chat_endpoint": "http://127.0.0.1:8101/api/chat",
+    "health_endpoint": "http://127.0.0.1:8101/api/health"
+  },
+  "capabilities": ["simple-chat", "course-evaluation", "course-selection", "future-work-demo"],
+  "data_policy": {
+    "receives_user_identity": true,
+    "receives_files": false,
+    "stores_conversation": false
+  }
+}

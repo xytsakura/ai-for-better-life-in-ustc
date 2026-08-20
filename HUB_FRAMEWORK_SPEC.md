@@ -27,6 +27,8 @@ flowchart LR
     G --> R["Registry + Review + Audit"]
     G --> H["瀚海行<br/>原生 AG-UI"]
     G --> A["校园助手 Demo<br/>simple-chat"]
+    G --> C["评课社区 Agent<br/>Future Work Demo"]
+    G --> V["校园公共服务 Agent<br/>Future Work Demo"]
     H --> K["数学分析 B1 知识库"]
     Provider["Agent 提供方"] --> S["Manifest 提交"]
     S --> R
@@ -214,8 +216,8 @@ Copy-Item .env.example .env
 
 ## 11. 比赛 Demo 证明点
 
-1. Portal 同时展示瀚海行和独立校园助手 Demo；
-2. 两个 Agent 复用同一聊天 UI，但分别走原生 AG-UI 和 `simple-chat`；
+1. Portal 同时展示瀚海行、校园助手 Demo 和两个 Future Work Demo；
+2. 瀚海行走原生 AG-UI，三个演示 Agent 复用 `simple-chat`，但保持独立 Registry 身份；
 3. 提交新 Manifest、管理员批准后，卡片自动出现；
 4. 暂停 Agent 后立即从广场消失且无法调用，恢复后重新可用；
 5. 瀚海行能从统一聊天进入完整知识库工作台；

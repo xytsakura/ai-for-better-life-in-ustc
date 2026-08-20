@@ -20,13 +20,20 @@ def main() -> None:
     wait_for_hub()
     hanhai = load_manifest("hanhai-connected.json")
     demo = load_manifest("demo-connected.json")
+    future_demos = [
+        load_manifest("course-review-demo.json"),
+        load_manifest("campus-public-service-demo.json"),
+    ]
     patch_hanhai_manifest(hanhai)
     patch_demo_manifest(demo)
+    for future_demo in future_demos:
+        patch_demo_manifest(future_demo)
 
     hanhai_version = submit_manifest(hanhai)
     credential = create_credential("hanhai-course-agent")
     write_course_agent_secret(credential["client_secret"])
     demo_version = submit_manifest(demo)
+    future_versions = [submit_manifest(item) for item in future_demos]
 
     # 本地无 Docker 启动时，agent 还没起，无法立即做 conformance/health。
     # REGISTER_ONLY=1 只完成注册、凭据与 secret 文件写入，供 agent 启动后读取，
@@ -37,13 +44,19 @@ def main() -> None:
 
     wait_for_conformance("hanhai-course-agent", hanhai_version)
     wait_for_conformance("campus-helper-demo", demo_version)
+    for future_demo, version_id in zip(future_demos, future_versions, strict=True):
+        wait_for_conformance(future_demo["id"], version_id)
     review_version("hanhai-course-agent", hanhai_version, featured=True)
     review_version("campus-helper-demo", demo_version, featured=False)
+    for future_demo, version_id in zip(future_demos, future_versions, strict=True):
+        review_version(future_demo["id"], version_id, featured=False)
     skip_health_check = os.getenv("HUB_BOOTSTRAP_SKIP_HEALTH_CHECK", "0") == "1"
     if not skip_health_check:
         wait_for_agent_health("hanhai-course-agent")
         wait_for_agent_health("campus-helper-demo")
-    suffix = "seeded both Agents" if skip_health_check else "seeded and health-checked both Agents"
+        for future_demo in future_demos:
+            wait_for_agent_health(future_demo["id"])
+    suffix = "seeded four Agents" if skip_health_check else "seeded and health-checked four Agents"
     print(f"Hub demo bootstrap completed: {suffix}.")
 
 

@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from demo_agent.main import HubTokenVerifier, app, token_verifier
+from demo_agent.main import HubTokenVerifier, answer_for, app, token_verifier
 
 
 client = TestClient(app)
@@ -18,7 +18,7 @@ def setup_function() -> None:
     token_verifier.cache_clear()
 
 
-def _encoded_token(*, scopes: list[str], ttl_seconds: int = 120) -> tuple[HubTokenVerifier, str]:
+def _encoded_token(*, scopes: list[str], ttl_seconds: int = 120, audience: str | None = None) -> tuple[HubTokenVerifier, str]:
     private_key = Ed25519PrivateKey.generate()
     public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
     encoded_public_key = base64.urlsafe_b64encode(public_key).rstrip(b"=").decode("ascii")
@@ -41,7 +41,7 @@ def _encoded_token(*, scopes: list[str], ttl_seconds: int = 120) -> tuple[HubTok
     token = jwt.encode(
         {
             "iss": verifier.issuer,
-            "aud": verifier.audience,
+            "aud": audience or verifier.audience,
             "sub": "demo-c",
             "scope": scopes,
             "iat": issued_at,
@@ -179,3 +179,26 @@ def test_hub_token_refreshes_jwks_once_when_same_kid_rotates(monkeypatch) -> Non
 
     assert claims["sub"] == "demo-c"
     assert refresh_count == 1
+
+
+def test_hub_token_accepts_registered_future_work_audiences(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "DEMO_AGENT_HUB_AUDIENCES",
+        "campus-helper-demo,course-review-demo,campus-public-service-demo",
+    )
+    verifier, token = _encoded_token(scopes=["chat:invoke"], audience="course-review-demo")
+
+    claims = verifier.verify(f"Bearer {token}", "chat:invoke")
+
+    assert claims["aud"] == "course-review-demo"
+    assert "course-review-demo" in verifier.audiences
+
+
+def test_future_work_demo_answers_are_explicitly_labeled() -> None:
+    review, _ = answer_for("请给我课程评分和老师评价", "course-review-demo")
+    public_service, _ = answer_for("我需要签字盖章，应该去哪个楼？", "campus-public-service-demo")
+
+    assert "Future Work Demo" in review
+    assert "评课社区" in review
+    assert "Future Work Demo" in public_service
+    assert "校园公共服务" in public_service

@@ -16,6 +16,18 @@
       "name": "校园助手 Demo",
       "summary": "演示校园生活问答、地点导航、办事信息与轻量服务咨询。",
       "keywords": ["校园生活", "地点导航", "办事咨询", "演示接入", "服务信息"]
+    },
+    {
+      "agent_id": "course-review-demo",
+      "name": "评课社区 Agent",
+      "summary": "汇总课程与教师评价、量化评分和选课建议；当前为 Future Work Demo。",
+      "keywords": ["评课社区", "课程评价", "教师评价", "课程评分", "选课建议"]
+    },
+    {
+      "agent_id": "campus-public-service-demo",
+      "name": "校园公共服务 Agent",
+      "summary": "查询签字盖章、行政窗口、校区楼宇位置和办事经验；当前为 Future Work Demo。",
+      "keywords": ["签字盖章", "行政老师", "办事地点", "校区楼宇", "门牌号", "办事经验"]
     }
   ]
 }

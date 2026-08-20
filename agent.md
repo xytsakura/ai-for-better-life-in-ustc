@@ -38,7 +38,7 @@
 - Campus Agent Hub、瀚海行与独立校园助手 Demo 已形成三服务闭环，代码分别位于 `apps/hub`、`apps/course-agent` 和 `apps/demo-agent`；
 - Hub 使用独立 `hub.sqlite3`，不 import 瀚海行业务代码，也不复用其数据库和 Session；
 - Featured 工作台使用 60 秒一次性授权码、`client_secret_basic` 和 `workspace:enter` EdDSA JWT；Gateway 调用使用 `chat:invoke`；
-- 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 两个 Agent 并幂等导入 25 份数学分析资料。
+- 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 四个 Agent（含两个 Future Work Demo）并幂等导入 25 份数学分析资料。
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
 - 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
 
@@ -91,7 +91,7 @@
 - 文档不得把尚未实现的能力写成现状；Hub 已实现 SQLite 持久限流、大小限制、异步健康轮询和连续失败准入，公开多实例部署仍需评估共享数据库或独立限流基础设施。
 - Hub Ed25519 私钥必须持久化在忽略的运行时文件或 Secret Store 中；不能在每次进程启动时静默生成新身份，否则 Agent 的 JWKS 缓存会导致重启后的短期 401。
 - 固定比赛验收使用 `deploy/verify_demo.py`，至少 10 轮中成功 9 轮；结果只记录状态、耗时和事件数量，不保存问答正文、授权码、JWT 或 Cookie。
-- 本地或服务器首次启动三服务后必须执行 `deploy/bootstrap_demo.py`（或使用包含同等 bootstrap 步骤的标准编排），完成两个 Agent 注册、Contract 检查、审核、健康检查和 Featured 凭据生成；只看到三个健康接口为 200 不能证明 Hub 已经可用。
+- 本地或服务器首次启动三服务后必须执行 `deploy/bootstrap_demo.py`（或使用包含同等 bootstrap 步骤的标准编排），完成四个 Agent 注册、Contract 检查、审核、健康检查和 Featured 凭据生成；只看到三个健康接口为 200 不能证明 Hub 已经可用。
 - 日志、事件和 Manifest 不记录明文密钥、完整私人文件正文或完整私人聊天正文。
 - 平台模型 provider 和 `base_url` 必须受控；不允许普通用户向任意 URL 发送私人资料。
 - `file_ref` 必须由服务端按当前用户和目标 Agent 重新鉴权。

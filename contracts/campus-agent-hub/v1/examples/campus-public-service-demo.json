@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "id": "campus-public-service-demo",
+  "name": "校园公共服务 Agent",
+  "description": "查询签字盖章、行政窗口、校区楼宇位置和同学办事经验（Future Work Demo）",
+  "version": "1.0.0",
+  "owner": "AI for better life In ustc",
+  "category": "校园公共服务",
+  "tags": ["演示", "签字盖章", "行政服务", "Future Work"],
+  "integration": {
+    "mode": "connected",
+    "protocol": "simple-chat",
+    "launch_url": "http://127.0.0.1:8101/",
+    "chat_endpoint": "http://127.0.0.1:8101/api/chat",
+    "health_endpoint": "http://127.0.0.1:8101/api/health"
+  },
+  "capabilities": ["simple-chat", "location-directory", "peer-experience", "future-work-demo"],
+  "data_policy": {
+    "receives_user_identity": true,
+    "receives_files": false,
+    "stores_conversation": false
+  }
+}

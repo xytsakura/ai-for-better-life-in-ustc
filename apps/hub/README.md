@@ -17,7 +17,7 @@ Copy-Item .env.example .env
 .\deploy\run-demo.ps1
 ```
 
-Compose 会 seed 瀚海行和校园助手 Demo、完成审核、创建 Featured 运行时凭据，并启动三个独立服务。
+Compose 会 seed 瀚海行、校园助手 Demo、评课社区 Agent Demo 和校园公共服务 Agent Demo，完成审核、创建 Featured 运行时凭据，并启动三个独立服务。
 
 演示身份通过请求头 `X-Hub-User` 切换：
 

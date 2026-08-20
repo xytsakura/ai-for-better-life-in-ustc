@@ -127,6 +127,7 @@ services:
       DEMO_AGENT_REQUIRE_HUB_TOKEN: "1"
       DEMO_AGENT_HUB_JWKS_URL: http://hub:8100/.well-known/jwks.json
       DEMO_AGENT_HUB_AUDIENCE: campus-helper-demo
+      DEMO_AGENT_HUB_AUDIENCES: campus-helper-demo,course-review-demo,campus-public-service-demo
       DEMO_AGENT_HUB_ISSUER: campus-agent-hub
     ports:
       - "${DEMO_AGENT_PUBLIC_PORT:-8101}:8101"
