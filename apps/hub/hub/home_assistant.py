@@ -21,6 +21,14 @@ from .utils import new_id
 
 
 INSTANT_INSTRUCTIONS = "你是 Campus Agent Hub 首页助手。简洁、友好、务实回答。"
+AUTO_INSTRUCTIONS = (
+    "你是 Campus Agent Hub 首页助手。先判断用户问题是否适合已注册的校园 Agent；"
+    "如果高度匹配，给出简短说明并推荐一个 Agent；如果没有高度匹配，就直接回答用户问题。"
+    "不要声称访问了不存在的数据，不要输出 URL、token 或凭据。"
+    "只输出一个 JSON 对象，格式为："
+    '{"answer":"给用户的直接回答或下一步说明","recommend":true|false,'
+    '"agent_id":null|"清单中的 agent_id","reason":"一句话推荐理由"}。'
+)
 MAX_HISTORY_MESSAGES = 12
 MAX_ROUTE_CATALOG_ITEMS = 20
 
@@ -35,7 +43,7 @@ class HomeAssistantMessage(BaseModel):
 class HomeAssistantChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["instant", "route"]
+    mode: Literal["instant", "route", "auto"]
     messages: list[HomeAssistantMessage] = Field(min_length=1, max_length=32)
 
     @field_validator("messages")
@@ -70,6 +78,21 @@ class RouteModelOutput(BaseModel):
 
     @model_validator(mode="after")
     def normalize_empty_recommendation(self) -> "RouteModelOutput":
+        if not self.recommend:
+            self.agent_id = None
+        return self
+
+
+class AutoModelOutput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    answer: str = Field(default="", max_length=8_000)
+    recommend: bool = False
+    agent_id: str | None = Field(default=None, max_length=80)
+    reason: str = Field(default="", max_length=300)
+
+    @model_validator(mode="after")
+    def normalize_empty_recommendation(self) -> "AutoModelOutput":
         if not self.recommend:
             self.agent_id = None
         return self
@@ -211,6 +234,21 @@ def _parse_route_output(text: str) -> RouteModelOutput:
         return RouteModelOutput(recommend=False, reason="暂时无法可靠解析路由结果。")
 
 
+def _parse_auto_output(text: str) -> AutoModelOutput:
+    stripped = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL | re.IGNORECASE)
+    if fenced:
+        stripped = fenced.group(1).strip()
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return AutoModelOutput(answer=stripped[:8_000])
+    try:
+        return AutoModelOutput.model_validate(payload)
+    except Exception:
+        return AutoModelOutput(answer=stripped[:8_000])
+
+
 async def home_assistant_chat(
     conn: sqlite3.Connection,
     model_service: ModelProfileService,
@@ -233,6 +271,63 @@ async def home_assistant_chat(
             )
         except HTTPException as exc:
             return await _single_error_stream(_error_code(exc))
+
+    if body.mode == "auto":
+        active_catalog = _active_catalog_by_id(conn)
+        if active_catalog:
+            instructions = "\n\n".join(
+                [
+                    AUTO_INSTRUCTIONS,
+                    "当前已通过平台验收且用户可见的 Agent 清单如下：",
+                    json.dumps(
+                        {
+                            "agents": [
+                                {
+                                    "agent_id": item["agent_id"],
+                                    "name": item["name"],
+                                    "summary": item["catalog_summary"],
+                                    "keywords": item["keywords"],
+                                }
+                                for item in active_catalog.values()
+                            ]
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                ]
+            )
+        else:
+            instructions = INSTANT_INSTRUCTIONS
+        try:
+            result = await call_user_global_model(
+                conn,
+                model_service,
+                user_id=user["user_id"],
+                request_id=request_id,
+                instructions=instructions,
+                messages=messages,
+                max_output_tokens=900,
+            )
+        except HTTPException as exc:
+            raise HTTPException(exc.status_code, detail={"error": _error_code(exc)}) from exc
+
+        parsed = _parse_auto_output(result.output_text)
+        recommendation = None
+        if parsed.recommend and parsed.agent_id in active_catalog:
+            safe = active_catalog[parsed.agent_id]
+            recommendation = {
+                "agent_id": safe["agent_id"],
+                "name": safe["name"],
+                "description": safe["description"],
+                "reason": parsed.reason or "这个 Agent 与当前需求最匹配。",
+            }
+        return {
+            "mode": "auto",
+            "message": parsed.answer or "我暂时没有足够信息回答这个问题。",
+            "recommendation": recommendation,
+            "model": result.model,
+            "usage": result.usage,
+        }
 
     active_catalog = _active_catalog_by_id(conn)
     if not active_catalog:

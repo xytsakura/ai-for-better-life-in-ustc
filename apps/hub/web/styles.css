@@ -2799,3 +2799,142 @@ body[data-route='portal'] .hub-view {
     transition-duration: 1ms !important;
   }
 }
+
+/* The Hub home is a conversation surface, not a framed chat widget. */
+.portal-stage {
+  min-height: calc(100vh - 94px);
+  border-bottom: 0;
+  align-items: stretch;
+}
+
+.portal-stage__content {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: min(980px, 100%);
+  min-height: calc(100vh - 94px);
+  padding: 34px 24px 28px;
+}
+
+.portal-stage__brand {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.portal-stage.has-conversation .portal-stage__content {
+  justify-content: flex-start;
+  padding-top: 28px;
+}
+
+.portal-stage.has-conversation .portal-stage__brand {
+  display: none;
+}
+
+.portal-assistant {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 30px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant {
+  flex: 0 0 auto;
+  margin-top: 34px;
+}
+
+.portal-assistant__messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(100vh - 252px);
+  padding: 12px 4px 20px;
+  background: transparent;
+  border: 0;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant__messages {
+  display: none;
+}
+
+.portal-assistant__message {
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.portal-assistant__message--user {
+  align-self: flex-end;
+  max-width: min(720px, 88%);
+  padding: 10px 15px;
+  border-radius: 16px 16px 4px 16px;
+  background: color-mix(in srgb, var(--accent) 70%, #26355f);
+}
+
+.portal-assistant__message--assistant,
+.portal-assistant__message--error {
+  max-width: min(780px, 94%);
+}
+
+.portal-assistant__composer {
+  width: min(780px, 100%);
+  margin: 0 auto;
+  padding: 7px 8px 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
+  box-shadow: 0 16px 48px rgba(10, 15, 32, 0.22);
+  backdrop-filter: blur(18px);
+}
+
+.portal-stage.has-conversation .portal-assistant__composer {
+  position: sticky;
+  bottom: 16px;
+  margin-top: 8px;
+}
+
+.portal-model-status {
+  width: min(780px, 100%);
+  margin-top: 12px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+@media (max-width: 640px) {
+  .portal-stage__content,
+  .portal-stage.has-conversation .portal-stage__content {
+    min-height: calc(100vh - 116px);
+    padding: 28px 16px 20px;
+  }
+
+  .portal-stage.has-conversation .portal-stage__content {
+    padding-top: 18px;
+  }
+
+  .portal-stage:not(.has-conversation) .portal-assistant {
+    margin-top: 28px;
+  }
+
+  .portal-assistant__messages {
+    max-height: calc(100vh - 230px);
+    padding-inline: 0;
+  }
+
+  .portal-assistant__message--user,
+  .portal-assistant__message--assistant,
+  .portal-assistant__message--error {
+    max-width: 94%;
+  }
+
+  .portal-assistant__composer {
+    border-radius: 18px;
+  }
+}

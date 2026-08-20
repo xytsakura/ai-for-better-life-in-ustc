@@ -265,24 +265,20 @@ async function renderPortal() {
 
 function renderPortalStage() {
   const session = getPortalAssistantSession();
+  const hasConversation = session.thread.length > 0;
   return `
-    <section class="portal-stage" data-starfield>
+    <section class="portal-stage${hasConversation ? ' has-conversation' : ''}" data-starfield>
       <div class="portal-stage__content">
-        <p class="portal-kicker">AI FOR USTCERS</p>
-        <h1>为科大学生服务的智能 <span class="latin">Agent</span></h1>
+        <div class="portal-stage__brand" aria-label="Campus Agent Hub">
+          <p class="portal-kicker">AI FOR USTCERS</p>
+          <h1>为科大学生服务的智能 <span class="latin">Agent</span></h1>
+        </div>
         <section class="portal-assistant" aria-label="平台 AI 助手">
-          <header class="portal-assistant__header">
-            <div class="portal-assistant__modes" role="tablist" aria-label="对话模式">
-              <button type="button" role="tab" data-assistant-mode="instant" aria-selected="${session.mode === 'instant'}">即时对话</button>
-              <button type="button" role="tab" data-assistant-mode="route" aria-selected="${session.mode === 'route'}">需求路由</button>
-            </div>
-            <span class="portal-assistant__mode-note">${session.mode === 'route' ? '匹配已验收 Agent，并给出直达入口' : '使用全局模型，快速回答日常问题'}</span>
-          </header>
           <div id="portalAssistantMessages" class="portal-assistant__messages" aria-live="polite">
             ${renderPortalAssistantMessages(session)}
           </div>
           <form id="portalAssistantForm" class="portal-assistant__composer">
-            <textarea id="portalAssistantPrompt" rows="1" maxlength="8000" placeholder="${session.mode === 'route' ? '描述你想完成的事情，我来匹配合适的 Agent' : '随时问我，Enter 发送，Shift+Enter 换行'}" aria-label="向平台 AI 助手提问"></textarea>
+            <textarea id="portalAssistantPrompt" rows="1" maxlength="8000" placeholder="${hasConversation ? '继续和 Hub 对话，必要时我会推荐合适的 Agent' : '向 Campus Agent Hub 提问，必要时直达合适的 Agent'}" aria-label="向平台 AI 助手提问"></textarea>
             <button class="portal-assistant__cancel" type="button" data-assistant-cancel ${session.pending ? '' : 'hidden'} aria-label="取消本轮回答" title="取消">×</button>
             <button class="portal-assistant__send" type="submit" ${session.pending ? 'disabled' : ''} aria-label="发送" title="发送">↑</button>
           </form>
@@ -299,23 +295,17 @@ function getPortalAssistantSession() {
   const key = state.user?.id || 'anonymous';
   if (!portalAssistantSessions.has(key)) {
     portalAssistantSessions.set(key, {
-      mode: 'instant',
       pending: false,
-      threads: { instant: [], route: [] },
+      thread: [],
     });
   }
   return portalAssistantSessions.get(key);
 }
 
 function renderPortalAssistantMessages(session = getPortalAssistantSession()) {
-  const messages = session.threads[session.mode] || [];
+  const messages = session.thread || [];
   if (!messages.length) {
-    return `
-      <div class="portal-assistant__welcome">
-        <strong>${session.mode === 'route' ? '告诉我目标，不必先逛 Agent 广场' : '现在就可以开始对话'}</strong>
-        <span>${session.mode === 'route' ? '我只推荐当前已注册、已上线且能力匹配的 Agent。' : '这里使用你在平台配置的全局默认模型。'}</span>
-      </div>
-    `;
+    return '';
   }
   return messages.map((message, index) => {
     const role = message.role === 'user' ? 'user' : message.role === 'error' ? 'error' : 'assistant';
@@ -340,6 +330,9 @@ function renderPortalAssistantMessages(session = getPortalAssistantSession()) {
 function paintPortalAssistantMessages() {
   const container = document.querySelector('#portalAssistantMessages');
   if (!container) return;
+  const stage = document.querySelector('.portal-stage');
+  const session = getPortalAssistantSession();
+  stage?.classList.toggle('has-conversation', session.thread.length > 0);
   container.innerHTML = renderPortalAssistantMessages();
   container.scrollTop = container.scrollHeight;
   container.querySelectorAll('[data-route-agent-id]').forEach((button) => {
@@ -351,13 +344,6 @@ function bindPortalAssistant() {
   const session = getPortalAssistantSession();
   const form = document.querySelector('#portalAssistantForm');
   const prompt = document.querySelector('#portalAssistantPrompt');
-  document.querySelectorAll('[data-assistant-mode]').forEach((button) => {
-    button.addEventListener('click', () => {
-      if (session.pending || button.dataset.assistantMode === session.mode) return;
-      session.mode = button.dataset.assistantMode;
-      renderPortal();
-    });
-  });
   form?.addEventListener('submit', (event) => {
     event.preventDefault();
     const text = prompt?.value.trim() || '';
@@ -379,8 +365,8 @@ function bindPortalAssistant() {
 
 async function sendPortalAssistantMessage(text) {
   const session = getPortalAssistantSession();
-  const mode = session.mode;
-  const thread = session.threads[mode];
+  const mode = 'auto';
+  const thread = session.thread;
   const history = thread
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .slice(-11)

@@ -1476,6 +1476,25 @@ def publish_demo_b_library(
     return library_id, version_id, snapshot_doc_id
 
 
+def test_approved_publication_gets_a_pre_generated_cover_from_the_pool(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, _snapshot_doc_id = publish_demo_b_library(
+        client,
+        tmp_path,
+        name="新注册的知识广场",
+    )
+
+    login(client, "demo-c")
+    detail = client.get(f"/api/marketplace/libraries/{library_id}")
+    assert detail.status_code == 200, detail.text
+    marketplace = detail.json()["library"]["marketplace"]
+    pool = {item["asset"] for item in course_agent_main.MARKETPLACE_COVER_POOL}
+    assert marketplace["cover_asset"] in pool
+    assert marketplace["cover_theme"] in {item["theme"] for item in course_agent_main.MARKETPLACE_COVER_POOL}
+    assert marketplace["cover_icon"]
+    assert marketplace["cover_icon"] != "◇"
+
+
 def test_subscribed_document_without_download_permission_cannot_be_saved(tmp_path: Path):
     client, _ = make_client(tmp_path)
     library_id, _version_id, snapshot_doc_id = publish_demo_b_library(

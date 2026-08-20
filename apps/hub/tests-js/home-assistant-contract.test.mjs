@@ -10,12 +10,12 @@ const coreSource = readFileSync(resolve(__dirname, '../web/hub-core.js'), 'utf8'
 const stylesSource = readFileSync(resolve(__dirname, '../web/styles.css'), 'utf8');
 const indexSource = readFileSync(resolve(__dirname, '../web/index.html'), 'utf8');
 
-test('homepage assistant exposes explicit instant and route modes', () => {
+test('homepage assistant uses one unified conversation with optional routing', () => {
   assert.match(coreSource, /homeAssistant:\s*'\/api\/home-assistant\/chat'/);
-  assert.match(appSource, /data-assistant-mode="instant"/);
-  assert.match(appSource, /data-assistant-mode="route"/);
+  assert.match(appSource, /mode = 'auto'/);
+  assert.doesNotMatch(appSource, /data-assistant-mode=/);
   assert.match(appSource, /sendPortalAssistantMessage/);
-  assert.match(appSource, /consumePortalAssistantStream/);
+  assert.match(appSource, /has-conversation/);
 });
 
 test('route recommendations activate a validated agent id instead of trusting a model URL', () => {
@@ -31,6 +31,8 @@ test('assistant UI includes bounded history, cancel state and responsive recomme
   assert.match(appSource, /data-assistant-cancel/);
   assert.match(stylesSource, /\.portal-assistant__messages/);
   assert.match(stylesSource, /\.portal-agent-recommendation/);
+  assert.match(stylesSource, /\.portal-stage\.has-conversation/);
+  assert.match(stylesSource, /conversation surface/);
   assert.match(stylesSource, /@media \(max-width: 640px\)/);
   assert.match(indexSource, /rel="icon" href="\/assets\/ustc-emblem\.jpg"/);
 });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -72,6 +73,17 @@ from .tokenizer import JiebaTokenizer
 
 
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# Pre-generated, transparent course-cover illustrations. New publications draw
+# from this pool only after approval, so the marketplace never exposes the
+# generic diamond fallback for a newly published knowledge space.
+MARKETPLACE_COVER_POOL: tuple[dict[str, str], ...] = (
+    {"asset": "/assets/course-covers/math-analysis-b1.png", "icon": "∫", "theme": "aurora"},
+    {"asset": "/assets/course-covers/linear-algebra-b1.png", "icon": "A", "theme": "violet"},
+    {"asset": "/assets/course-covers/probability-statistics.png", "icon": "σ", "theme": "cyan"},
+    {"asset": "/assets/course-covers/college-physics.png", "icon": "Φ", "theme": "blue"},
+    {"asset": "/assets/course-covers/data-structures.png", "icon": "⌘", "theme": "emerald"},
+    {"asset": "/assets/course-covers/programming-fundamentals.png", "icon": "</>", "theme": "amber"},
+)
 MAX_CONTEXT_REFERENCES = 8
 MAX_SELECTED_FRAGMENT_CHARS = 2000
 MAX_SELECTED_FRAGMENTS_TOTAL_CHARS = 4000
@@ -534,6 +546,67 @@ def _clean_document_ids(document_ids: list[str]) -> list[str]:
             seen.add(normalized)
             cleaned.append(normalized)
     return cleaned
+
+
+def assign_marketplace_cover(conn: Any, library: Any, version: Any) -> dict[str, str]:
+    """Assign one stable, pre-generated cover when a publication first goes live."""
+    library_id = str(library["id"])
+    existing = conn.execute(
+        "SELECT cover_asset, cover_icon, cover_theme FROM marketplace_course_metadata WHERE library_id = ?",
+        (library_id,),
+    ).fetchone()
+    if existing and str(existing["cover_asset"] or "").strip():
+        return {
+            "asset": str(existing["cover_asset"]),
+            "icon": str(existing["cover_icon"]),
+            "theme": str(existing["cover_theme"]),
+        }
+
+    usage_rows = conn.execute(
+        """SELECT cover_asset, count(*) AS usage_count
+           FROM marketplace_course_metadata
+           WHERE cover_asset <> ''
+           GROUP BY cover_asset"""
+    ).fetchall()
+    usage = {str(row["cover_asset"]): int(row["usage_count"] or 0) for row in usage_rows}
+    minimum = min(usage.get(item["asset"], 0) for item in MARKETPLACE_COVER_POOL)
+    candidates = [item for item in MARKETPLACE_COVER_POOL if usage.get(item["asset"], 0) == minimum]
+    digest = hashlib.sha256(library_id.encode("utf-8")).digest()
+    selected = candidates[int.from_bytes(digest[:8], "big") % len(candidates)]
+    document_count = int(
+        conn.execute(
+            "SELECT count(*) AS count FROM publication_documents WHERE version_id = ?",
+            (str(version["id"]),),
+        ).fetchone()["count"]
+        or 0
+    )
+    slug = f"published-{hashlib.sha1(library_id.encode('utf-8')).hexdigest()[:20]}"
+    values = (
+        "real" if document_count else "demo-placeholder",
+        selected["icon"],
+        selected["theme"],
+        selected["asset"],
+        str(version["description"] or ""),
+        "资料待补充" if not document_count else "已通过审核，可订阅并用于课程问答",
+    )
+    if existing:
+        conn.execute(
+            """UPDATE marketplace_course_metadata
+               SET demo_kind = ?, cover_icon = ?, cover_theme = ?, cover_asset = ?,
+                   short_description = CASE WHEN short_description = '' THEN ? ELSE short_description END,
+                   empty_state = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE library_id = ?""",
+            (*values, library_id),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO marketplace_course_metadata
+               (library_id, slug, demo_kind, cover_icon, cover_theme, cover_asset,
+                short_description, empty_state, sort_order, seed_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1000, 1)""",
+            (library_id, slug, *values),
+        )
+    return dict(selected)
 
 
 def _weather_number(value: Any, field_name: str) -> int | float:
@@ -2046,11 +2119,14 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "UPDATE spaces SET name = ? WHERE id = ?",
                 (version["name"], library["space_id"]),
             )
+            assigned_cover = assign_marketplace_cover(conn, library, version)
             audit_event(conn, user_id, "publication_version_approved", "publication_version", version_id)
             conn.commit()
             version = fetch_version(conn, version_id)
             library = fetch_library(conn, version["library_id"])
-            return publication_response(conn, library, version, user_id, include_source=True)
+            response = publication_response(conn, library, version, user_id, include_source=True)
+            response["marketplace_cover"] = assigned_cover
+            return response
 
     @app.post("/api/admin/publications/{library_id}/suspend")
     def suspend_publication(library_id: str, user_id: str = Depends(current_user)) -> dict:

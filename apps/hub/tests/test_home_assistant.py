@@ -250,6 +250,39 @@ def test_route_recommends_only_active_catalog_agent_without_urls_or_secrets(
     assert "127.0.0.1" not in encoded
 
 
+def test_auto_home_assistant_returns_direct_answer_and_optional_recommendation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = json.dumps(
+        {
+            "answer": "可以先从定义、典型例题和错题整理三步开始。",
+            "recommend": False,
+            "agent_id": None,
+            "reason": "",
+        },
+        ensure_ascii=False,
+    )
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "auto",
+            "messages": [{"role": "user", "content": "我该如何开始复习？"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "auto"
+    assert body["message"].startswith("可以先从定义")
+    assert body["recommendation"] is None
+
+
 def test_agent_catalog_includes_future_work_demos() -> None:
     catalog = load_agent_catalog()
     ids = {item.agent_id for item in catalog.agents}
