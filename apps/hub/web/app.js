@@ -537,7 +537,7 @@ function renderPortalQuickRow() {
 }
 
 function renderQuickRowCards() {
-  const agents = state.agents.slice(0, 4);
+  const agents = sortAgentsForDisplay(state.agents).slice(0, 4);
   if (!agents.length) return '<p class="portal-quickrow__empty">暂无可用 Agent。</p>';
   return agents.map((agent) => {
     const normalized = normalizeAgent(agent);
@@ -558,6 +558,18 @@ function bindQuickRowCards() {
   document.querySelectorAll('#quickRowGrid [data-agent-id]').forEach((card) => {
     card.addEventListener('click', () => activateAgentById(card.dataset.agentId));
   });
+}
+
+function sortAgentsForDisplay(agents) {
+  return agents
+    .map((agent, index) => ({ agent, index }))
+    .sort((left, right) => {
+      const leftFeatured = normalizeAccessLevel(left.agent) === 'featured';
+      const rightFeatured = normalizeAccessLevel(right.agent) === 'featured';
+      if (leftFeatured !== rightFeatured) return leftFeatured ? -1 : 1;
+      return left.index - right.index;
+    })
+    .map(({ agent }) => agent);
 }
 
 async function renderRecent() {
@@ -668,8 +680,9 @@ function updateAgentGrid() {
   grid.classList.remove('is-refreshing');
   void grid.offsetWidth;
   grid.classList.add('is-refreshing');
-  grid.innerHTML = filtered.length
-    ? filtered.map(renderAgentCard).join('')
+  const ordered = sortAgentsForDisplay(filtered);
+  grid.innerHTML = ordered.length
+    ? ordered.map(renderAgentCard).join('')
     : emptyState(
       '暂无符合条件的 Agent',
       canSubmitAgents() ? '可以清空搜索或提交一个新的校园 Agent。' : '可以清空搜索，或稍后查看新上线的校园 Agent。',

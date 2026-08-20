@@ -2569,7 +2569,7 @@ body[data-route='portal'] .hub-view {
 
 .hub-grid,
 .skeleton-grid {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
