@@ -121,6 +121,23 @@ test('SSE parser reads data JSON frames and reports protocol errors safely', () 
   assert.equal(parsed.rest, 'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"partial"}');
 });
 
+test('SSE parser preserves unified assistant recommendation and completion events', () => {
+  const parsed = parseSseBuffer([
+    'event: home.recommendation',
+    'data: {"type":"home.recommendation","recommendation":{"agent_id":"hanhai-course-agent"}}',
+    '',
+    'event: home.completed',
+    'data: {"type":"home.completed"}',
+    '',
+    '',
+  ].join('\n'));
+
+  assert.equal(parsed.events[0].type, 'home.recommendation');
+  assert.equal(parsed.events[0].recommendation.agent_id, 'hanhai-course-agent');
+  assert.equal(parsed.events[1].type, 'home.completed');
+  assert.equal(parsed.rest, '');
+});
+
 test('AG-UI run errors preserve a safe code for the chat failure state', () => {
   const error = errorFromAguiEvent({
     type: 'RUN_ERROR',

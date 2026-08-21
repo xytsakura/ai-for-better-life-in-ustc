@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sqlite3
@@ -21,14 +22,6 @@ from .utils import new_id
 
 
 INSTANT_INSTRUCTIONS = "你是 Campus Agent Hub 首页助手。简洁、友好、务实回答。"
-AUTO_INSTRUCTIONS = (
-    "你是 Campus Agent Hub 首页助手。先判断用户问题是否适合已注册的校园 Agent；"
-    "如果高度匹配，给出简短说明并推荐一个 Agent；如果没有高度匹配，就直接回答用户问题。"
-    "不要声称访问了不存在的数据，不要输出 URL、token 或凭据。"
-    "只输出一个 JSON 对象，格式为："
-    '{"answer":"给用户的直接回答或下一步说明","recommend":true|false,'
-    '"agent_id":null|"清单中的 agent_id","reason":"一句话推荐理由"}。'
-)
 MAX_HISTORY_MESSAGES = 12
 MAX_ROUTE_CATALOG_ITEMS = 20
 
@@ -78,21 +71,6 @@ class RouteModelOutput(BaseModel):
 
     @model_validator(mode="after")
     def normalize_empty_recommendation(self) -> "RouteModelOutput":
-        if not self.recommend:
-            self.agent_id = None
-        return self
-
-
-class AutoModelOutput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    answer: str = Field(default="", max_length=8_000)
-    recommend: bool = False
-    agent_id: str | None = Field(default=None, max_length=80)
-    reason: str = Field(default="", max_length=300)
-
-    @model_validator(mode="after")
-    def normalize_empty_recommendation(self) -> "AutoModelOutput":
         if not self.recommend:
             self.agent_id = None
         return self
@@ -165,6 +143,14 @@ async def _single_error_stream(code: str) -> StreamingResponse:
     )
 
 
+def _home_sse(event: str, payload: dict[str, Any]) -> bytes:
+    data = {"type": event, **payload}
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    ).encode("utf-8")
+
+
 def _error_code(exc: HTTPException) -> str:
     detail = exc.detail
     if isinstance(detail, dict) and isinstance(detail.get("error"), str):
@@ -234,19 +220,98 @@ def _parse_route_output(text: str) -> RouteModelOutput:
         return RouteModelOutput(recommend=False, reason="暂时无法可靠解析路由结果。")
 
 
-def _parse_auto_output(text: str) -> AutoModelOutput:
-    stripped = text.strip()
-    fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        stripped = fenced.group(1).strip()
+async def _route_auto_request(
+    model_service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    messages: list[ModelMessage],
+    active_catalog: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    from .db import database
+
+    if not active_catalog:
+        return None
     try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return AutoModelOutput(answer=stripped[:8_000])
+        with database(model_service.settings.database_path) as route_conn:
+            result = await call_user_global_model(
+                route_conn,
+                model_service,
+                user_id=user_id,
+                request_id=f"{request_id}-route",
+                instructions=_route_instructions(load_agent_routing_skill(), active_catalog),
+                messages=messages,
+                max_output_tokens=300,
+            )
+    except (HTTPException, sqlite3.Error):
+        # Routing is advisory. A routing failure must not discard a valid direct answer.
+        return None
+
+    routed = _parse_route_output(result.output_text)
+    if not routed.recommend or routed.agent_id not in active_catalog:
+        return None
+    safe = active_catalog[routed.agent_id]
+    return {
+        "agent_id": safe["agent_id"],
+        "name": safe["name"],
+        "description": safe["description"],
+        "reason": routed.reason or "这个 Agent 与当前需求最匹配。",
+    }
+
+
+async def _stream_auto_response(
+    conn: sqlite3.Connection,
+    model_service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    messages: list[ModelMessage],
+    active_catalog: dict[str, dict[str, Any]],
+) -> StreamingResponse:
     try:
-        return AutoModelOutput.model_validate(payload)
-    except Exception:
-        return AutoModelOutput(answer=stripped[:8_000])
+        answer_response = await stream_user_global_model(
+            conn,
+            model_service,
+            user_id=user_id,
+            request_id=request_id,
+            instructions=INSTANT_INSTRUCTIONS,
+            messages=messages,
+            max_output_tokens=900,
+        )
+    except HTTPException as exc:
+        return await _single_error_stream(_error_code(exc))
+
+    async def iterator():
+        route_task = asyncio.create_task(
+            _route_auto_request(
+                model_service,
+                user_id=user_id,
+                request_id=request_id,
+                messages=messages,
+                active_catalog=active_catalog,
+            )
+        )
+        try:
+            async for chunk in answer_response.body_iterator:
+                yield chunk
+            try:
+                recommendation = await asyncio.wait_for(route_task, timeout=5)
+            except Exception:
+                recommendation = None
+            yield _home_sse("home.recommendation", {"recommendation": recommendation})
+            yield _home_sse("home.completed", {})
+        except asyncio.CancelledError:
+            route_task.cancel()
+            raise
+        finally:
+            if not route_task.done():
+                route_task.cancel()
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+    )
 
 
 async def home_assistant_chat(
@@ -274,60 +339,14 @@ async def home_assistant_chat(
 
     if body.mode == "auto":
         active_catalog = _active_catalog_by_id(conn)
-        if active_catalog:
-            instructions = "\n\n".join(
-                [
-                    AUTO_INSTRUCTIONS,
-                    "当前已通过平台验收且用户可见的 Agent 清单如下：",
-                    json.dumps(
-                        {
-                            "agents": [
-                                {
-                                    "agent_id": item["agent_id"],
-                                    "name": item["name"],
-                                    "summary": item["catalog_summary"],
-                                    "keywords": item["keywords"],
-                                }
-                                for item in active_catalog.values()
-                            ]
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                ]
-            )
-        else:
-            instructions = INSTANT_INSTRUCTIONS
-        try:
-            result = await call_user_global_model(
-                conn,
-                model_service,
-                user_id=user["user_id"],
-                request_id=request_id,
-                instructions=instructions,
-                messages=messages,
-                max_output_tokens=900,
-            )
-        except HTTPException as exc:
-            raise HTTPException(exc.status_code, detail={"error": _error_code(exc)}) from exc
-
-        parsed = _parse_auto_output(result.output_text)
-        recommendation = None
-        if parsed.recommend and parsed.agent_id in active_catalog:
-            safe = active_catalog[parsed.agent_id]
-            recommendation = {
-                "agent_id": safe["agent_id"],
-                "name": safe["name"],
-                "description": safe["description"],
-                "reason": parsed.reason or "这个 Agent 与当前需求最匹配。",
-            }
-        return {
-            "mode": "auto",
-            "message": parsed.answer or "我暂时没有足够信息回答这个问题。",
-            "recommendation": recommendation,
-            "model": result.model,
-            "usage": result.usage,
-        }
+        return await _stream_auto_response(
+            conn,
+            model_service,
+            user_id=user["user_id"],
+            request_id=request_id,
+            messages=messages,
+            active_catalog=active_catalog,
+        )
 
     active_catalog = _active_catalog_by_id(conn)
     if not active_catalog:

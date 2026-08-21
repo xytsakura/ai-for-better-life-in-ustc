@@ -12,7 +12,13 @@ const indexSource = readFileSync(resolve(__dirname, '../web/index.html'), 'utf8'
 
 test('homepage assistant uses one unified conversation with optional routing', () => {
   assert.match(coreSource, /homeAssistant:\s*'\/api\/home-assistant\/chat'/);
-  assert.match(appSource, /mode = 'auto'/);
+  assert.match(appSource, /mode: 'auto'/);
+  assert.match(appSource, /'Accept': 'text\/event-stream'/);
+  assert.match(appSource, /event\.type === 'model\.output_text\.delta'/);
+  assert.match(appSource, /event\.type === 'home\.recommendation'/);
+  assert.match(appSource, /event\.type === 'home\.completed'/);
+  assert.match(appSource, /!completed/);
+  assert.doesNotMatch(appSource, /response\.json\(\).*assistantMessage\.recommendation/s);
   assert.doesNotMatch(appSource, /data-assistant-mode=/);
   assert.match(appSource, /sendPortalAssistantMessage/);
   assert.match(appSource, /has-conversation/);

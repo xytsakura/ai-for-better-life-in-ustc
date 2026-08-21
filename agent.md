@@ -30,6 +30,7 @@
 - 用户在 Agent Portal 主动选择 Agent；
 - Gateway 根据用户最终确认的 `agent_id` 做确定性代理和治理，不自行理解或改写 Agent 业务；
 - Hub 首页采用统一对话助手：普通问题直接使用用户全局模型回答；当需求与功能检索表和运行时 active Registry 的交集高度匹配时，在同一条对话中返回受服务端校验的 Agent 推荐入口；首页不再暴露即时/路由双模式切换；
+- Hub 首页统一对话的 `auto` 模式使用 SSE：短提示词回答与旁路需求路由并行运行，正文通过 `model.output_text.delta` 增量显示，推荐通过 `home.recommendation` 追加，并以 `home.completed` 收口；路由失败或超时不得覆盖已生成的普通回答；
 - 路由模型只返回候选 `agent_id` 和理由，后端二次校验，用户点击受控入口后才进入 Agent；平台不设置可执行任务的 Main Agent 或 Supervisor；
 - Agent 之间相互独立，不互相发现、调用、协作或递归委派；
 - 课程资料 Agent 是首个第一方参考实现；

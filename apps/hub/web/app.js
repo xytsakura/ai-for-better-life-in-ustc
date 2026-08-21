@@ -18,7 +18,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js?v=20260820-3';
+} from './hub-core.js?v=20260821-1';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
@@ -365,7 +365,6 @@ function bindPortalAssistant() {
 
 async function sendPortalAssistantMessage(text) {
   const session = getPortalAssistantSession();
-  const mode = 'auto';
   const thread = session.thread;
   const history = thread
     .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -386,29 +385,26 @@ async function sendPortalAssistantMessage(text) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': mode === 'instant' ? 'text/event-stream' : 'application/json',
+        'Accept': 'text/event-stream',
         'X-Hub-User': state.user.id,
       },
-      body: JSON.stringify({ mode, messages: [...history, { role: 'user', content: text }] }),
+      body: JSON.stringify({ mode: 'auto', messages: [...history, { role: 'user', content: text }] }),
       signal: controller.signal,
     });
     if (!response.ok) throw await normalizeHttpError(response);
-    if (mode === 'instant') {
-      if (!response.body) throw { code: 'provider_protocol_error' };
-      await consumePortalAssistantStream(response.body, {
-        generation,
-        onDelta(delta) {
-          assistantMessage.content += delta;
-          if (state.route.name === 'portal') paintPortalAssistantMessages();
-        },
-      });
-      if (!assistantMessage.content.trim()) throw { code: 'provider_protocol_error' };
-    } else {
-      const payload = await response.json();
-      assistantMessage.content = payload.message || '当前没有找到足够匹配的 Agent。';
-      assistantMessage.recommendation = payload.recommendation || null;
-      if (state.route.name === 'portal') paintPortalAssistantMessages();
-    }
+    if (!response.body) throw { code: 'provider_protocol_error' };
+    await consumePortalAssistantStream(response.body, {
+      generation,
+      onDelta(delta) {
+        assistantMessage.content += delta;
+        if (state.route.name === 'portal') paintPortalAssistantMessages();
+      },
+      onRecommendation(recommendation) {
+        assistantMessage.recommendation = recommendation || null;
+        if (state.route.name === 'portal') paintPortalAssistantMessages();
+      },
+    });
+    if (!assistantMessage.content.trim()) throw { code: 'provider_protocol_error' };
   } catch (error) {
     if (generation !== state.generation) return;
     if (error.name === 'AbortError') {
@@ -429,19 +425,27 @@ async function consumePortalAssistantStream(stream, handlers) {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const parsed = parseSseBuffer(done ? `${buffer}\n\n` : buffer);
-    buffer = parsed.rest;
-    for (const event of parsed.events) {
-      if (handlers.generation !== state.generation) return;
-      if (event.type === 'model.output_text.delta' && typeof event.delta === 'string') handlers.onDelta(event.delta);
-      if (event.type === 'model.error') throw { code: event.error || 'upstream_error' };
+  let completed = false;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const parsed = parseSseBuffer(done ? `${buffer}\n\n` : buffer);
+      buffer = parsed.rest;
+      for (const event of parsed.events) {
+        if (handlers.generation !== state.generation) return;
+        if (event.type === 'model.output_text.delta' && typeof event.delta === 'string') handlers.onDelta(event.delta);
+        if (event.type === 'home.recommendation') handlers.onRecommendation(event.recommendation || null);
+        if (event.type === 'home.completed') completed = true;
+        if (event.type === 'model.error') throw { code: event.error || 'upstream_error' };
+      }
+      if (done) break;
     }
-    if (done) break;
+    if (buffer.trim() || !completed) throw { code: 'provider_protocol_error' };
+  } finally {
+    if (!completed) await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  if (buffer.trim()) throw { code: 'provider_protocol_error' };
 }
 
 function syncPortalAssistantPending(pending) {

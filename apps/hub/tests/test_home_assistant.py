@@ -250,20 +250,13 @@ def test_route_recommends_only_active_catalog_agent_without_urls_or_secrets(
     assert "127.0.0.1" not in encoded
 
 
-def test_auto_home_assistant_returns_direct_answer_and_optional_recommendation(
+def test_auto_home_assistant_streams_direct_answer_without_recommendation(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
-    FakeProviderClient.next_text = json.dumps(
-        {
-            "answer": "可以先从定义、典型例题和错题整理三步开始。",
-            "recommend": False,
-            "agent_id": None,
-            "reason": "",
-        },
-        ensure_ascii=False,
-    )
+    FakeProviderClient.calls = []
+    FakeProviderClient.next_text = '{"recommend":false,"agent_id":null,"reason":"没有高度匹配的 Agent。"}'
     client = make_client(tmp_path)
     configure_global_model(client, tmp_path)
     submit_and_approve(client)
@@ -277,10 +270,50 @@ def test_auto_home_assistant_returns_direct_answer_and_optional_recommendation(
     )
 
     assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["mode"] == "auto"
-    assert body["message"].startswith("可以先从定义")
-    assert body["recommendation"] is None
+    assert "text/event-stream" in response.headers["content-type"]
+    assert 'event: model.output_text.delta' in response.text
+    assert '"delta":"你好"' in response.text
+    assert 'event: home.recommendation' in response.text
+    assert '"recommendation":null' in response.text
+    assert 'event: home.completed' in response.text
+    assert len(FakeProviderClient.calls) == 2
+    answer_payload, route_payload = FakeProviderClient.calls
+    assert answer_payload["stream"] is True
+    assert len(answer_payload["instructions"]) <= 40
+    assert "hanhai-course-agent" not in answer_payload["instructions"]
+    assert route_payload["stream"] is False
+    assert "hanhai-course-agent" in route_payload["instructions"]
+
+
+def test_auto_home_assistant_streams_validated_recommendation_after_answer(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.calls = []
+    FakeProviderClient.next_text = (
+        '{"recommend":true,"agent_id":"hanhai-course-agent",'
+        '"reason":"它能读取课程知识库并辅助复习。"}'
+    )
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "auto",
+            "messages": [{"role": "user", "content": "我想复习数学分析并讲解试卷。"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.text.index("event: model.output_text.delta") < response.text.index("event: home.recommendation")
+    assert '"agent_id":"hanhai-course-agent"' in response.text
+    assert '"name":"瀚海行 Agent"' in response.text
+    assert '"reason":"它能读取课程知识库并辅助复习。"' in response.text
+    assert "http://" not in response.text
+    assert "sk-home-secret" not in response.text
 
 
 def test_agent_catalog_includes_future_work_demos() -> None:
@@ -411,6 +444,14 @@ def test_home_assistant_missing_model_binding_is_safe(
     assert instant.status_code == 200, instant.text
     assert "event: model.error" in instant.text
     assert "model_binding_not_found" in instant.text
+
+    auto = client.post(
+        "/api/home-assistant/chat",
+        json={"mode": "auto", "messages": [{"role": "user", "content": "你好"}]},
+    )
+    assert auto.status_code == 200, auto.text
+    assert "event: model.error" in auto.text
+    assert "model_binding_not_found" in auto.text
 
     route = client.post(
         "/api/home-assistant/chat",
