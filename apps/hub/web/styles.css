@@ -118,6 +118,7 @@ a {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  overflow-y: auto;
   padding: 20px 14px;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   border-right: 1px solid var(--border);
@@ -538,6 +539,119 @@ a:focus-visible {
 .detail-title h1,
 .chat-header h1 {
   margin: 0;
+}
+
+.hub-conversations {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  margin: 20px 4px 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.hub-conversations__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hub-conversations__head small {
+  display: inline-block;
+  margin-left: 5px;
+  color: var(--text);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.hub-conversations__new {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-strong);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hub-conversations__new:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.hub-conversations__list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+  max-width: 100%;
+  max-height: min(34vh, 320px);
+  overflow-y: auto;
+}
+
+.hub-conversation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted-strong);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hub-conversation:hover,
+.hub-conversation[aria-current='true'] {
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.hub-conversation__dot {
+  width: 5px;
+  height: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.hub-conversation[aria-current='true'] .hub-conversation__dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.hub-conversation__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-conversations__empty {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .hub-card__name {
@@ -2213,6 +2327,12 @@ body[data-route='portal'] .hub-view {
   color: var(--text);
 }
 
+.portal-agent-recommendation .portal-agent-recommendation__handoff {
+  color: var(--accent-hover);
+  font-size: 11px;
+  font-weight: 650;
+}
+
 .portal-agent-recommendation button {
   min-height: 36px;
   padding: 7px 12px;
@@ -2848,6 +2968,34 @@ body[data-route='portal'] .hub-view {
   margin-top: 34px;
 }
 
+.portal-assistant__header {
+  width: min(780px, 100%);
+  margin: 0 auto 8px;
+  padding: 0;
+  border: 0;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant__header {
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant__mode-note {
+  display: none;
+}
+
+.portal-assistant__modes {
+  border-color: color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-strong) 48%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.portal-assistant__modes button {
+  min-width: 118px;
+  border-radius: 9px;
+}
+
 .portal-assistant__messages {
   flex: 1 1 auto;
   min-height: 0;
@@ -2897,6 +3045,18 @@ body[data-route='portal'] .hub-view {
   position: sticky;
   bottom: 16px;
   margin-top: 8px;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant__composer {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--border) 70%, var(--accent));
+  background: color-mix(in srgb, var(--surface-strong) 42%, transparent);
+  box-shadow: none;
+}
+
+.portal-stage:not(.has-conversation) .portal-assistant__composer textarea::placeholder {
+  color: color-mix(in srgb, var(--muted) 72%, var(--text));
+  font-style: italic;
 }
 
 .portal-model-status {

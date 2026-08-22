@@ -209,6 +209,7 @@ def test_instant_home_assistant_streams_with_short_platform_prompt(
     assert "event: model.started" in response.text
     assert "event: model.output_text.delta" in response.text
     assert "event: model.completed" in response.text
+    assert "event: home.completed" in response.text
     payload = FakeProviderClient.last_payload
     assert payload is not None
     assert len(payload["instructions"]) <= 40
@@ -250,7 +251,7 @@ def test_route_recommends_only_active_catalog_agent_without_urls_or_secrets(
     assert "127.0.0.1" not in encoded
 
 
-def test_auto_home_assistant_streams_direct_answer_without_recommendation(
+def test_auto_home_assistant_bypasses_routing_for_generic_question(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -276,13 +277,175 @@ def test_auto_home_assistant_streams_direct_answer_without_recommendation(
     assert 'event: home.recommendation' in response.text
     assert '"recommendation":null' in response.text
     assert 'event: home.completed' in response.text
-    assert len(FakeProviderClient.calls) == 2
-    answer_payload, route_payload = FakeProviderClient.calls
+    assert len(FakeProviderClient.calls) == 1
+    answer_payload = FakeProviderClient.calls[0]
     assert answer_payload["stream"] is True
     assert len(answer_payload["instructions"]) <= 40
     assert "hanhai-course-agent" not in answer_payload["instructions"]
-    assert route_payload["stream"] is False
-    assert "hanhai-course-agent" in route_payload["instructions"]
+
+
+def test_route_stream_high_confidence_exam_review_routes_to_hanhai_without_model_judgment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = '{"recommend":false,"agent_id":null,"reason":"模型错误否决"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    for content in ("我要复习期末考试", "我要复习数学分析这门课"):
+        FakeProviderClient.calls = []
+        response = client.post(
+            "/api/home-assistant/chat",
+            json={
+                "mode": "route_stream",
+                "messages": [{"role": "user", "content": content}],
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert "text/event-stream" in response.headers["content-type"]
+        assert 'event: home.recommendation' in response.text
+        assert '"agent_id":"hanhai-course-agent"' in response.text
+        assert "event: model.output_text.delta" not in response.text
+        assert "event: home.completed" in response.text
+        assert FakeProviderClient.calls == []
+
+
+def test_route_stream_high_confidence_signature_location_routes_to_public_service(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = '{"recommend":false,"agent_id":null,"reason":"模型错误否决"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(
+        client,
+        agent_id="campus-public-service-demo",
+        name="校园公共服务 Agent",
+        description="签字盖章、行政窗口、楼宇位置和办事经验 Demo",
+    )
+    FakeProviderClient.calls = []
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "route_stream",
+            "messages": [{"role": "user", "content": "我需要了解在哪里签字盖章"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert 'event: home.recommendation' in response.text
+    assert '"agent_id":"campus-public-service-demo"' in response.text
+    assert "event: model.output_text.delta" not in response.text
+    assert "event: home.completed" in response.text
+    assert FakeProviderClient.calls == []
+
+
+def test_high_confidence_routes_do_not_overmatch_or_bypass_active_registry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.next_text = '{"recommend":false,"agent_id":null,"reason":"无匹配"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    for content in (
+        "考试为什么会让人紧张？",
+        "我想学习考试心理学",
+        "我需要了解在哪里签字盖章",
+    ):
+        FakeProviderClient.calls = []
+        response = client.post(
+            "/api/home-assistant/chat",
+            json={"mode": "route_stream", "messages": [{"role": "user", "content": content}]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert '"recommendation":null' in response.text
+        assert "event: model.output_text.delta" in response.text
+        assert len(FakeProviderClient.calls) == 2
+
+    submit_and_approve(
+        client,
+        agent_id="campus-public-service-demo",
+        name="校园公共服务 Agent",
+        description="签字盖章、行政窗口、楼宇位置和办事经验 Demo",
+    )
+    for content in (
+        "我要设计一个公章图案",
+        "老师签字好看吗",
+        "查询公章图案素材",
+        "公章图案怎么画",
+        "签字怎么写好看",
+    ):
+        FakeProviderClient.calls = []
+        response = client.post(
+            "/api/home-assistant/chat",
+            json={
+                "mode": "route_stream",
+                "messages": [{"role": "user", "content": content}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert '"recommendation":null' in response.text
+        assert "event: model.output_text.delta" in response.text
+        assert len(FakeProviderClient.calls) == 2
+
+
+def test_route_stream_falls_back_to_direct_stream_when_no_agent_matches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    FakeProviderClient.calls = []
+    FakeProviderClient.next_text = '{"recommend":false,"agent_id":null,"reason":"无匹配"}'
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    response = client.post(
+        "/api/home-assistant/chat",
+        json={
+            "mode": "route_stream",
+            "messages": [{"role": "user", "content": "给我讲一个校园笑话"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert "event: model.output_text.delta" in response.text
+    assert '"recommendation":null' in response.text
+    assert "event: home.completed" in response.text
+    assert len(FakeProviderClient.calls) == 2
+    assert FakeProviderClient.calls[0]["stream"] is False
+    assert FakeProviderClient.calls[1]["stream"] is True
+
+
+def test_auto_home_assistant_bypasses_routing_for_greeting_and_common_knowledge(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("hub.model_gateway.httpx.AsyncClient", FakeProviderClient)
+    client = make_client(tmp_path)
+    configure_global_model(client, tmp_path)
+    submit_and_approve(client)
+
+    for content in ("你好", "请用一句话解释函数连续性。", "什么是数学分析？"):
+        FakeProviderClient.calls = []
+        response = client.post(
+            "/api/home-assistant/chat",
+            json={"mode": "auto", "messages": [{"role": "user", "content": content}]},
+        )
+
+        assert response.status_code == 200, response.text
+        assert "event: model.output_text.delta" in response.text
+        assert len(FakeProviderClient.calls) == 1
+        assert FakeProviderClient.calls[0]["stream"] is True
 
 
 def test_auto_home_assistant_streams_validated_recommendation_after_answer(
@@ -308,12 +471,14 @@ def test_auto_home_assistant_streams_validated_recommendation_after_answer(
     )
 
     assert response.status_code == 200, response.text
-    assert response.text.index("event: model.output_text.delta") < response.text.index("event: home.recommendation")
+    assert response.text.index("event: home.recommendation") < response.text.index("event: home.completed")
+    assert "event: model.output_text.delta" not in response.text
     assert '"agent_id":"hanhai-course-agent"' in response.text
     assert '"name":"瀚海行 Agent"' in response.text
-    assert '"reason":"它能读取课程知识库并辅助复习。"' in response.text
+    assert '"reason":"瀚海行适合使用课程资料、知识库和试卷辅助期末复习。"' in response.text
     assert "http://" not in response.text
     assert "sk-home-secret" not in response.text
+    assert FakeProviderClient.calls == []
 
 
 def test_agent_catalog_includes_future_work_demos() -> None:

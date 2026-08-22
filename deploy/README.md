@@ -31,6 +31,14 @@ Windows 下也可以直接运行：
 .\deploy\run-demo.ps1
 ```
 
+没有 Docker、但三个应用的 `.venv` 已安装完成时，使用完整本地启动入口：
+
+```powershell
+.\deploy\run-demo-local.ps1
+```
+
+该入口会启动 `8100` Hub、`8002` 瀚海行和 `8101` Demo 服务，并执行四个 Agent 的注册、契约检查、审核、健康检查和一轮端到端验收。`8101` 同时承载校园助手、评课社区和校园公共服务三个 Demo 身份；不要只启动 Hub，否则广场会缺少卡片或显示离线。
+
 bootstrap 行为：
 
 1. 等待 Hub API 可用；

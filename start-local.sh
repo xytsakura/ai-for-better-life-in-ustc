@@ -7,7 +7,7 @@
 #
 # 启动顺序（关键）：
 #   1. Hub
-#   2. register-only bootstrap：提交两 Agent Manifest、生成 Featured credential、写 secret 文件
+#   2. register-only bootstrap：提交四个 Agent Manifest、生成 Featured credential、写 secret 文件
 #      （此时 agent 还没起，先做注册，让 course-agent 启动能读到 secret）
 #   3. 启动 course-agent（init-db + import + uvicorn）与 demo-agent
 #   4. 完整 bootstrap：等两 agent 就绪后跑 conformance 与审核
@@ -73,7 +73,7 @@ curl -fs "$HUB_URL/api/session" >/dev/null 2>&1 || { log "Hub 未就绪，查看
 log "Hub 已就绪"
 
 # ---------- 2. register-only bootstrap（生成 secret，供 course-agent 读取） ----------
-log "注册两 Agent 并生成 Featured credential（register-only）"
+log "注册四个 Agent 并生成 Featured credential（register-only）"
 CONTRACT_ROOT="$ROOT/contracts/campus-agent-hub/v1" \
 HUB_URL="$HUB_URL" \
 HUB_ADMIN_USER=demo-a \
@@ -131,6 +131,7 @@ DEMO_AGENT_PORT="${DEMO_AGENT_PUBLIC_PORT:-8101}" \
 DEMO_AGENT_REQUIRE_HUB_TOKEN=1 \
 DEMO_AGENT_HUB_JWKS_URL="$HUB_URL/.well-known/jwks.json" \
 DEMO_AGENT_HUB_AUDIENCE=campus-helper-demo \
+DEMO_AGENT_HUB_AUDIENCES=campus-helper-demo,course-review-demo,campus-public-service-demo \
 DEMO_AGENT_HUB_ISSUER=campus-agent-hub \
 PYTHONPATH="$ROOT/apps/demo-agent" \
   "$ROOT/apps/demo-agent/.venv/bin/python" -m demo_agent.main run \

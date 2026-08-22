@@ -13,7 +13,7 @@
     <script>
       document.documentElement.dataset.theme = globalThis.HubTheme.readFromGlobal();
     </script>
-    <link rel="stylesheet" href="/styles.css?v=20260821-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260822-8" />
   </head>
   <body>
     <div class="splash" aria-hidden="true">
@@ -43,6 +43,14 @@
           <a href="/hub/admin" data-link data-nav="admin" data-admin-only><span aria-hidden="true">◇</span>管理审核</a>
           <a href="/hub/settings" data-link data-nav="settings"><span aria-hidden="true">✎</span>模型配置</a>
         </nav>
+
+        <section class="hub-conversations" aria-label="对话存档">
+          <div class="hub-conversations__head">
+            <span>对话存档 <small id="conversationArchiveMode">普通对话</small></span>
+            <button type="button" class="hub-conversations__new" data-new-conversation aria-label="新建对话" title="新建对话">＋</button>
+          </div>
+          <div id="conversationArchiveList" class="hub-conversations__list"></div>
+        </section>
 
         <div class="hub-sidebar__foot">
           <button id="themeToggle" class="ghost-button" type="button">切换主题</button>
@@ -78,6 +86,6 @@
     </template>
 
     <script src="/splash.js?v=20260807-2" defer></script>
-    <script type="module" src="/app.js?v=20260821-1"></script>
+    <script type="module" src="/app.js?v=20260822-8"></script>
   </body>
 </html>

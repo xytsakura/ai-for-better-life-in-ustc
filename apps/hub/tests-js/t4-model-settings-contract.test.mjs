@@ -39,9 +39,9 @@ test('T4 legacy migration is explicit and rejects non-local plain HTTP secrets',
 test('T4 keeps request identity aligned with active demo user and bumps module cache versions', () => {
   assert.match(appSource, /'X-Hub-User':\s*state\.user\.id/);
   assert.doesNotMatch(appSource, /options\.admin\s*\?\s*['"]demo-a['"]/);
-  assert.match(appSource, /hub-core\.js\?v=20260821-1/);
-  assert.match(indexSource, /styles\.css\?v=20260821-1/);
-  assert.match(indexSource, /app\.js\?v=20260821-1/);
+  assert.match(appSource, /hub-core\.js\?v=20260822-8/);
+  assert.match(indexSource, /styles\.css\?v=20260822-8/);
+  assert.match(indexSource, /app\.js\?v=20260822-8/);
 });
 
 test('T4 only offers declared platform agents and chat-eligible models for bindings', () => {

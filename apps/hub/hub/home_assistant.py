@@ -24,6 +24,95 @@ from .utils import new_id
 INSTANT_INSTRUCTIONS = "你是 Campus Agent Hub 首页助手。简洁、友好、务实回答。"
 MAX_HISTORY_MESSAGES = 12
 MAX_ROUTE_CATALOG_ITEMS = 20
+ROUTE_REQUEST_MARKERS = (
+    "推荐",
+    "查询",
+    "查找",
+    "寻找",
+    "检索",
+    "搜集",
+    "汇总",
+    "对比",
+    "比较",
+    "帮我",
+    "请帮",
+    "给我",
+    "我需要",
+    "我要",
+    "我想要",
+    "想找",
+    "想查",
+    "需要找",
+    "需要查",
+    "想复习",
+    "要复习",
+    "需要复习",
+    "想选课",
+    "要选课",
+    "需要选课",
+    "想办理",
+    "要办理",
+    "需要办理",
+    "在哪",
+    "哪里",
+    "怎么走",
+    "怎么办理",
+    "如何办理",
+    "整理",
+    "规划",
+    "怎么申请",
+    "如何申请",
+    "怎么样",
+)
+
+HIGH_CONFIDENCE_ROUTES = (
+    {
+        "agent_id": "campus-public-service-demo",
+        "all_groups": (
+            ("签字", "盖章", "签章", "公章"),
+            (
+                "在哪",
+                "哪里",
+                "地点",
+                "位置",
+                "找谁",
+                "行政老师",
+                "窗口",
+                "办理",
+                "办事",
+                "流程",
+                "材料",
+                "手续",
+                "申请",
+            ),
+        ),
+        "reason": "校园公共服务 Agent 适合查询签字盖章、行政窗口和具体办事地点。",
+    },
+    {
+        "agent_id": "hanhai-course-agent",
+        "all_groups": (
+            ("复习", "备考", "考前"),
+            (
+                "期末",
+                "考试",
+                "数学分析",
+                "数分",
+                "线性代数",
+                "线代",
+                "概率论",
+                "概统",
+                "高等数学",
+                "高数",
+            ),
+        ),
+        "reason": "瀚海行适合使用课程资料、知识库和试卷辅助期末复习。",
+    },
+    {
+        "agent_id": "hanhai-course-agent",
+        "any_terms": ("复习资料", "课程资料", "真题", "往年题", "试卷讲解", "讲解试卷"),
+        "reason": "瀚海行适合整理课程资料、检索真题并讲解试卷。",
+    },
+)
 
 
 class HomeAssistantMessage(BaseModel):
@@ -36,7 +125,7 @@ class HomeAssistantMessage(BaseModel):
 class HomeAssistantChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["instant", "route", "auto"]
+    mode: Literal["instant", "route", "auto", "route_stream"]
     messages: list[HomeAssistantMessage] = Field(min_length=1, max_length=32)
 
     @field_validator("messages")
@@ -180,6 +269,27 @@ def _active_catalog_by_id(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]
     return result
 
 
+def _should_attempt_route(
+    messages: list[ModelMessage],
+    active_catalog: dict[str, dict[str, Any]],
+) -> bool:
+    if not active_catalog:
+        return False
+    latest_user = next((item.content for item in reversed(messages) if item.role == "user"), "")
+    normalized = re.sub(r"\s+", "", latest_user).casefold()
+    if not normalized:
+        return False
+    keywords = {
+        re.sub(r"\s+", "", keyword).casefold()
+        for item in active_catalog.values()
+        for keyword in item.get("keywords", [])
+        if isinstance(keyword, str) and len(re.sub(r"\s+", "", keyword)) >= 2
+    }
+    has_domain_signal = any(keyword in normalized for keyword in keywords)
+    has_request_signal = any(marker in normalized for marker in ROUTE_REQUEST_MARKERS)
+    return has_domain_signal and has_request_signal
+
+
 def _route_instructions(skill_text: str, active_catalog: dict[str, dict[str, Any]]) -> str:
     compact_catalog = [
         {
@@ -203,6 +313,38 @@ def _route_instructions(skill_text: str, active_catalog: dict[str, dict[str, Any
             ),
         ]
     )
+
+
+def _high_confidence_recommendation(
+    messages: list[ModelMessage],
+    active_catalog: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    latest_user = next((item.content for item in reversed(messages) if item.role == "user"), "")
+    normalized = re.sub(r"\s+", "", latest_user).casefold()
+    if not normalized:
+        return None
+
+    for rule in HIGH_CONFIDENCE_ROUTES:
+        agent_id = rule["agent_id"]
+        safe = active_catalog.get(agent_id)
+        if not safe:
+            continue
+        all_groups = rule.get("all_groups", ())
+        matches_groups = bool(all_groups) and all(
+            any(term.casefold() in normalized for term in group)
+            for group in all_groups
+        )
+        any_terms = rule.get("any_terms", ())
+        matches_terms = bool(any_terms) and any(term.casefold() in normalized for term in any_terms)
+        if not matches_groups and not matches_terms:
+            continue
+        return {
+            "agent_id": safe["agent_id"],
+            "name": safe["name"],
+            "description": safe["description"],
+            "reason": rule["reason"],
+        }
+    return None
 
 
 def _parse_route_output(text: str) -> RouteModelOutput:
@@ -232,6 +374,9 @@ async def _route_auto_request(
 
     if not active_catalog:
         return None
+    deterministic = _high_confidence_recommendation(messages, active_catalog)
+    if deterministic:
+        return deterministic
     try:
         with database(model_service.settings.database_path) as route_conn:
             result = await call_user_global_model(
@@ -260,7 +405,6 @@ async def _route_auto_request(
 
 
 async def _stream_auto_response(
-    conn: sqlite3.Connection,
     model_service: ModelProfileService,
     *,
     user_id: str,
@@ -268,44 +412,153 @@ async def _stream_auto_response(
     messages: list[ModelMessage],
     active_catalog: dict[str, dict[str, Any]],
 ) -> StreamingResponse:
-    try:
-        answer_response = await stream_user_global_model(
-            conn,
-            model_service,
-            user_id=user_id,
-            request_id=request_id,
-            instructions=INSTANT_INSTRUCTIONS,
-            messages=messages,
-            max_output_tokens=900,
-        )
-    except HTTPException as exc:
-        return await _single_error_stream(_error_code(exc))
-
     async def iterator():
-        route_task = asyncio.create_task(
-            _route_auto_request(
-                model_service,
-                user_id=user_id,
-                request_id=request_id,
-                messages=messages,
-                active_catalog=active_catalog,
-            )
-        )
+        from .db import database
+
+        try:
+            recommendation = None
+            if _should_attempt_route(messages, active_catalog):
+                try:
+                    recommendation = await asyncio.wait_for(
+                        _route_auto_request(
+                            model_service,
+                            user_id=user_id,
+                            request_id=request_id,
+                            messages=messages,
+                            active_catalog=active_catalog,
+                        ),
+                        timeout=5,
+                    )
+                except Exception:
+                    recommendation = None
+            if recommendation:
+                yield _home_sse("home.recommendation", {"recommendation": recommendation})
+                yield _home_sse("home.completed", {})
+                return
+
+            try:
+                with database(model_service.settings.database_path) as answer_conn:
+                    answer_response = await stream_user_global_model(
+                        answer_conn,
+                        model_service,
+                        user_id=user_id,
+                        request_id=request_id,
+                        instructions=INSTANT_INSTRUCTIONS,
+                        messages=messages,
+                        max_output_tokens=900,
+                    )
+            except HTTPException as exc:
+                yield _safe_model_error_event(_error_code(exc))
+                return
+
+            async for chunk in answer_response.body_iterator:
+                yield chunk
+            yield _home_sse("home.recommendation", {"recommendation": None})
+            yield _home_sse("home.completed", {})
+        except asyncio.CancelledError:
+            raise
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+    )
+
+
+async def _stream_direct_response(
+    model_service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    messages: list[ModelMessage],
+) -> StreamingResponse:
+    async def iterator():
+        from .db import database
+
+        try:
+            with database(model_service.settings.database_path) as answer_conn:
+                answer_response = await stream_user_global_model(
+                    answer_conn,
+                    model_service,
+                    user_id=user_id,
+                    request_id=request_id,
+                    instructions=INSTANT_INSTRUCTIONS,
+                    messages=messages,
+                    max_output_tokens=900,
+                )
+        except HTTPException as exc:
+            yield _safe_model_error_event(_error_code(exc))
+            return
+
         try:
             async for chunk in answer_response.body_iterator:
                 yield chunk
-            try:
-                recommendation = await asyncio.wait_for(route_task, timeout=5)
-            except Exception:
-                recommendation = None
-            yield _home_sse("home.recommendation", {"recommendation": recommendation})
             yield _home_sse("home.completed", {})
         except asyncio.CancelledError:
-            route_task.cancel()
             raise
-        finally:
-            if not route_task.done():
-                route_task.cancel()
+
+    return StreamingResponse(
+        iterator(),
+        media_type="text/event-stream",
+        headers={"cache-control": "no-cache", "x-accel-buffering": "no"},
+    )
+
+
+async def _stream_route_response(
+    model_service: ModelProfileService,
+    *,
+    user_id: str,
+    request_id: str,
+    messages: list[ModelMessage],
+    active_catalog: dict[str, dict[str, Any]],
+) -> StreamingResponse:
+    async def iterator():
+        recommendation = None
+        if active_catalog:
+            try:
+                recommendation = await asyncio.wait_for(
+                    _route_auto_request(
+                        model_service,
+                        user_id=user_id,
+                        request_id=request_id,
+                        messages=messages,
+                        active_catalog=active_catalog,
+                    ),
+                    timeout=8,
+                )
+            except Exception:
+                # Routing is advisory. Analysis failure falls back to the direct assistant.
+                recommendation = None
+
+        if recommendation:
+            yield _home_sse("home.recommendation", {"recommendation": recommendation})
+            yield _home_sse("home.completed", {})
+            return
+
+        from .db import database
+
+        try:
+            with database(model_service.settings.database_path) as answer_conn:
+                answer_response = await stream_user_global_model(
+                    answer_conn,
+                    model_service,
+                    user_id=user_id,
+                    request_id=request_id,
+                    instructions=INSTANT_INSTRUCTIONS,
+                    messages=messages,
+                    max_output_tokens=900,
+                )
+        except HTTPException as exc:
+            yield _safe_model_error_event(_error_code(exc))
+            return
+
+        try:
+            async for chunk in answer_response.body_iterator:
+                yield chunk
+            yield _home_sse("home.recommendation", {"recommendation": None})
+            yield _home_sse("home.completed", {})
+        except asyncio.CancelledError:
+            raise
 
     return StreamingResponse(
         iterator(),
@@ -324,23 +577,29 @@ async def home_assistant_chat(
     messages = _bounded_messages(body.messages)
     request_id = new_id("home")
     if body.mode == "instant":
+        return await _stream_direct_response(
+            model_service,
+            user_id=user["user_id"],
+            request_id=request_id,
+            messages=messages,
+        )
+
+    if body.mode == "route_stream":
         try:
-            return await stream_user_global_model(
-                conn,
-                model_service,
-                user_id=user["user_id"],
-                request_id=request_id,
-                instructions=INSTANT_INSTRUCTIONS,
-                messages=messages,
-                max_output_tokens=900,
-            )
-        except HTTPException as exc:
-            return await _single_error_stream(_error_code(exc))
+            active_catalog = _active_catalog_by_id(conn)
+        except HTTPException:
+            active_catalog = {}
+        return await _stream_route_response(
+            model_service,
+            user_id=user["user_id"],
+            request_id=request_id,
+            messages=messages,
+            active_catalog=active_catalog,
+        )
 
     if body.mode == "auto":
         active_catalog = _active_catalog_by_id(conn)
         return await _stream_auto_response(
-            conn,
             model_service,
             user_id=user["user_id"],
             request_id=request_id,

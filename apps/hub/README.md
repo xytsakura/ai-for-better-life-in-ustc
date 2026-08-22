@@ -36,7 +36,9 @@ Compose 会 seed 瀚海行、校园助手 Demo、评课社区 Agent Demo 和校�
 - `POST /api/admin/agents/{agent_id}/suspend|restore|rollback|deprecate`：治理状态操作；
 - `POST /api/admin/agents/{agent_id}/credentials` 与凭据状态接口：创建、轮换或撤销 Featured 服务凭据；
 - `GET /.well-known/jwks.json`：Ed25519/EdDSA JWT 公钥；
-- `POST /api/home-assistant/chat`：首页助手；`auto` 使用 SSE 流式回答普通问题，并在并行路由高度匹配时追加受控的 active Agent 推荐。旧的 `instant` / `route` 模式继续保留兼容；
+- `POST /api/home-assistant/chat`：首页助手；`instant` 是不读取清单的快速流式对话，`route_stream` 每轮分析需求并在 active Registry 中生成受控推荐，未命中时回退流式回答；旧的 `auto` / `route` 继续保留兼容；
+- `route_stream` 对期末/课程复习和签字盖章办事地点等核心演示需求先执行高置信组合匹配，其余需求再调用模型语义路由；两条路径都只能返回 active Registry 中的 Agent；
+- 首页对话存档按“演示身份 + 对话模式”保存在浏览器本地，支持独立新建、刷新恢复与左侧回溯；当前不提供跨设备同步。
 - `POST /api/gateway/agents/{agent_id}/runs`：按 Registry 目标转发 AG-UI 或 simple-chat；
 - `POST /api/agents/{agent_id}/workspace/start` 与 `POST /oauth/token`：Featured Agent 工作台一次性授权码启动。
 
