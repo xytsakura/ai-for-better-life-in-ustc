@@ -7,6 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 import jwt
@@ -56,6 +57,145 @@ class VerifiedHubIdentity:
     scopes: set[str]
     jti: str
     claims: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class HubModelDelegation:
+    delegation_id: str
+    access_token: str
+    hub_sub: str
+    course_user_id: str
+    display_name: str
+    expires_at: float
+    models: tuple[dict[str, Any], ...] = ()
+    default_model_id: str | None = None
+
+
+@dataclass(frozen=True)
+class HubModelContext:
+    hub_sub: str
+    course_user_id: str
+    display_name: str
+    delegate_token: str
+    request_id: str
+    allowed_model_ids: tuple[str, ...] = ()
+    default_model_id: str | None = None
+
+
+@dataclass(frozen=True)
+class HubModelGrant:
+    access_token: str
+    expires_in: int
+    model: str | None = None
+    request_id: str | None = None
+
+
+@dataclass(frozen=True)
+class HubModelGatewayResult:
+    text: str
+    model: str
+    usage: dict[str, Any] | None = None
+
+
+class HubModelGatewayError(Exception):
+    def __init__(
+        self,
+        code: str,
+        message: str = "",
+        *,
+        retryable: bool = False,
+        allow_fallback: bool = False,
+    ):
+        super().__init__(message or code)
+        self.code = code
+        self.message = message or code
+        self.retryable = retryable
+        self.allow_fallback = allow_fallback
+
+
+class HubModelDelegationStore:
+    """Server-side storage for Hub user delegation tokens.
+
+    Starlette's default session middleware stores signed data in the browser
+    cookie. Hub workspace/model tokens therefore must not be written into the
+    session itself. The session only keeps an opaque handle; the token stays in
+    this process-local store and naturally expires.
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[str, HubModelDelegation] = {}
+
+    def put(
+        self,
+        *,
+        access_token: str,
+        identity: VerifiedHubIdentity,
+        expires_in: int,
+        max_ttl_seconds: int,
+        models: Any = None,
+        default_model_id: str | None = None,
+    ) -> str:
+        self.prune()
+        ttl = max(1, min(int(expires_in or max_ttl_seconds), max_ttl_seconds))
+        delegation_id = f"hubdlg_{uuid.uuid4().hex}"
+        safe_models: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in models if isinstance(models, list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if not model_id or len(model_id) > 128 or model_id in seen:
+                continue
+            seen.add(model_id)
+            safe_models.append(
+                {
+                    "id": model_id,
+                    "display_name": str(item.get("display_name") or model_id)[:160],
+                    "chat_eligible": item.get("chat_eligible") is not False,
+                }
+            )
+        safe_default = str(default_model_id or "").strip() or None
+        if safe_default not in seen:
+            safe_default = safe_models[0]["id"] if safe_models else None
+        self._items[delegation_id] = HubModelDelegation(
+            delegation_id=delegation_id,
+            access_token=access_token,
+            hub_sub=identity.hub_sub,
+            course_user_id=identity.course_user_id,
+            display_name=identity.display_name,
+            expires_at=time.time() + ttl,
+            models=tuple(safe_models),
+            default_model_id=safe_default,
+        )
+        return delegation_id
+
+    def get(self, delegation_id: str | None) -> HubModelDelegation | None:
+        if not delegation_id:
+            return None
+        item = self._items.get(delegation_id)
+        if item is None:
+            return None
+        if item.expires_at <= time.time():
+            self._items.pop(delegation_id, None)
+            return None
+        return item
+
+    def pop(self, delegation_id: str | None) -> HubModelDelegation | None:
+        if not delegation_id:
+            return None
+        item = self._items.pop(delegation_id, None)
+        if item is None or item.expires_at <= time.time():
+            return None
+        return item
+
+    def remove(self, delegation_id: str | None) -> None:
+        self._items.pop(delegation_id or "", None)
+
+    def prune(self) -> None:
+        now = time.time()
+        expired = [key for key, item in self._items.items() if item.expires_at <= now]
+        for key in expired:
+            self._items.pop(key, None)
 
 
 class HubJwtVerifier:
@@ -305,6 +445,344 @@ async def exchange_workspace_code(settings: Settings, payload: HubWorkspaceExcha
     return data
 
 
+class HubModelGatewayClient:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    def is_configured(self) -> bool:
+        return self.settings.hub_model_gateway_configured
+
+    def revoke_delegation(self, token: str) -> bool:
+        value = str(token or "").strip()
+        if not value or not self.settings.current_hub_client_secret():
+            return False
+        try:
+            with httpx.Client(timeout=8.0, follow_redirects=False) as client:
+                response = client.post(
+                    self._delegation_revoke_url(),
+                    headers=self._client_secret_basic_headers(),
+                    json={"token": value},
+                )
+            return 200 <= response.status_code < 300
+        except Exception:
+            return False
+
+    async def revoke_delegation_async(self, token: str) -> bool:
+        value = str(token or "").strip()
+        if not value or not self.settings.current_hub_client_secret():
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+                response = await client.post(
+                    self._delegation_revoke_url(),
+                    headers=self._client_secret_basic_headers(),
+                    json={"token": value},
+                )
+            return 200 <= response.status_code < 300
+        except Exception:
+            return False
+
+    def generate(
+        self,
+        *,
+        context: HubModelContext,
+        instructions: str,
+        messages: list[dict[str, Any]],
+        reasoning_effort: str | None,
+        max_output_tokens: int,
+        model_id: str | None = None,
+    ) -> HubModelGatewayResult:
+        grant = self._exchange_grant(context, model_id=model_id)
+        payload = self._gateway_payload(
+            instructions=instructions,
+            messages=messages,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            stream=False,
+        )
+        try:
+            with httpx.Client(
+                timeout=self.settings.hub_model_gateway_timeout_seconds,
+                follow_redirects=False,
+            ) as client:
+                response = client.post(
+                    self.settings.hub_model_gateway_url,
+                    headers={
+                        "Authorization": f"Bearer {grant.access_token}",
+                        "Content-Type": "application/json",
+                        "X-Course-Agent-Request-Id": context.request_id,
+                    },
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HubModelGatewayError(
+                "model_gateway_unreachable",
+                "Hub Model Gateway 暂不可用",
+                retryable=True,
+                allow_fallback=True,
+            ) from exc
+        if response.status_code >= 400:
+            raise self._http_error(response, default_code="model_gateway_request_failed")
+        data = self._json_response(response)
+        text = _model_text(data)
+        if not text:
+            raise HubModelGatewayError("model_gateway_empty_response", "平台模型返回为空", retryable=True)
+        model_value = data.get("model") or grant.model or "platform-model"
+        if isinstance(model_value, dict):
+            model_value = model_value.get("id") or model_value.get("model_id") or "platform-model"
+        return HubModelGatewayResult(
+            text=text,
+            model=str(model_value),
+            usage=data.get("usage") if isinstance(data.get("usage"), dict) else None,
+        )
+
+    async def stream_generate(
+        self,
+        *,
+        context: HubModelContext,
+        instructions: str,
+        messages: list[dict[str, Any]],
+        reasoning_effort: str | None,
+        max_output_tokens: int,
+        model_id: str | None = None,
+    ):
+        grant = await self._exchange_grant_async(context, model_id=model_id)
+        payload = self._gateway_payload(
+            instructions=instructions,
+            messages=messages,
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            stream=True,
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.settings.hub_model_gateway_timeout_seconds,
+                follow_redirects=False,
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    self.settings.hub_model_gateway_url,
+                    headers={
+                        "Authorization": f"Bearer {grant.access_token}",
+                        "Content-Type": "application/json",
+                        "X-Course-Agent-Request-Id": context.request_id,
+                    },
+                    json=payload,
+                ) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                        raise self._http_error(
+                            response,
+                            default_code="model_gateway_request_failed",
+                        )
+                    async for event in _iter_gateway_sse(response):
+                        yield event, grant
+        except HubModelGatewayError:
+            raise
+        except httpx.HTTPError as exc:
+            raise HubModelGatewayError(
+                "model_gateway_unreachable",
+                "Hub Model Gateway 暂不可用",
+                retryable=True,
+                allow_fallback=True,
+            ) from exc
+
+    def _exchange_grant(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> HubModelGrant:
+        if not self.is_configured():
+            raise HubModelGatewayError(
+                "model_gateway_not_configured",
+                "Hub Model Gateway 未配置",
+                allow_fallback=True,
+            )
+        payload = self._grant_payload(context, model_id=model_id)
+        try:
+            with httpx.Client(timeout=8.0, follow_redirects=False) as client:
+                response = client.post(
+                    self.settings.hub_model_grant_endpoint,
+                    headers=self._grant_headers(context),
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HubModelGatewayError(
+                "model_grant_unreachable",
+                "Hub 模型授权暂不可用",
+                retryable=True,
+                allow_fallback=True,
+            ) from exc
+        if response.status_code >= 400:
+            raise self._http_error(response, default_code="model_grant_failed")
+        return self._parse_grant(response)
+
+    async def _exchange_grant_async(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> HubModelGrant:
+        if not self.is_configured():
+            raise HubModelGatewayError(
+                "model_gateway_not_configured",
+                "Hub Model Gateway 未配置",
+                allow_fallback=True,
+            )
+        payload = self._grant_payload(context, model_id=model_id)
+        try:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=False) as client:
+                response = await client.post(
+                    self.settings.hub_model_grant_endpoint,
+                    headers=self._grant_headers(context),
+                    json=payload,
+                )
+        except httpx.HTTPError as exc:
+            raise HubModelGatewayError(
+                "model_grant_unreachable",
+                "Hub 模型授权暂不可用",
+                retryable=True,
+                allow_fallback=True,
+            ) from exc
+        if response.status_code >= 400:
+            raise self._http_error(response, default_code="model_grant_failed")
+        return self._parse_grant(response)
+
+    def _client_secret_basic_headers(self) -> dict[str, str]:
+        auth = base64.b64encode(
+            f"{self.settings.hub_client_id}:{self.settings.current_hub_client_secret()}".encode("utf-8")
+        ).decode("ascii")
+        return {
+            "Authorization": f"Basic {auth}",
+            "Content-Type": "application/json",
+        }
+
+    def _grant_headers(self, context: HubModelContext) -> dict[str, str]:
+        return self._client_secret_basic_headers()
+
+    def _grant_payload(
+        self,
+        context: HubModelContext,
+        *,
+        model_id: str | None = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "model_delegation_token": context.delegate_token,
+            "request_id": context.request_id,
+        }
+        if model_id:
+            payload["requested_model_id"] = model_id
+        return payload
+
+    def _delegation_revoke_url(self) -> str:
+        parsed = urlparse(self.settings.hub_model_grant_endpoint)
+        path = parsed.path or ""
+        marker = "/api/model-gateway/"
+        if marker in path:
+            prefix = path.split(marker, 1)[0]
+            revoke_path = f"{prefix}{marker}delegations/revoke"
+        else:
+            revoke_path = "/api/model-gateway/delegations/revoke"
+        return urlunparse((parsed.scheme, parsed.netloc, revoke_path, "", "", ""))
+
+    @staticmethod
+    def _gateway_payload(
+        *,
+        instructions: str,
+        messages: list[dict[str, Any]],
+        reasoning_effort: str | None,
+        max_output_tokens: int,
+        stream: bool,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "instructions": instructions,
+            "messages": messages,
+            "max_output_tokens": max_output_tokens,
+            "stream": stream,
+        }
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+        return payload
+
+    @staticmethod
+    def _json_response(response: httpx.Response) -> dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise HubModelGatewayError(
+                "model_gateway_protocol_error",
+                "Hub Model Gateway 返回了无法解析的响应",
+                retryable=True,
+            ) from exc
+        if not isinstance(data, dict):
+            raise HubModelGatewayError(
+                "model_gateway_protocol_error",
+                "Hub Model Gateway 响应格式无效",
+                retryable=True,
+            )
+        return data
+
+    def _parse_grant(self, response: httpx.Response) -> HubModelGrant:
+        data = self._json_response(response)
+        token = data.get("access_token") or data.get("grant") or data.get("grant_token") or data.get("token")
+        if not isinstance(token, str) or not token.strip():
+            raise HubModelGatewayError(
+                "model_grant_protocol_error",
+                "Hub 模型授权响应缺少 grant token",
+                retryable=True,
+            )
+        expires_in = data.get("expires_in", 120)
+        try:
+            expires = max(1, min(120, int(expires_in)))
+        except (TypeError, ValueError):
+            expires = 120
+        model_value = data.get("model") or data.get("model_id")
+        if isinstance(model_value, dict):
+            model_value = model_value.get("id") or model_value.get("model_id")
+        return HubModelGrant(
+            access_token=token.strip(),
+            expires_in=expires,
+            model=str(model_value or "") or None,
+            request_id=str(data.get("request_id") or "") or None,
+        )
+
+    def _http_error(self, response: httpx.Response, *, default_code: str) -> HubModelGatewayError:
+        data: Any = None
+        try:
+            data = response.json()
+        except ValueError:
+            data = None
+        code = default_code
+        message = ""
+        if isinstance(data, dict):
+            error = data.get("error") or data.get("detail")
+            if isinstance(error, dict):
+                if isinstance(error.get("code"), str):
+                    code = error["code"]
+                if isinstance(error.get("message"), str):
+                    message = error["message"]
+            elif isinstance(error, str):
+                message = error
+        if not message:
+            message = f"Hub Model Gateway returned HTTP {response.status_code}"
+        allow_fallback = response.status_code in {404, 409, 429, 502, 503, 504}
+        if code in {"model_binding_not_found", "model_profile_not_found", "model_profile_disabled"}:
+            allow_fallback = True
+        if response.status_code in {401, 403} or code in {
+            "model_grant_invalid",
+            "model_grant_expired",
+            "model_not_allowed",
+        }:
+            allow_fallback = False
+        return HubModelGatewayError(
+            _normalize_error_code(code, fallback=default_code),
+            _redact_bearer(message),
+            retryable=response.status_code in {429, 502, 503, 504},
+            allow_fallback=allow_fallback,
+        )
+
+
 def _message_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -334,3 +812,79 @@ def _find_jwk(jwks: dict[str, Any], kid: str) -> dict[str, Any] | None:
         if isinstance(key, dict) and key.get("kid") == kid:
             return key
     return None
+
+
+def _model_text(data: dict[str, Any]) -> str:
+    for key in ("answer", "text", "output_text"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+async def _iter_gateway_sse(response: httpx.Response):
+    data_lines: list[str] = []
+    event_name: str | None = None
+    async for raw_line in response.aiter_lines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            event = _parse_gateway_sse_data(data_lines, event_name=event_name)
+            data_lines = []
+            event_name = None
+            if event is not None:
+                yield event
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("event:"):
+            event_name = line[6:].strip() or None
+            continue
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    event = _parse_gateway_sse_data(data_lines, event_name=event_name)
+    if event is not None:
+        yield event
+
+
+def _parse_gateway_sse_data(
+    data_lines: list[str],
+    *,
+    event_name: str | None = None,
+) -> dict[str, Any] | None:
+    if not data_lines:
+        return None
+    data = "\n".join(data_lines).strip()
+    if not data or data == "[DONE]":
+        return None
+    parsed = json.loads(data)
+    if not isinstance(parsed, dict):
+        raise HubModelGatewayError(
+            "model_gateway_protocol_error",
+            "Hub Model Gateway SSE 数据格式无效",
+            retryable=True,
+        )
+    if event_name and "type" not in parsed:
+        parsed["type"] = event_name
+    return parsed
+
+
+def _normalize_error_code(raw: str, *, fallback: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "_" for ch in raw.strip()).strip("_")
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned[:80] or fallback
+
+
+def _redact_bearer(message: str) -> str:
+    parts = str(message or "").split()
+    redacted: list[str] = []
+    skip_next = False
+    for index, part in enumerate(parts):
+        if skip_next:
+            redacted.append("[REDACTED]")
+            skip_next = False
+            continue
+        redacted.append(part)
+        if part.lower() == "bearer" and index + 1 < len(parts):
+            skip_next = True
+    return " ".join(redacted)[:500]

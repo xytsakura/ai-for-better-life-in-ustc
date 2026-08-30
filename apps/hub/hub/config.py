@@ -41,6 +41,15 @@ class Settings:
         "http://localhost:8101",
     )
     cors_allow_origins: tuple[str, ...] = ("http://127.0.0.1:8100", "http://localhost:8100")
+    model_profiles_enabled: bool = False
+    model_profile_master_key_file: Path | None = None
+    model_profile_master_key_version: int = 1
+    model_profile_previous_key_files: tuple[str, ...] = ()
+    model_provider_origin_allowlist: tuple[str, ...] = ()
+    allow_local_model_providers: bool = False
+    model_gateway_grant_ttl_seconds: int = 120
+    model_delegation_ttl_seconds: int = 14_400
+    model_gateway_timeout_seconds: float = 60.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -48,6 +57,7 @@ class Settings:
         database_path = Path(os.getenv("HUB_DATABASE_PATH", runtime_dir / "hub.sqlite3"))
         allowlist = os.getenv("HUB_INTERNAL_URL_ALLOWLIST")
         cors = os.getenv("HUB_CORS_ALLOW_ORIGINS")
+        provider_allowlist = os.getenv("HUB_MODEL_PROVIDER_ORIGIN_ALLOWLIST")
         return cls(
             database_path=database_path,
             asset_cache_dir=Path(
@@ -107,6 +117,47 @@ class Settings:
             if allowlist is not None
             else cls.internal_url_allowlist,
             cors_allow_origins=tuple(_split_csv(cors)) if cors is not None else cls.cors_allow_origins,
+            model_profiles_enabled=os.getenv("HUB_MODEL_PROFILES_ENABLED", "false")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"},
+            model_profile_master_key_file=Path(os.getenv("HUB_MODEL_PROFILE_MASTER_KEY_FILE"))
+            if os.getenv("HUB_MODEL_PROFILE_MASTER_KEY_FILE")
+            else None,
+            model_profile_master_key_version=int(
+                os.getenv("HUB_MODEL_PROFILE_MASTER_KEY_VERSION", str(cls.model_profile_master_key_version))
+            ),
+            model_profile_previous_key_files=tuple(
+                _split_csv(os.getenv("HUB_MODEL_PROFILE_PREVIOUS_KEY_FILES", ""))
+            ),
+            model_provider_origin_allowlist=tuple(_split_csv(provider_allowlist))
+            if provider_allowlist is not None
+            else cls.model_provider_origin_allowlist,
+            allow_local_model_providers=os.getenv("HUB_ALLOW_LOCAL_MODEL_PROVIDERS", "false")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"},
+            model_gateway_grant_ttl_seconds=min(
+                120,
+                int(
+                    os.getenv(
+                        "HUB_MODEL_GATEWAY_GRANT_TTL_SECONDS",
+                        str(cls.model_gateway_grant_ttl_seconds),
+                    )
+                ),
+            ),
+            model_delegation_ttl_seconds=int(
+                os.getenv(
+                    "HUB_MODEL_DELEGATION_TTL_SECONDS",
+                    str(cls.model_delegation_ttl_seconds),
+                )
+            ),
+            model_gateway_timeout_seconds=float(
+                os.getenv(
+                    "HUB_MODEL_GATEWAY_TIMEOUT_SECONDS",
+                    str(cls.model_gateway_timeout_seconds),
+                )
+            ),
         )
 
 

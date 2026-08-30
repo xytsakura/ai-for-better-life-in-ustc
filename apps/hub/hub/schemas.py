@@ -63,6 +63,7 @@ class AgentManifest(BaseModel):
     icon: str | None = Field(default=None, max_length=2048)
     integration: Integration
     capabilities: list[str] = Field(default_factory=list, max_length=32)
+    model_runtime: "ModelRuntime | None" = None
     data_policy: DataPolicy
 
     @field_validator("contact")
@@ -96,6 +97,26 @@ class AgentSubmission(BaseModel):
 
     manifest: AgentManifest
     trust_level: Literal["third_party_external", "first_party_internal"] = "third_party_external"
+
+
+class ModelRuntime(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["agent_managed", "platform_optional", "platform_required"] = "agent_managed"
+    gateway_contract: Literal["campus-model-gateway-v1"] | None = None
+    supported_api_styles: list[Literal["responses", "chat_completions"]] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+
+    @field_validator("supported_api_styles")
+    @classmethod
+    def unique_supported_api_styles(
+        cls, value: list[Literal["responses", "chat_completions"]]
+    ) -> list[Literal["responses", "chat_completions"]]:
+        if len(set(value)) != len(value):
+            raise ValueError("supported_api_styles must be unique")
+        return value
 
 
 ManifestAdapter = TypeAdapter(AgentManifest)

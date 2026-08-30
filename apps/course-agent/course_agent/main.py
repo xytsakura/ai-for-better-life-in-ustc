@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import tempfile
@@ -40,6 +41,9 @@ from .ingestion import (
 )
 from .llm import LLMAdapter, LLMResult, LLMStreamComplete, LLMStreamDelta, LLMStreamError
 from .hub import (
+    HubModelContext,
+    HubModelDelegationStore,
+    HubModelGatewayClient,
     HubJwtVerifier,
     HubWorkspaceExchangeRequest,
     RunAgentInput,
@@ -54,6 +58,7 @@ from .model_catalog import (
     ModelCatalog,
     ModelCatalogError,
     SUPPORTED_REASONING_EFFORTS,
+    default_model_info,
     invalidate_model_catalog,
     validate_base_url_for_saved_config,
 )
@@ -68,6 +73,17 @@ from .tokenizer import JiebaTokenizer
 
 
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+# Pre-generated, transparent course-cover illustrations. New publications draw
+# from this pool only after approval, so the marketplace never exposes the
+# generic diamond fallback for a newly published knowledge space.
+MARKETPLACE_COVER_POOL: tuple[dict[str, str], ...] = (
+    {"asset": "/assets/course-covers/math-analysis-b1.png", "icon": "∫", "theme": "aurora"},
+    {"asset": "/assets/course-covers/linear-algebra-b1.png", "icon": "A", "theme": "violet"},
+    {"asset": "/assets/course-covers/probability-statistics.png", "icon": "σ", "theme": "cyan"},
+    {"asset": "/assets/course-covers/college-physics.png", "icon": "Φ", "theme": "blue"},
+    {"asset": "/assets/course-covers/data-structures.png", "icon": "⌘", "theme": "emerald"},
+    {"asset": "/assets/course-covers/programming-fundamentals.png", "icon": "</>", "theme": "amber"},
+)
 MAX_CONTEXT_REFERENCES = 8
 MAX_SELECTED_FRAGMENT_CHARS = 2000
 MAX_SELECTED_FRAGMENTS_TOTAL_CHARS = 4000
@@ -532,6 +548,67 @@ def _clean_document_ids(document_ids: list[str]) -> list[str]:
     return cleaned
 
 
+def assign_marketplace_cover(conn: Any, library: Any, version: Any) -> dict[str, str]:
+    """Assign one stable, pre-generated cover when a publication first goes live."""
+    library_id = str(library["id"])
+    existing = conn.execute(
+        "SELECT cover_asset, cover_icon, cover_theme FROM marketplace_course_metadata WHERE library_id = ?",
+        (library_id,),
+    ).fetchone()
+    if existing and str(existing["cover_asset"] or "").strip():
+        return {
+            "asset": str(existing["cover_asset"]),
+            "icon": str(existing["cover_icon"]),
+            "theme": str(existing["cover_theme"]),
+        }
+
+    usage_rows = conn.execute(
+        """SELECT cover_asset, count(*) AS usage_count
+           FROM marketplace_course_metadata
+           WHERE cover_asset <> ''
+           GROUP BY cover_asset"""
+    ).fetchall()
+    usage = {str(row["cover_asset"]): int(row["usage_count"] or 0) for row in usage_rows}
+    minimum = min(usage.get(item["asset"], 0) for item in MARKETPLACE_COVER_POOL)
+    candidates = [item for item in MARKETPLACE_COVER_POOL if usage.get(item["asset"], 0) == minimum]
+    digest = hashlib.sha256(library_id.encode("utf-8")).digest()
+    selected = candidates[int.from_bytes(digest[:8], "big") % len(candidates)]
+    document_count = int(
+        conn.execute(
+            "SELECT count(*) AS count FROM publication_documents WHERE version_id = ?",
+            (str(version["id"]),),
+        ).fetchone()["count"]
+        or 0
+    )
+    slug = f"published-{hashlib.sha1(library_id.encode('utf-8')).hexdigest()[:20]}"
+    values = (
+        "real" if document_count else "demo-placeholder",
+        selected["icon"],
+        selected["theme"],
+        selected["asset"],
+        str(version["description"] or ""),
+        "资料待补充" if not document_count else "已通过审核，可订阅并用于课程问答",
+    )
+    if existing:
+        conn.execute(
+            """UPDATE marketplace_course_metadata
+               SET demo_kind = ?, cover_icon = ?, cover_theme = ?, cover_asset = ?,
+                   short_description = CASE WHEN short_description = '' THEN ? ELSE short_description END,
+                   empty_state = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE library_id = ?""",
+            (*values, library_id),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO marketplace_course_metadata
+               (library_id, slug, demo_kind, cover_icon, cover_theme, cover_asset,
+                short_description, empty_state, sort_order, seed_version)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1000, 1)""",
+            (library_id, slug, *values),
+        )
+    return dict(selected)
+
+
 def _weather_number(value: Any, field_name: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"Open-Meteo 字段 {field_name} 格式无效")
@@ -620,11 +697,13 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     settings = settings or Settings()
     settings.ensure_directories()
     init_database(settings)
-    app = FastAPI(title="瀚海行agent", version="0.7.0")
+    app = FastAPI(title="瀚海行Agent", version="0.9.0")
     app.state.settings = settings
     app.state.llm = llm_adapter or LLMAdapter(settings)
     app.state.model_catalog = ModelCatalog(settings)
     app.state.hub_jwt_verifier = HubJwtVerifier(settings)
+    app.state.hub_model_delegations = HubModelDelegationStore()
+    app.state.hub_model_gateway = HubModelGatewayClient(settings)
     page_image_cache: OrderedDict[tuple[str, int, int, int], bytes] = OrderedDict()
     page_image_cache_lock = Lock()
     page_image_render_slots = BoundedSemaphore(value=2)
@@ -648,6 +727,13 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     static_dir = Path(__file__).resolve().parent / "web"
     if static_dir.exists():
+        course_covers_dir = static_dir / "assets" / "course-covers"
+        if course_covers_dir.exists():
+            app.mount(
+                "/assets/course-covers",
+                StaticFiles(directory=course_covers_dir),
+                name="course-covers",
+            )
         app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
 
     @app.exception_handler(HTTPException)
@@ -698,20 +784,81 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             detail=_error(exc.code, exc.message, exc.retryable),
         )
 
-    def validate_query_model(payload: QueryRequest) -> tuple[str, str | None]:
-        selected = (payload.model or app.state.settings.llm_model or "").strip()
+    def validate_query_model(
+        payload: QueryRequest,
+        platform_context: HubModelContext | None = None,
+    ) -> tuple[str, str | None]:
+        selected = (
+            payload.model
+            or (platform_context.default_model_id if platform_context else None)
+            or app.state.settings.llm_model
+            or ""
+        ).strip()
         try:
-            model_info = app.state.model_catalog.model_for_query(selected)
+            if platform_context is not None:
+                if platform_context.allowed_model_ids and selected not in platform_context.allowed_model_ids:
+                    raise ModelCatalogError("model_not_available", "所选模型不在平台授权目录中")
+                model_info = default_model_info(selected)
+                if not model_info.chat_eligible:
+                    raise ModelCatalogError(
+                        model_info.disabled_reason or "model_not_available",
+                        "所选模型不适用于文本对话",
+                    )
+            else:
+                model_info = app.state.model_catalog.model_for_query(selected)
             app.state.model_catalog.validate_reasoning(model_info, payload.reasoning_effort)
         except ModelCatalogError as exc:
             raise catalog_error(exc, 422) from exc
         return model_info.id, payload.reasoning_effort
 
-    def settings_response(user_id: str) -> dict:
+    def hub_platform_available(request: Request | None) -> bool:
+        if request is None:
+            return False
+        handle = request.session.get("hub_model_delegation_id")
+        return app.state.hub_model_delegations.get(str(handle) if handle else None) is not None
+
+    def settings_response(user_id: str, request: Request | None = None) -> dict:
+        safe = app.state.settings.to_safe_dict()
+        runtime = dict(safe.get("model_runtime") or {})
+        platform_available = hub_platform_available(request)
+        runtime.update(
+            {
+                "platform_available": platform_available,
+                "source": (
+                    "platform"
+                    if runtime.get("platform_configured") and platform_available
+                    else "agent_fallback"
+                ),
+            }
+        )
         return {
-            **app.state.settings.to_safe_dict(),
+            **safe,
+            "model_runtime": runtime,
             "is_admin": user_id in (app.state.settings.admin_user_ids or set()),
         }
+
+    def pop_session_model_delegation(request: Request):
+        handle = str(request.session.get("hub_model_delegation_id") or "")
+        request.session.pop("hub_model_delegation_id", None)
+        return app.state.hub_model_delegations.pop(handle)
+
+    def revoke_session_model_delegation(request: Request) -> None:
+        delegation = pop_session_model_delegation(request)
+        if delegation is None:
+            return
+        try:
+            app.state.hub_model_gateway.revoke_delegation(delegation.access_token)
+        except Exception:
+            return
+
+    async def revoke_session_model_delegation_async(request: Request) -> None:
+        delegation = pop_session_model_delegation(request)
+        if delegation is None:
+            return
+        try:
+            await app.state.hub_model_gateway.revoke_delegation_async(delegation.access_token)
+        except Exception:
+            return
 
     def is_admin_user(user_id: str) -> bool:
         return user_id in (app.state.settings.admin_user_ids or set())
@@ -791,6 +938,23 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         author = conn.execute(
             "SELECT display_name FROM users WHERE id = ?", (row["author_id"],)
         ).fetchone()
+        metadata = conn.execute(
+            "SELECT * FROM marketplace_course_metadata WHERE library_id = ?",
+            (library_id,),
+        ).fetchone()
+        marketplace_metadata = None
+        if metadata:
+            marketplace_metadata = {
+                "slug": metadata["slug"],
+                "demo_kind": metadata["demo_kind"],
+                "cover_icon": metadata["cover_icon"],
+                "cover_theme": metadata["cover_theme"],
+                "cover_asset": metadata["cover_asset"],
+                "short_description": metadata["short_description"],
+                "empty_state": metadata["empty_state"],
+                "sort_order": int(metadata["sort_order"] or 100),
+                "seed_version": int(metadata["seed_version"] or 1),
+            }
         return {
             "id": library_id,
             "space_id": row["space_id"],
@@ -805,6 +969,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "document_count": int(document_count or 0),
             "subscriber_count": int(subscriber_count or 0),
             "is_subscribed": bool(subscription and subscription["status"] == "active"),
+            "marketplace": marketplace_metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -1164,7 +1329,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "knowledge-base",
                 "file-preview",
                 "full-workspace",
+                "platform-model-gateway",
             ],
+            "model_runtime": {
+                "mode": "platform_optional",
+                "gateway_contract": "campus-model-gateway-v1",
+                "supported_api_styles": ["responses", "chat_completions"],
+                "agent_fallback_configured": settings.llm_configured,
+                "platform_configured": settings.hub_model_gateway_configured,
+            },
             "hub": {
                 "agent_id": settings.hub_agent_id,
                 "protocol": "ag-ui",
@@ -1188,6 +1361,8 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.post("/api/session")
     def create_session(payload: SessionRequest, request: Request) -> dict:
+        revoke_session_model_delegation(request)
+        request.session.pop("hub_sub", None)
         with get_db() as conn:
             row = conn.execute("SELECT id, display_name, is_demo FROM users WHERE id = ?", (payload.user_id,)).fetchone()
         if not row:
@@ -1206,6 +1381,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
 
     @app.delete("/api/session", status_code=204)
     def clear_session(request: Request) -> None:
+        revoke_session_model_delegation(request)
         request.session.clear()
 
     @app.get("/api/weather/today")
@@ -1563,25 +1739,46 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     ) -> dict:
         if page < 1 or not 1 <= page_size <= 100:
             raise HTTPException(status_code=422, detail=_error("invalid_pagination", "invalid pagination"))
-        filters = ["status IN ('published', 'suspended')" if is_admin_user(user_id) else "status = 'published'"]
+        filters = [
+            "published_libraries.status IN ('published', 'suspended')"
+            if is_admin_user(user_id)
+            else "published_libraries.status = 'published'"
+        ]
         params: list[Any] = []
         if q.strip():
-            filters.append("(name LIKE ? OR description LIKE ? OR tags_json LIKE ?)")
+            filters.append(
+                """(published_libraries.name LIKE ?
+                   OR published_libraries.description LIKE ?
+                   OR published_libraries.tags_json LIKE ?
+                   OR marketplace_course_metadata.short_description LIKE ?
+                   OR marketplace_course_metadata.slug LIKE ?)"""
+            )
             needle = f"%{q.strip()}%"
-            params.extend([needle, needle, needle])
+            params.extend([needle, needle, needle, needle, needle])
         if course.strip():
-            filters.append("course = ?")
+            filters.append("published_libraries.course = ?")
             params.append(course.strip())
         where = " AND ".join(filters)
         with get_db() as conn:
             total = conn.execute(
-                f"SELECT count(*) AS count FROM published_libraries WHERE {where}",
+                f"""SELECT count(*) AS count
+                    FROM published_libraries
+                    LEFT JOIN marketplace_course_metadata
+                      ON marketplace_course_metadata.library_id = published_libraries.id
+                    WHERE {where}""",
                 params,
             ).fetchone()["count"]
             rows = conn.execute(
-                f"""SELECT * FROM published_libraries
+                f"""SELECT published_libraries.*
+                    FROM published_libraries
+                    LEFT JOIN marketplace_course_metadata
+                      ON marketplace_course_metadata.library_id = published_libraries.id
                     WHERE {where}
-                    ORDER BY updated_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY
+                      CASE WHEN marketplace_course_metadata.sort_order IS NULL THEN 1 ELSE 0 END,
+                      marketplace_course_metadata.sort_order ASC,
+                      published_libraries.updated_at DESC
+                    LIMIT ? OFFSET ?""",
                 [*params, page_size, (page - 1) * page_size],
             ).fetchall()
             items = [library_dict(conn, row, user_id) for row in rows]
@@ -1922,11 +2119,14 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 "UPDATE spaces SET name = ? WHERE id = ?",
                 (version["name"], library["space_id"]),
             )
+            assigned_cover = assign_marketplace_cover(conn, library, version)
             audit_event(conn, user_id, "publication_version_approved", "publication_version", version_id)
             conn.commit()
             version = fetch_version(conn, version_id)
             library = fetch_library(conn, version["library_id"])
-            return publication_response(conn, library, version, user_id, include_source=True)
+            response = publication_response(conn, library, version, user_id, include_source=True)
+            response["marketplace_cover"] = assigned_cover
+            return response
 
     @app.post("/api/admin/publications/{library_id}/suspend")
     def suspend_publication(library_id: str, user_id: str = Depends(current_user)) -> dict:
@@ -2048,11 +2248,15 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             return {"library": library_dict(conn, library, user_id), "version": version_dict(target)}
 
     @app.get("/api/settings")
-    def get_settings(user_id: str = Depends(current_user)) -> dict:
-        return settings_response(user_id)
+    def get_settings(request: Request, user_id: str = Depends(current_user)) -> dict:
+        return settings_response(user_id, request)
 
     @app.post("/api/settings")
-    def update_settings(payload: SettingsUpdate, user_id: str = Depends(current_user)) -> dict:
+    def update_settings(
+        payload: SettingsUpdate,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> dict:
         require_admin(user_id)
         incoming = payload.model_dump(exclude_unset=True)
         old_base_url = app.state.settings.llm_base_url
@@ -2089,13 +2293,37 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         invalidate_model_catalog()
         app.state.llm = LLMAdapter(app.state.settings)
         app.state.model_catalog = ModelCatalog(app.state.settings)
-        return settings_response(user_id)
+        app.state.hub_model_gateway = HubModelGatewayClient(app.state.settings)
+        return settings_response(user_id, request)
 
     @app.get("/api/models")
-    def get_models(user_id: str = Depends(current_user)) -> dict:
+    def get_models(request: Request, user_id: str = Depends(current_user)) -> dict:
+        delegation = app.state.hub_model_delegations.get(
+            str(request.session.get("hub_model_delegation_id") or "")
+        )
+        if delegation is not None and delegation.models:
+            models = []
+            for delegated in delegation.models:
+                info = default_model_info(str(delegated["id"]))
+                safe = info.as_dict()
+                safe["display_name"] = str(delegated.get("display_name") or info.display_name)
+                models.append(safe)
+            return {
+                "models": models,
+                "default_model_id": delegation.default_model_id,
+                "discovery_source": "platform",
+                "cached": True,
+                "reasoning_efforts": list(SUPPORTED_REASONING_EFFORTS),
+            }
         cached = app.state.model_catalog.get_cached()
         if cached:
             return cached.as_dict()
+        try:
+            discovered = app.state.model_catalog.discover(force=False)
+        except ModelCatalogError:
+            discovered = None
+        if discovered is not None:
+            return discovered.as_dict()
         try:
             default_info = app.state.model_catalog.model_for_query(app.state.settings.llm_model)
         except ModelCatalogError as exc:
@@ -2147,6 +2375,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "scope": prepared.scope,
             "degraded": result.degraded,
             "model": result.model,
+            "model_source": result.model_source,
             "usage": result.usage.as_dict() if result.usage else None,
             "retrieval_count": prepared.retrieval_count,
             "citations": _citations_for_result(result, prepared.source_map),
@@ -2156,10 +2385,14 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             payload["space_id"] = prepared.space_id
         return payload
 
-    def prepare_query(payload: QueryRequest, user_id: str) -> PreparedQuery:
+    def prepare_query(
+        payload: QueryRequest,
+        user_id: str,
+        platform_context: HubModelContext | None = None,
+    ) -> PreparedQuery:
         history = [m.model_dump() for m in payload.messages]
         reference_context = _serialize_context_references(payload.context_references)
-        selected_model, selected_reasoning = validate_query_model(payload)
+        selected_model, selected_reasoning = validate_query_model(payload, platform_context)
         scope = payload.scope or ("knowledge_base" if payload.mode == "retrieval" else "general")
         if payload.mode == "direct":
             if scope != "general":
@@ -2269,6 +2502,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     async def _query_sse_events(
         request: Request,
         prepared: PreparedQuery,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[bytes]:
         yield _sse(
             "start",
@@ -2287,6 +2521,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
             if prepared.mode == "direct"
             else app.state.llm.stream(
@@ -2298,6 +2533,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         )
         try:
@@ -2398,6 +2634,62 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             claims={},
         )
 
+    def _platform_context_from_request(
+        request: Request,
+        *,
+        identity: VerifiedHubIdentity | None = None,
+    ) -> HubModelContext | None:
+        if not app.state.settings.hub_model_gateway_configured:
+            return None
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer ") and identity is not None:
+            return HubModelContext(
+                hub_sub=identity.hub_sub,
+                course_user_id=identity.course_user_id,
+                display_name=identity.display_name,
+                delegate_token=auth.split(" ", 1)[1].strip(),
+                request_id=request.headers.get("x-hub-request-id", "") or f"hubchat:{uuid.uuid4().hex}",
+            )
+        delegation = app.state.hub_model_delegations.get(
+            str(request.session.get("hub_model_delegation_id") or "")
+        )
+        if delegation is None:
+            return None
+        return HubModelContext(
+            hub_sub=delegation.hub_sub,
+            course_user_id=delegation.course_user_id,
+            display_name=delegation.display_name,
+            delegate_token=delegation.access_token,
+            request_id=f"workspace:{uuid.uuid4().hex}",
+            allowed_model_ids=tuple(str(item["id"]) for item in delegation.models),
+            default_model_id=delegation.default_model_id,
+        )
+
+    def _store_model_delegation(
+        request: Request,
+        token_response: dict[str, Any],
+        identity: VerifiedHubIdentity,
+    ) -> None:
+        model_delegation = token_response.get("model_delegation_token")
+        if not isinstance(model_delegation, str) or not model_delegation.strip():
+            request.session.pop("hub_model_delegation_id", None)
+            return
+        try:
+            expires_in = int(
+                token_response.get("model_delegation_expires_in")
+                or settings.hub_model_delegation_ttl_seconds
+            )
+        except (TypeError, ValueError):
+            expires_in = settings.hub_model_delegation_ttl_seconds
+        request.session["hub_model_delegation_id"] = app.state.hub_model_delegations.put(
+            access_token=model_delegation.strip(),
+            identity=identity,
+            expires_in=expires_in,
+            max_ttl_seconds=settings.hub_model_delegation_ttl_seconds,
+            models=token_response.get("model_delegation_models"),
+            default_model_id=token_response.get("model_delegation_default_model_id"),
+        )
+
     def _hub_query_request(payload: RunAgentInput) -> tuple[QueryRequest, str]:
         question, history = extract_question_and_history(payload)
         options = course_query_options(payload)
@@ -2418,6 +2710,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         request: Request,
         payload: RunAgentInput,
         prepared: PreparedQuery,
+        platform_context: HubModelContext | None = None,
     ) -> AsyncIterator[bytes]:
         message_id = new_message_id()
         yield agui_event(
@@ -2440,6 +2733,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
             if prepared.mode == "direct"
             else app.state.llm.stream(
@@ -2451,6 +2745,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         )
         terminal_sent = False
@@ -2507,9 +2802,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
     async def hub_chat(payload: RunAgentInput, request: Request) -> StreamingResponse:
         identity = await _hub_identity(request, "chat:invoke")
         query_payload, _question = _hub_query_request(payload)
-        prepared = prepare_query(query_payload, identity.course_user_id)
+        platform_context = _platform_context_from_request(request, identity=identity)
+        prepared = prepare_query(query_payload, identity.course_user_id, platform_context)
         return StreamingResponse(
-            _hub_agui_events(request, payload, prepared),
+            _hub_agui_events(request, payload, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
             headers=_sse_headers(),
         )
@@ -2524,8 +2820,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             token_response["access_token"],
             required_scope="workspace:enter",
         )
+        await revoke_session_model_delegation_async(request)
         request.session["user_id"] = identity.course_user_id
         request.session["hub_sub"] = identity.hub_sub
+        _store_model_delegation(request, token_response, identity)
         with get_db() as conn:
             row = conn.execute(
                 "SELECT id, display_name, is_demo FROM users WHERE id = ?",
@@ -2557,8 +2855,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             token_response["access_token"],
             required_scope="workspace:enter",
         )
+        await revoke_session_model_delegation_async(request)
         request.session["user_id"] = identity.course_user_id
         request.session["hub_sub"] = identity.hub_sub
+        _store_model_delegation(request, token_response, identity)
         return RedirectResponse(url="/?from=hub")
 
     @app.get("/api/hub/context")
@@ -2571,11 +2871,27 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
             "return_url": settings.hub_return_url,
             "user_id": user_id,
             "hub_sub": mapped_from,
+            "model_runtime": {
+                "mode": "platform_optional",
+                "gateway_contract": "campus-model-gateway-v1",
+                "platform_configured": settings.hub_model_gateway_configured,
+                "platform_available": hub_platform_available(request),
+                "source": (
+                    "platform"
+                    if settings.hub_model_gateway_configured and hub_platform_available(request)
+                    else "agent_fallback"
+                ),
+            },
         }
 
     @app.post("/api/query")
-    def query(payload: QueryRequest, user_id: str = Depends(current_user)) -> dict:
-        prepared = prepare_query(payload, user_id)
+    def query(
+        payload: QueryRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ) -> dict:
+        platform_context = _platform_context_from_request(request)
+        prepared = prepare_query(payload, user_id, platform_context)
         if prepared.mode == "direct":
             llm_result = app.state.llm.generate_direct(
                 prepared.question,
@@ -2585,6 +2901,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         else:
             llm_result = app.state.llm.generate(
@@ -2596,6 +2913,7 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
                 reference_context=prepared.reference_context,
                 model=prepared.selected_model,
                 reasoning_effort=prepared.selected_reasoning,
+                platform_context=platform_context,
             )
         return _query_result_payload(prepared, llm_result)
 
@@ -2605,9 +2923,10 @@ def create_app(settings: Settings | None = None, llm_adapter: LLMAdapter | None 
         request: Request,
         user_id: str = Depends(current_user),
     ) -> StreamingResponse:
-        prepared = prepare_query(payload, user_id)
+        platform_context = _platform_context_from_request(request)
+        prepared = prepare_query(payload, user_id, platform_context)
         return StreamingResponse(
-            _query_sse_events(request, prepared),
+            _query_sse_events(request, prepared, platform_context),
             media_type="text/event-stream; charset=utf-8",
             headers=_sse_headers(),
         )

@@ -24,6 +24,7 @@ def test_marketplace_frontend_assets_are_packaged(tmp_path: Path):
     assert 'id="view-marketplace"' in html
     assert 'id="marketplace-library-list"' in html
     assert 'id="marketplace-library-detail"' in html
+    assert 'id="marketplace-overview"' in html
     assert 'id="marketplace-tab-mine"' in html
     assert 'id="marketplace-review-tab"' in html
     assert 'id="marketplace-tab-review"' in html
@@ -36,10 +37,28 @@ def test_marketplace_frontend_assets_are_packaged(tmp_path: Path):
     assert ".view-marketplace" in styles
     assert ".marketplace-layout" in styles
     assert ".marketplace-library-item" in styles
+    assert ".marketplace-course-card" in styles
+    assert ".marketplace-overview" in styles
+    assert ".marketplace-overview-card" in styles
+    assert "#marketplace-library-list" in styles
+    assert ".marketplace-empty-course" in styles
     assert ".marketplace-detail-panel" in styles
     assert ".publication-policy-grid" in styles
     assert "@media (max-width: 900px)" in styles
     assert ".marketplace-layout { grid-template-columns: 1fr; }" in styles
+
+    for cover_name in (
+        "math-analysis-b1.png",
+        "linear-algebra-b1.png",
+        "probability-statistics.png",
+        "college-physics.png",
+        "data-structures.png",
+        "programming-fundamentals.png",
+    ):
+        response = client.get(f"/assets/course-covers/{cover_name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "image/png"
+        assert len(response.content) > 10_000
 
 
 def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
@@ -51,6 +70,10 @@ def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
     assert "function resetMarketplaceState()" in script
     assert "function loadMarketplace()" in script
     assert "function loadMarketplaceLibraryDetail(" in script
+    assert "function marketplaceMetadata(" in script
+    assert "function marketplaceDemoLabel(" in script
+    assert "function marketplaceEmptyState(" in script
+    assert "function renderMarketplaceOverview()" in script
     assert "function submitPublication(" in script
     assert "function submitAdminReview(" in script
     assert "function enterMarketplaceLibrary(" in script
@@ -84,6 +107,16 @@ def test_marketplace_frontend_uses_spec_api_contracts(tmp_path: Path):
     assert "document.use_in_rag !== false" in script
     assert "data-marketplace-rollback-version" in script
     assert "data-marketplace-preview-document" in script
+    assert "marketplace-course-card" in script
+    assert "真实可检索库" in script
+    assert "公开资料" in script
+    assert "const updatedAt = marketplaceDate(library.updated_at);" in script
+    assert "更新 ${escapeHtml(updatedAt)}" in script
+    assert "更新：${escapeHtml(updatedAt)}" in script
+    assert "function marketplaceCoverAsset(" in script
+    assert "function bindMarketplaceCoverFallback(" in script
+    assert "/assets/course-covers/" in script
+    assert "不会参与 RAG 检索" in script
 
 
 def test_document_selection_stays_in_sync_across_all_surfaces(tmp_path: Path):

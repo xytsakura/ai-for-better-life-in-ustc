@@ -97,45 +97,48 @@ def test_product_logo_replaces_visual_107_marks(tmp_path):
     client = make_client(tmp_path)
 
     main_html = client.get("/").text
-    assert main_html.count('src="/assets/product-logo.png?v=product-logo-v1"') == 2
-    assert '<link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">' in main_html
+    assert main_html.count('src="/assets/product-logo.png?v=product-logo-v3"') == 2
+    assert '<link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v3">' in main_html
     assert '<div class="brand-mark">107</div>' not in main_html
     assert '<div class="home-logo-mark">107</div>' not in main_html
     assert '<title>瀚海行Agent</title>' in main_html
-    assert '<div class="brand" role="img" aria-label="瀚海行agent，AI for better life in ustc">' in main_html
-    assert '<div class="brand-title">瀚海行agent</div>' in main_html
+    assert '<div class="brand" role="img" aria-label="瀚海行Agent，AI for better life in ustc">' in main_html
+    assert '<div class="brand-title">瀚海行Agent</div>' in main_html
     assert '<div class="brand-sub">AI for better life in ustc</div>' in main_html
-    assert '<div class="home-logo-badge">真理如瀚海，求索亦行舟</div>' in main_html
-    assert 'placeholder="有问题尽管问瀚海行agent…"' in main_html
-    assert 'aria-label="瀚海行agent 虚拟形象"' in main_html
+    assert 'aria-label="真理如瀚海 求索亦行舟"' in main_html
+    assert '<span>真理如瀚海</span><span>求索亦行舟</span>' in main_html
+    assert 'placeholder="有问题尽管问瀚海行Agent…"' in main_html
+    assert 'aria-label="瀚海行Agent 虚拟形象"' in main_html
     assert "课程复习 Agent" not in main_html
     assert "USTC Course Agent" not in main_html
     assert "AI for better life In ustc" not in main_html
-    assert client.get("/openapi.json").json()["info"]["title"] == "瀚海行agent"
+    openapi_info = client.get("/openapi.json").json()["info"]
+    assert openapi_info["title"] == "瀚海行Agent"
+    assert openapi_info["version"] == "0.9.0"
 
     preview_html = client.get("/assets/avatar-preview.html").text
-    assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v1"') == 1
-    assert '/assets/avatar-preview.css?v=product-logo-v1' in preview_html
+    assert preview_html.count('src="/assets/product-logo.png?v=product-logo-v3"') == 1
+    assert '/assets/avatar-preview.css?v=product-logo-v3' in preview_html
     assert '<span class="preview-brand-mark" aria-hidden="true">107</span>' not in preview_html
-    assert '<title>虚拟形象预览 · 瀚海行agent</title>' in preview_html
-    assert '<div class="preview-brand" role="img" aria-label="瀚海行agent，虚拟形象预览">' in preview_html
-    assert '<strong>瀚海行agent</strong>' in preview_html
+    assert '<title>虚拟形象预览 · 瀚海行Agent</title>' in preview_html
+    assert '<div class="preview-brand" role="img" aria-label="瀚海行Agent，虚拟形象预览">' in preview_html
+    assert '<strong>瀚海行Agent</strong>' in preview_html
     assert "课程复习 Agent" not in preview_html
 
     logo_response = client.get("/assets/product-logo.png")
     assert logo_response.status_code == 200
     assert logo_response.headers["content-type"] == "image/png"
-    assert png_header(logo_response.content) == (256, 256, 2)
+    assert png_header(logo_response.content) == (256, 256, 6)
 
     main_styles = client.get("/assets/styles.css").text
     preview_styles = client.get("/assets/avatar-preview.css").text
-    assert "object-fit: cover;" in main_styles[
+    assert "object-fit: contain;" in main_styles[
         main_styles.index(".brand-mark {") : main_styles.index(".brand-title")
     ]
-    assert "object-fit: cover;" in main_styles[
+    assert "object-fit: contain;" in main_styles[
         main_styles.index(".home-logo-mark {") : main_styles.index(".home-logo-badge")
     ]
-    assert "object-fit: cover;" in preview_styles[
+    assert "object-fit: contain;" in preview_styles[
         preview_styles.index(".preview-brand-mark {") : preview_styles.index(".preview-brand-copy")
     ]
 
@@ -201,8 +204,8 @@ def test_virtual_avatar_is_integrated_with_real_agent_lifecycle(tmp_path):
     assert 'aria-busy="false"' in html
     assert 'aria-live="polite"' in html
     assert '/assets/avatar-preview/agent-idle.png' in html
-    assert '/assets/styles.css?v=20260809-1' in html
-    assert '/assets/app.js?v=20260818-1' in html
+    assert '/assets/styles.css?v=20260820-4' in html
+    assert '/assets/app.js?v=20260820-3' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".home-agent-avatar-dock" in styles
@@ -295,9 +298,9 @@ def test_virtual_avatar_bubble_theme_and_floating_responsive_layout_are_packaged
     light_theme = styles[
         styles.index(':root[data-theme="light"]') : styles.index("* { box-sizing:")
     ]
-    assert "--agent-bubble-bg: #171717;" in dark_theme
-    assert "--agent-bubble-text: #ffffff;" in dark_theme
-    assert "--agent-bubble-border: #ffffff;" in dark_theme
+    assert "--agent-bubble-bg: rgba(17, 19, 25, 0.94);" in dark_theme
+    assert "--agent-bubble-text: #f2f4f8;" in dark_theme
+    assert "--agent-bubble-border: rgba(143, 166, 255, 0.48);" in dark_theme
     assert "--agent-bubble-bg: #ffffff;" in light_theme
     assert "--agent-bubble-text: #111111;" in light_theme
     assert "--agent-bubble-border: #111111;" in light_theme

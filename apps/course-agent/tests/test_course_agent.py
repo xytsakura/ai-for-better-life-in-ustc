@@ -10,7 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 import course_agent.main as course_agent_main
+from course_agent.cli import marketplace_cover_asset, seed_marketplace
 from course_agent.config import Settings
+from course_agent.db import init_database
 from course_agent.llm import FakeLLMAdapter, LLMResult
 from course_agent.main import create_app
 from course_agent.ocr import OcrPage, file_sha256 as ocr_file_sha256, sidecar_path_for, write_ocr_sidecar
@@ -291,8 +293,8 @@ def test_profile_and_feature_preferences_are_packaged(tmp_path: Path):
     assert 'id="avatar-crop-rotate-left"' in html
     assert 'id="avatar-crop-rotate-right"' in html
     assert 'id="avatar-crop-apply"' in html
-    assert '/assets/styles.css?v=20260809-1' in html
-    assert '/assets/app.js?v=20260818-1' in html
+    assert '/assets/styles.css?v=20260820-4' in html
+    assert '/assets/app.js?v=20260820-3' in html
 
     styles = client.get("/assets/styles.css").text
     assert ".profile-avatar-preview" in styles
@@ -447,7 +449,8 @@ def test_chat_model_and_context_controls_are_packaged(tmp_path: Path):
 
     html = client.get("/").text
     assert 'id="home-model-input"' in html
-    assert 'id="home-model-list"' in html
+    assert '<select id="home-model-input"' in html
+    assert 'id="home-model-list"' not in html
     assert 'id="home-reasoning-effort"' in html
     assert 'id="home-context-meter"' in html
     assert 'id="home-mode-label"' not in html
@@ -1473,6 +1476,25 @@ def publish_demo_b_library(
     return library_id, version_id, snapshot_doc_id
 
 
+def test_approved_publication_gets_a_pre_generated_cover_from_the_pool(tmp_path: Path):
+    client, _ = make_client(tmp_path)
+    library_id, _version_id, _snapshot_doc_id = publish_demo_b_library(
+        client,
+        tmp_path,
+        name="新注册的知识广场",
+    )
+
+    login(client, "demo-c")
+    detail = client.get(f"/api/marketplace/libraries/{library_id}")
+    assert detail.status_code == 200, detail.text
+    marketplace = detail.json()["library"]["marketplace"]
+    pool = {item["asset"] for item in course_agent_main.MARKETPLACE_COVER_POOL}
+    assert marketplace["cover_asset"] in pool
+    assert marketplace["cover_theme"] in {item["theme"] for item in course_agent_main.MARKETPLACE_COVER_POOL}
+    assert marketplace["cover_icon"]
+    assert marketplace["cover_icon"] != "◇"
+
+
 def test_subscribed_document_without_download_permission_cannot_be_saved(tmp_path: Path):
     client, _ = make_client(tmp_path)
     library_id, _version_id, snapshot_doc_id = publish_demo_b_library(
@@ -1878,3 +1900,158 @@ def test_multi_document_publication_failure_leaves_no_snapshot_residue(monkeypat
         assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == baseline["chunks"]
         assert conn.execute("SELECT count(*) FROM chunk_fts").fetchone()[0] == baseline["fts"]
     assert {path.name for path in (tmp_path / "uploads").iterdir()} == baseline_files
+
+
+def test_seed_marketplace_creates_idempotent_course_market_and_empty_demo_libraries(tmp_path: Path):
+    settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
+    adapter = FakeLLMAdapter(settings)
+    client = TestClient(create_app(settings, adapter))
+
+    login(client, "demo-a")
+    shared = shared_space(client)
+    source_doc_id = upload_pdf(
+        client,
+        tmp_path,
+        shared["id"],
+        "math-seed.pdf",
+        "Seed marketplace searchable math analysis material.",
+    )
+    manifest = tmp_path / "marketplace-demo.yaml"
+    manifest.write_text(
+        """
+version: 1
+courses:
+  - slug: math-analysis-b1
+    library_id: marketplace-library-math-analysis-b1
+    space_id: marketplace-space-math-analysis-b1
+    version_id: marketplace-version-math-analysis-b1
+    source_space_id: math-b1-shared
+    name: 数学分析 B1 期末复习库
+    course: 数学分析 B1
+    description: 真实资料演示
+    short_description: 真题与讲义
+    tags: [真实资料, 期末复习]
+    demo_kind: real
+    cover_icon: ∫
+    cover_theme: aurora
+    cover_asset: /assets/course-covers/math-analysis-b1.png
+    sort_order: 10
+  - slug: linear-algebra-b1
+    library_id: marketplace-library-linear-algebra-b1
+    space_id: marketplace-space-linear-algebra-b1
+    version_id: marketplace-version-linear-algebra-b1
+    name: 线性代数 B1 知识库
+    course: 线性代数 B1
+    description: 演示知识库
+    short_description: 资料待补充
+    tags: [演示知识库]
+    demo_kind: demo-placeholder
+    cover_icon: A
+    cover_theme: violet
+    empty_state: 线性代数资料待补充
+    sort_order: 20
+""",
+        encoding="utf-8",
+    )
+
+    first = seed_marketplace(settings, manifest)
+    with sqlite3.connect(settings.database_path) as conn:
+        conn.execute("UPDATE marketplace_course_metadata SET updated_at = '2020-01-02 03:04:05'")
+    second = seed_marketplace(settings, manifest)
+
+    assert first["created"] == 2
+    assert first["populated_documents"] == 1
+    assert first["failed"] == []
+    assert second["created"] == 0
+    assert second["skipped"] == 2
+    assert second["populated_documents"] == 0
+    assert second["failed"] == []
+
+    with sqlite3.connect(settings.database_path) as conn:
+        assert conn.execute("SELECT count(*) FROM marketplace_course_metadata").fetchone()[0] == 2
+        assert {
+            row[0]
+            for row in conn.execute("SELECT updated_at FROM marketplace_course_metadata")
+        } == {"2020-01-02 03:04:05"}
+        assert conn.execute("SELECT count(*) FROM published_libraries").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM publication_versions").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM publication_documents").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT count(*) FROM publication_documents WHERE source_document_id = ?",
+            (source_doc_id,),
+        ).fetchone()[0] == 1
+
+    login(client, "demo-c")
+    listed = client.get("/api/marketplace/libraries", params={"page_size": 10})
+    assert listed.status_code == 200
+    items = listed.json()["items"]
+    assert [item["id"] for item in items] == [
+        "marketplace-library-math-analysis-b1",
+        "marketplace-library-linear-algebra-b1",
+    ]
+    math = items[0]
+    empty = items[1]
+    assert math["document_count"] == 1
+    assert math["marketplace"]["demo_kind"] == "real"
+    assert math["marketplace"]["cover_asset"] == "/assets/course-covers/math-analysis-b1.png"
+    assert empty["document_count"] == 0
+    assert empty["marketplace"]["demo_kind"] == "demo-placeholder"
+    assert empty["marketplace"]["cover_asset"] == "/assets/course-covers/linear-algebra-b1.png"
+    assert empty["marketplace"]["empty_state"] == "线性代数资料待补充"
+
+    empty_detail = client.get("/api/marketplace/libraries/marketplace-library-linear-algebra-b1")
+    assert empty_detail.status_code == 200
+    assert empty_detail.json()["documents"] == []
+
+    subscribed_empty = client.post("/api/marketplace/libraries/marketplace-library-linear-algebra-b1/subscribe")
+    assert subscribed_empty.status_code == 200
+    empty_docs = client.get(f"/api/spaces/{subscribed_empty.json()['space_id']}/documents")
+    assert empty_docs.status_code == 200
+    assert empty_docs.json()["total"] == 0
+
+    math_detail = client.get("/api/marketplace/libraries/marketplace-library-math-analysis-b1")
+    assert math_detail.status_code == 200
+    math_document = math_detail.json()["documents"][0]
+    assert math_document["use_in_rag"] is True
+    assert math_document["can_preview"] is True
+    assert math_document["can_download"] is False
+
+
+def test_init_database_adds_cover_asset_to_legacy_marketplace_metadata(tmp_path: Path):
+    settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
+    settings.ensure_directories()
+    with sqlite3.connect(settings.database_path) as conn:
+        conn.execute(
+            """CREATE TABLE marketplace_course_metadata (
+                   library_id TEXT PRIMARY KEY,
+                   slug TEXT NOT NULL UNIQUE,
+                   demo_kind TEXT NOT NULL DEFAULT 'demo-placeholder',
+                   cover_icon TEXT NOT NULL DEFAULT '◇',
+                   cover_theme TEXT NOT NULL DEFAULT 'indigo',
+                   short_description TEXT NOT NULL DEFAULT '',
+                   empty_state TEXT NOT NULL DEFAULT '资料待补充',
+                   sort_order INTEGER NOT NULL DEFAULT 100,
+                   seed_version INTEGER NOT NULL DEFAULT 1,
+                   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+               )"""
+        )
+
+    init_database(settings)
+
+    with sqlite3.connect(settings.database_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(marketplace_course_metadata)")}
+    assert "cover_asset" in columns
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "https://example.com/cover.png",
+        "/assets/course-covers/../secret.png",
+        "/assets/course-covers/not-an-image.svg",
+    ),
+)
+def test_marketplace_cover_asset_rejects_non_local_or_unsafe_paths(value: str):
+    with pytest.raises(ValueError):
+        marketplace_cover_asset({"cover_asset": value}, "safe-slug")

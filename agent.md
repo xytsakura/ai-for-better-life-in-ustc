@@ -28,8 +28,12 @@
 当前方案的关键边界：
 
 - 用户在 Agent Portal 主动选择 Agent；
-- Gateway 根据已选择的 `agent_id` 做确定性代理和治理，不做自然语言意图识别；
-- 平台不设置 Main Agent、Supervisor 或自动任务路由器；
+- Gateway 根据用户最终确认的 `agent_id` 做确定性代理和治理，不自行理解或改写 Agent 业务；
+- Hub 首页提供“普通对话”和“需求分析路由”两个显式模式：普通模式只使用简短平台身份提示并直接流式回答，不读取路由 Skill、功能清单或 Registry；路由模式每轮读取受控清单并与 active Registry 求交集；
+- 两个模式统一使用 SSE：正文通过 `model.output_text.delta` 增量显示，推荐通过 `home.recommendation` 返回，正常请求以 `home.completed` 收口；路由命中时先给受服务端校验的 Agent 入口，未命中或分析失败时回退普通流式回答；
+- 需求分析路由对核心演示需求采用 active Registry 约束下的高置信匹配：期末/考试/具体课程与复习意图组合优先瀚海行，签字/盖章与地点、办理或查询意图组合优先校园公共服务 Agent；模糊表达再交给模型语义路由；
+- Hub 首页对话存档按“演示身份 + 对话模式”写入浏览器本地，切换模式只恢复该模式最近会话，新建对话也只作用于当前模式；当前不做跨设备同步；
+- 路由模型只返回候选 `agent_id` 和理由，后端二次校验，用户点击受控入口后才进入 Agent；平台不设置可执行任务的 Main Agent 或 Supervisor；
 - Agent 之间相互独立，不互相发现、调用、协作或递归委派；
 - 课程资料 Agent 是首个第一方参考实现；
 - 另接一个独立进程的极简第三方 Agent，证明接入新 Agent 时 Gateway 业务路由代码修改为 0 行；
@@ -37,9 +41,11 @@
 - Campus Agent Hub、瀚海行与独立校园助手 Demo 已形成三服务闭环，代码分别位于 `apps/hub`、`apps/course-agent` 和 `apps/demo-agent`；
 - Hub 使用独立 `hub.sqlite3`，不 import 瀚海行业务代码，也不复用其数据库和 Session；
 - Featured 工作台使用 60 秒一次性授权码、`client_secret_basic` 和 `workspace:enter` EdDSA JWT；Gateway 调用使用 `chat:invoke`；
-- 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 两个 Agent 并幂等导入 25 份数学分析资料。
+- 标准一键演示入口为 `deploy/run-demo.ps1`，运行时自动 seed 四个 Agent（含两个 Future Work Demo）并幂等导入 25 份数学分析资料。
+- 瀚海行知识广场使用预生成课程封面池；知识库首次审核发布时按当前使用次数最少、再以知识库 ID 稳定哈希打散的规则分配封面，已有封面不被覆盖，新发布内容不再使用通用菱形占位符。
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
 - 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
+- 本地完整演示是三个进程承载四个逻辑 Agent：Hub `8100`、瀚海行 `8002`、共享 Demo 服务 `8101`；`8101` 同时接受校园助手、评课社区和校园公共服务三个 audience。无 Docker 时统一运行 `deploy/run-demo-local.ps1`，不能只启动 Hub 或只注册一个 Demo audience。
 
 ## 知识库与课程 Agent 约定
 
@@ -90,7 +96,7 @@
 - 文档不得把尚未实现的能力写成现状；Hub 已实现 SQLite 持久限流、大小限制、异步健康轮询和连续失败准入，公开多实例部署仍需评估共享数据库或独立限流基础设施。
 - Hub Ed25519 私钥必须持久化在忽略的运行时文件或 Secret Store 中；不能在每次进程启动时静默生成新身份，否则 Agent 的 JWKS 缓存会导致重启后的短期 401。
 - 固定比赛验收使用 `deploy/verify_demo.py`，至少 10 轮中成功 9 轮；结果只记录状态、耗时和事件数量，不保存问答正文、授权码、JWT 或 Cookie。
-- 本地或服务器首次启动三服务后必须执行 `deploy/bootstrap_demo.py`（或使用包含同等 bootstrap 步骤的标准编排），完成两个 Agent 注册、Contract 检查、审核、健康检查和 Featured 凭据生成；只看到三个健康接口为 200 不能证明 Hub 已经可用。
+- 本地或服务器首次启动三服务后必须执行 `deploy/bootstrap_demo.py`（或使用包含同等 bootstrap 步骤的标准编排），完成四个 Agent 注册、Contract 检查、审核、健康检查和 Featured 凭据生成；只看到三个健康接口为 200 不能证明 Hub 已经可用。
 - 日志、事件和 Manifest 不记录明文密钥、完整私人文件正文或完整私人聊天正文。
 - 平台模型 provider 和 `base_url` 必须受控；不允许普通用户向任意 URL 发送私人资料。
 - `file_ref` 必须由服务端按当前用户和目标 Agent 重新鉴权。
@@ -143,5 +149,6 @@
 
 - Connected Agent 缓存 JWKS 后，如果 Hub 在保留同一 `kid` 的情况下轮换了 Ed25519 密钥，应只在 `InvalidSignatureError` 时清空缓存、重新拉取 JWKS 并重试一次；issuer、audience、scope、有效期和签名校验不得放宽。
 - Hub 统一聊天同一页面只允许一个活动 run；发送期间禁用发送，取消、`RUN_ERROR`、异常 EOF 和身份切换都必须收尾当前占位消息并恢复控件。
+- Hub 首页对话存档不得持久化空的 assistant 占位消息；“正在生成”只能由当前内存会话的 `pending` 状态驱动，刷新、回溯或中断后不能从存档恢复成永久等待状态。
 - 重试按钮必须绑定失败当轮的 Agent 和原问题，点击后先移除旧错误卡片，避免错误卡片与等待气泡累计。
 - 浏览器原生 ES Module 会分别缓存入口和依赖；`app.js` 新增 `hub-core.js` 导出依赖时，两者的 URL 版本必须同步更新，并用真实浏览器检查控制台，防止入口更新但依赖仍命中旧缓存导致整页空白。

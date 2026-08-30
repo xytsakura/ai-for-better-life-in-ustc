@@ -51,6 +51,27 @@
         "pattern": "^[a-z][a-z0-9-]{1,63}$"
       }
     },
+    "model_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": ["agent_managed", "platform_optional", "platform_required"],
+          "default": "agent_managed"
+        },
+        "gateway_contract": {
+          "enum": ["campus-model-gateway-v1"]
+        },
+        "supported_api_styles": {
+          "type": "array",
+          "maxItems": 4,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["responses", "chat_completions"]
+          }
+        }
+      }
+    },
     "data_policy": {
       "type": "object",
       "additionalProperties": false,

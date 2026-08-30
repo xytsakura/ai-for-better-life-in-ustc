@@ -7,6 +7,7 @@ const state = {
   selectedDocumentIds: new Set(),
   settings: {},
   modelName: '',
+  modelSource: 'agent_fallback',
   modelCatalog: { models: [], discoverySource: null, cached: false },
   currentModel: '',
   currentReasoningEffort: null,
@@ -440,6 +441,7 @@ function normalizeModelCatalog(payload = {}) {
     : [];
   return {
     models,
+    defaultModelId: String(payload.default_model_id || '').trim(),
     discoverySource: payload.discovery_source || null,
     cached: Boolean(payload.cached),
   };
@@ -1168,8 +1170,11 @@ function applyUsageFromResult(result) {
   if (result?.model) {
     state.currentModel = result.model;
     state.modelName = result.model;
-    updateHomeModelLabel();
   }
+  if (result?.model_source) {
+    state.modelSource = result.model_source === 'platform' ? 'platform' : 'agent_fallback';
+  }
+  updateHomeModelLabel();
   state.currentUsage = result?.usage ? normalizeUsage(result.usage) : null;
   state.usagePending = false;
   renderContextMeter();
@@ -2172,6 +2177,7 @@ async function login(userId) {
     state.selectedDocumentIds.clear();
     state.settings = {};
     state.modelName = '';
+    state.modelSource = 'agent_fallback';
     state.modelCatalog = { models: [], discoverySource: null, cached: false };
     state.currentModel = '';
     state.currentReasoningEffort = null;
@@ -2227,6 +2233,7 @@ async function logout() {
   state.selectedDocumentIds.clear();
   state.settings = {};
   state.modelName = '';
+  state.modelSource = 'agent_fallback';
   state.modelCatalog = { models: [], discoverySource: null, cached: false };
   state.currentModel = '';
   state.currentReasoningEffort = null;
@@ -2529,6 +2536,62 @@ function marketplaceLibraryById(libraryId) {
     || null;
 }
 
+function marketplaceMetadata(library) {
+  return (library && typeof library.marketplace === 'object' && library.marketplace) ? library.marketplace : {};
+}
+
+function marketplaceDemoLabel(library) {
+  const metadata = marketplaceMetadata(library);
+  if (metadata.demo_kind === 'real' && Number(library?.document_count || 0) > 0) return '真实可检索';
+  return '演示入口 · 资料待补充';
+}
+
+function marketplaceEmptyState(library) {
+  const metadata = marketplaceMetadata(library);
+  return metadata.empty_state || '资料待补充；当前课程仅展示未来可接入的知识库入口。';
+}
+
+function marketplaceCoverTheme(library) {
+  const metadata = marketplaceMetadata(library);
+  return String(metadata.cover_theme || 'indigo').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'indigo';
+}
+
+function marketplaceCoverAsset(library) {
+  const metadata = marketplaceMetadata(library);
+  const asset = String(metadata.cover_asset || '').trim().replace(/\\/g, '/');
+  if (!asset) return '';
+  if (!asset.startsWith('/assets/course-covers/') || !asset.endsWith('.png') || asset.includes('..')) return '';
+  return asset;
+}
+
+function marketplaceMaterialLabel(library) {
+  const documentCount = Number(library?.document_count || 0);
+  if (documentCount > 0) return `${documentCount} 份可检索资料`;
+  return '资料待补充';
+}
+
+function marketplaceCoverMarkup(library, className = 'marketplace-course-cover') {
+  const metadata = marketplaceMetadata(library);
+  const coverTheme = marketplaceCoverTheme(library);
+  const coverIcon = metadata.cover_icon || '◇';
+  const coverAsset = marketplaceCoverAsset(library);
+  return `
+    <span class="${className} marketplace-course-cover-${escapeHtml(coverTheme)} ${coverAsset ? 'has-asset' : ''}" aria-hidden="true">
+      ${coverAsset ? `<img src="${escapeHtml(coverAsset)}" alt="" loading="lazy" decoding="async">` : ''}
+      <span>${escapeHtml(coverIcon)}</span>
+    </span>
+  `;
+}
+
+function bindMarketplaceCoverFallback(root = document) {
+  root.querySelectorAll('.marketplace-course-cover img, .marketplace-detail-cover img').forEach(image => {
+    image.addEventListener('error', () => {
+      image.hidden = true;
+      image.closest('.marketplace-course-cover, .marketplace-detail-cover')?.classList.remove('has-asset');
+    }, { once: true });
+  });
+}
+
 function marketplaceDocumentPolicies(document) {
   const policies = [];
   policies.push(document.use_in_rag === false ? '不参与问答' : '可用于问答');
@@ -2588,6 +2651,7 @@ function renderMarketplaceShell() {
 function renderMarketplace() {
   renderMarketplaceShell();
   renderMarketplaceFilters();
+  renderMarketplaceOverview();
   renderMarketplaceLibraryList();
   renderMarketplaceLibraryDetail();
   renderMarketplaceMine();
@@ -2610,6 +2674,38 @@ function renderMarketplaceFilters() {
   if (count) count.textContent = `${state.marketplace.libraries.length} 个结果`;
 }
 
+function renderMarketplaceOverview() {
+  const overview = $('#marketplace-overview');
+  if (!overview) return;
+  const libraries = state.marketplace.libraries;
+  const courseCount = new Set(libraries.map(item => item.course).filter(Boolean)).size;
+  const realCount = libraries.filter(item => marketplaceMetadata(item).demo_kind === 'real' && Number(item.document_count || 0) > 0).length;
+  const documentCount = libraries.reduce((sum, item) => sum + Number(item.document_count || 0), 0);
+  const updatedValues = libraries
+    .map(item => item.updated_at)
+    .filter(Boolean)
+    .sort();
+  const latestUpdated = updatedValues[updatedValues.length - 1];
+  overview.innerHTML = `
+    <div class="marketplace-overview-card">
+      <strong>${courseCount}</strong>
+      <span>覆盖课程</span>
+    </div>
+    <div class="marketplace-overview-card">
+      <strong>${realCount}</strong>
+      <span>真实可检索库</span>
+    </div>
+    <div class="marketplace-overview-card">
+      <strong>${documentCount}</strong>
+      <span>公开资料</span>
+    </div>
+    <div class="marketplace-overview-card marketplace-overview-card--wide">
+      <strong>${latestUpdated ? escapeHtml(marketplaceDate(latestUpdated)) : '待导入'}</strong>
+      <span>最近更新</span>
+    </div>
+  `;
+}
+
 function renderMarketplaceLibraryList() {
   const list = $('#marketplace-library-list');
   if (!list) return;
@@ -2620,12 +2716,27 @@ function renderMarketplaceLibraryList() {
   list.innerHTML = state.marketplace.libraries.length ? state.marketplace.libraries.map(library => {
     const active = String(state.marketplace.selectedLibraryId) === String(library.id);
     const tags = normalizeTags(library.tags);
+    const metadata = marketplaceMetadata(library);
+    const docCount = Number(library.document_count || 0);
+    const statusLabel = marketplaceDemoLabel(library);
+    const shortDescription = metadata.short_description || library.description || '课程知识库入口';
+    const updatedAt = marketplaceDate(library.updated_at);
     return `
-      <button class="marketplace-library-item ${active ? 'active' : ''}" data-marketplace-library="${escapeHtml(library.id)}" type="button">
-        <span class="marketplace-item-title">${escapeHtml(library.name)}</span>
-        <span class="marketplace-item-meta">${escapeHtml(library.course || '未标注课程')} · ${Number(library.document_count || 0)} 份资料 · ${Number(library.subscriber_count || 0)} 人订阅</span>
-        <span class="marketplace-item-desc">${escapeHtml(library.description || '暂无简介')}</span>
-        <span class="marketplace-tag-row">${tags.slice(0, 4).map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</span>
+      <button class="marketplace-library-item marketplace-course-card ${active ? 'active' : ''}" data-marketplace-library="${escapeHtml(library.id)}" type="button">
+        ${marketplaceCoverMarkup(library)}
+        <span class="marketplace-course-body">
+          <span class="marketplace-course-kicker">${escapeHtml(library.course || '未标注课程')}</span>
+          <span class="marketplace-item-title">${escapeHtml(library.name)}</span>
+          <span class="marketplace-item-desc">${escapeHtml(shortDescription)}</span>
+          <span class="marketplace-item-meta">
+            <span>${escapeHtml(marketplaceMaterialLabel(library))}</span>
+            <span>${Number(library.subscriber_count || 0)} 人订阅</span>
+            ${updatedAt ? `<span>更新 ${escapeHtml(updatedAt)}</span>` : ''}
+            <span class="marketplace-demo-badge ${docCount > 0 ? 'ready' : ''}">${escapeHtml(statusLabel)}</span>
+          </span>
+          <span class="marketplace-tag-row">${tags.slice(0, 4).map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</span>
+          <span class="marketplace-card-action">${active ? '正在查看' : '查看详情'}</span>
+        </span>
       </button>
     `;
   }).join('') : `
@@ -2637,6 +2748,7 @@ function renderMarketplaceLibraryList() {
   $$('[data-marketplace-library]').forEach(button => {
     button.addEventListener('click', () => loadMarketplaceLibraryDetail(button.dataset.marketplaceLibrary).catch(error => toast(error.message, 'error')));
   });
+  bindMarketplaceCoverFallback(list);
 }
 
 function renderMarketplaceLibraryDetail() {
@@ -2660,11 +2772,14 @@ function renderMarketplaceLibraryDetail() {
   const canReviewDocuments = canAdminManage || library.author_id === state.user?.id;
   const isPublished = library.status === 'published';
   const canWithdraw = canAdminManage || library.author_id === state.user?.id;
+  const demoLabel = marketplaceDemoLabel(library);
+  const updatedAt = marketplaceDate(library.updated_at);
   detail.innerHTML = `
     <article class="marketplace-detail">
       <div class="marketplace-detail-header">
+        ${marketplaceCoverMarkup(library, 'marketplace-detail-cover')}
         <div>
-          <div class="content-subtitle">${escapeHtml(library.course || '公开课程')}</div>
+          <div class="content-subtitle">${escapeHtml(library.course || '公开课程')} · ${escapeHtml(demoLabel)}</div>
           <h2>${escapeHtml(library.name)}</h2>
           <p>${escapeHtml(library.description || '暂无简介')}</p>
         </div>
@@ -2672,8 +2787,9 @@ function renderMarketplaceLibraryDetail() {
       </div>
       <div class="marketplace-detail-meta">
         <span>作者：${escapeHtml(library.author_name || library.author_id || '未知')}</span>
-        <span>${Number(library.document_count || documents.length || 0)} 份资料</span>
+        <span>${escapeHtml(marketplaceMaterialLabel(library))}</span>
         <span>${Number(library.subscriber_count || 0)} 人订阅</span>
+        ${updatedAt ? `<span>最近更新：${escapeHtml(updatedAt)}</span>` : ''}
         <span>状态：${escapeHtml(publicationStatusLabel(library.status))}</span>
       </div>
       <div class="marketplace-tag-row">${tags.map(tag => `<span class="marketplace-tag">${escapeHtml(tag)}</span>`).join('')}</div>
@@ -2704,7 +2820,11 @@ function renderMarketplaceLibraryDetail() {
               ${((subscribed && document.can_download) || canReviewDocuments) ? `<a class="button button-secondary" href="${referenceViewerDocumentUrl(document.document_id)}" target="_blank" rel="noopener">下载</a>` : ''}
             </div>
           </div>
-        `).join('') : '<div class="muted">后端暂未返回资料清单。</div>'}
+        `).join('') : `<div class="marketplace-empty-course">
+          <div class="empty-icon">◇</div>
+          <p>${escapeHtml(marketplaceEmptyState(library))}</p>
+          <span>这门课目前只作为课程集市演示入口，不会参与 RAG 检索，也不会显示虚假的资料数量。</span>
+        </div>`}
       </section>
       ${canAdminManage && versions.length ? `
         <section class="marketplace-documents">
@@ -2731,6 +2851,7 @@ function renderMarketplaceLibraryDetail() {
   detail.querySelectorAll('[data-marketplace-rollback-version]').forEach(button => {
     button.addEventListener('click', () => adminRollbackPublication(library.id, button.dataset.marketplaceRollbackVersion).catch(error => toast(error.message, 'error')));
   });
+  bindMarketplaceCoverFallback(detail);
 }
 
 function renderMarketplaceMine() {
@@ -4169,6 +4290,7 @@ function updateHomeModeLabel() {
 
 function updateHomeModelLabel() {
   state.modelName = state.currentModel || state.settings.llm_model || state.modelName || '';
+  state.modelSource = state.settings.model_runtime?.source || state.modelSource || 'agent_fallback';
   renderModelControls();
   renderContextMeter();
 }
@@ -4187,17 +4309,12 @@ function modelSelectOptions(selectedModel) {
 function renderModelControls() {
   const selectedModel = state.currentModel || '';
   const homeModel = $('#home-model-input');
-  const homeModelList = $('#home-model-list');
   const settingModel = $('#setting-model');
   if (homeModel) {
+    homeModel.innerHTML = modelSelectOptions(selectedModel);
     homeModel.value = selectedModel;
     homeModel.disabled = state.isQuerying;
-    homeModel.title = selectedModel || '请填写或选择模型';
-    homeModel.placeholder = '输入模型名，如 gpt-5';
-  }
-  if (homeModelList) {
-    const datalist = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
-    homeModelList.innerHTML = datalist;
+    homeModel.title = selectedModel || '请选择模型';
   }
   if (settingModel) {
     const defaultModel = state.settings.llm_model || selectedModel;
@@ -4208,6 +4325,17 @@ function renderModelControls() {
   const settingModelList = $('#setting-model-list');
   if (settingModelList) {
     settingModelList.innerHTML = chatEligibleModels().map(model => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.display_name)}</option>`).join('');
+  }
+  const sourceBadge = $('#home-model-source');
+  if (sourceBadge) {
+    const runtime = state.settings.model_runtime || {};
+    const source = state.modelSource || runtime.source || 'agent_fallback';
+    const platform = source === 'platform';
+    sourceBadge.textContent = platform ? '平台配置' : 'Agent 本地回退';
+    sourceBadge.classList.toggle('platform', platform);
+    sourceBadge.title = platform
+      ? '本轮优先通过 Hub Model Gateway 使用平台模型配置；瀚海行不会接触 API Key'
+      : '当前使用瀚海行服务端本地模型配置；独立运行或平台不可用时使用';
   }
   renderReasoningControl();
   renderModelCatalogList();
@@ -4306,9 +4434,12 @@ function renderModelCatalogList() {
 
 function applyModelCatalog(payload) {
   state.modelCatalog = normalizeModelCatalog(payload);
-  // 去掉默认模型：用户需自行填写或选择模型名
-  if (!state.currentModel) {
-    state.currentModel = state.settings.llm_model || '';
+  const eligible = chatEligibleModels();
+  if (!state.currentModel || !eligible.some(model => model.id === state.currentModel)) {
+    state.currentModel = state.modelCatalog.defaultModelId
+      || state.settings.llm_model
+      || eligible[0]?.id
+      || '';
   }
   if (!state.currentReasoningEffort) {
     state.currentReasoningEffort = defaultReasoningForModel();
@@ -5920,6 +6051,7 @@ async function loadSettings() {
     const settings = await api('/api/settings');
     if (!authContextMatches(authContext)) return;
     state.settings = settings;
+    state.modelSource = settings.model_runtime?.source || 'agent_fallback';
     state.modelName = state.currentModel || state.settings.llm_model || '';
     if (!state.currentModel) {
       state.currentModel = state.settings.llm_model || '';
@@ -6079,7 +6211,7 @@ function initEventListeners() {
       handleHomeSubmit(e);
     }
   });
-  $('#home-model-input').addEventListener('input', event => setCurrentModel(event.currentTarget.value.trim()));
+  $('#home-model-input').addEventListener('change', event => setCurrentModel(event.currentTarget.value.trim()));
   $('#home-reasoning-effort').addEventListener('change', event => setCurrentReasoningEffort(event.currentTarget.value || null));
   $('#document-reader-close').addEventListener('click', closeReferenceViewer);
   $('#document-reader-prev').addEventListener('click', () => changeReferenceViewerPage(-1));

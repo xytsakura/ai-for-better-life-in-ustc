@@ -6,10 +6,15 @@ import {
   buildRunAgentInput,
   errorFromAguiEvent,
   filterAgents,
+  getAgentPrimaryAction,
   getAgentPrimaryHref,
   getAgentSecondaryHref,
+  HUB_API,
   normalizeAccessLevel,
   normalizeAgent,
+  normalizeModelProfile,
+  normalizeModelProfilesPayload,
+  normalizeProfileModels,
   parseSseBuffer,
   renderMarkdownSafe,
   safeUrl,
@@ -57,16 +62,24 @@ test('developer manifest validation rejects self-declared featured and missing e
   assert.match(connected.errors.join('\n'), /health_endpoint/);
 });
 
-test('agent CTA contract distinguishes link launch from connected chat', () => {
+test('agent CTA contract distinguishes link launch, connected chat and featured workspace', () => {
   const link = normalizeAgent({ id: 'map', integration: { mode: 'link', launch_url: 'https://example.edu.cn/' } });
   const connected = normalizeAgent({ id: 'chat', integration: { mode: 'connected' } });
   const featured = normalizeAgent({ id: 'full', featured: true, integration: { mode: 'connected' } });
 
   assert.equal(ACCESS_LEVELS[normalizeAccessLevel(link)].primary, '打开应用');
+  assert.deepEqual(getAgentPrimaryAction(link), {
+    kind: 'launch',
+    href: '/api/agents/map/launch',
+    label: '打开应用',
+    external: true,
+  });
+  assert.equal(getAgentPrimaryAction(connected).kind, 'chat');
+  assert.equal(getAgentPrimaryAction(featured).kind, 'workspace');
   assert.equal(getAgentPrimaryHref(link), '/api/agents/map/launch');
   assert.equal(getAgentPrimaryHref(connected), '/hub/agents/chat/chat');
-  assert.equal(getAgentPrimaryHref(featured), '/hub/agents/full/chat');
-  assert.equal(getAgentSecondaryHref(featured), '');
+  assert.equal(getAgentPrimaryHref(featured), '');
+  assert.equal(getAgentSecondaryHref(featured), '/hub/agents/full');
 });
 
 test('safe markdown renderer escapes html, strips javascript links, and preserves math fallback', () => {
@@ -106,6 +119,23 @@ test('SSE parser reads data JSON frames and reports protocol errors safely', () 
   assert.equal(parsed.events[1].delta, '你好');
   assert.equal(parsed.events[2].type, 'RUN_ERROR');
   assert.equal(parsed.rest, 'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"partial"}');
+});
+
+test('SSE parser preserves unified assistant recommendation and completion events', () => {
+  const parsed = parseSseBuffer([
+    'event: home.recommendation',
+    'data: {"type":"home.recommendation","recommendation":{"agent_id":"hanhai-course-agent"}}',
+    '',
+    'event: home.completed',
+    'data: {"type":"home.completed"}',
+    '',
+    '',
+  ].join('\n'));
+
+  assert.equal(parsed.events[0].type, 'home.recommendation');
+  assert.equal(parsed.events[0].recommendation.agent_id, 'hanhai-course-agent');
+  assert.equal(parsed.events[1].type, 'home.completed');
+  assert.equal(parsed.rest, '');
 });
 
 test('AG-UI run errors preserve a safe code for the chat failure state', () => {
@@ -159,4 +189,99 @@ test('safeUrl blocks active content schemes and accepts http(s)/relative URLs', 
   assert.equal(safeUrl('data:text/html,<script>'), '');
   assert.equal(safeUrl('/hub'), 'https://hub.example.edu.cn/hub');
   assert.equal(safeUrl('https://example.edu.cn/'), 'https://example.edu.cn/');
+});
+
+test('model profile API constants use the approved T4 contract paths', () => {
+  assert.equal(HUB_API.modelProfiles, '/api/model-profiles');
+  assert.equal(HUB_API.modelProfile('p/1'), '/api/model-profiles/p%2F1');
+  assert.equal(HUB_API.modelProfileTest('p1'), '/api/model-profiles/p1/test');
+  assert.equal(HUB_API.modelProfileDiscover('p1'), '/api/model-profiles/p1/discover');
+  assert.equal(HUB_API.modelBindings, '/api/model-bindings');
+  assert.equal(HUB_API.modelBindingGlobal, '/api/model-bindings/global');
+  assert.equal(HUB_API.modelBindingAgent('hanhai-course-agent'), '/api/model-bindings/agents/hanhai-course-agent');
+  assert.equal(HUB_API.homeAssistant, '/api/home-assistant/chat');
+});
+
+test('normalizes model profiles from wrapped payloads without exposing raw keys', () => {
+  const normalized = normalizeModelProfilesPayload({
+    data: {
+      profiles: [{
+        profile_id: 'p1',
+        label: 'GPT 主力',
+        provider: 'openai',
+        apiStyle: 'responses',
+        baseUrl: 'https://api.example/v1',
+        hasApiKey: true,
+        apiKeyFingerprint: 'fp_1234',
+        models: { data: [{ id: 'gpt-5.6', displayName: 'GPT 5.6' }] },
+        default_model: 'gpt-5.6',
+      }],
+      bindings: [{ scope_type: 'global', profile_id: 'p1', model_id: 'gpt-5.6' }],
+    },
+  });
+
+  assert.equal(normalized.profiles.length, 1);
+  assert.equal(normalized.profiles[0].id, 'p1');
+  assert.equal(normalized.profiles[0].name, 'GPT 主力');
+  assert.equal(normalized.profiles[0].base_url, 'https://api.example/v1');
+  assert.equal(normalized.profiles[0].has_api_key, true);
+  assert.equal(normalized.profiles[0].api_key_fingerprint, 'fp_1234');
+  assert.equal(normalized.profiles[0].models[0].id, 'gpt-5.6');
+  assert.equal(normalized.bindings.global.profile_id, 'p1');
+});
+
+test('normalizes model bindings from object and model lists from strings', () => {
+  const models = normalizeProfileModels(['deepseek-chat', { model_id: 'deepseek-reasoner', chatEligible: false }]);
+  assert.deepEqual(models.map((model) => model.id), ['deepseek-chat', 'deepseek-reasoner']);
+  assert.equal(models[1].chat_eligible, false);
+
+  const normalized = normalizeModelProfilesPayload({
+    profiles: [{ id: 'p2', name: 'DeepSeek', models }],
+    bindings: {
+      global: { profileId: 'p2', modelId: 'deepseek-chat' },
+      agents: {
+        'hanhai-course-agent': { profileId: 'p2', modelId: 'deepseek-reasoner' },
+      },
+    },
+  });
+
+  assert.equal(normalized.bindings.global.profile_id, 'p2');
+  assert.equal(normalized.bindings.agents['hanhai-course-agent'].model_id, 'deepseek-reasoner');
+});
+
+test('normalizes nested bindings returned by the Hub backend', () => {
+  const normalized = normalizeModelProfilesPayload({
+    profiles: [{ id: 'p1', name: 'GPT', models: ['gpt-5.6-sol'] }],
+    bindings: {
+      global: {
+        scope_type: 'global',
+        scope_id: 'global',
+        binding: { profile_id: 'p1', model_id: 'gpt-5.6-sol' },
+      },
+      agents: [{
+        scope_type: 'agent',
+        scope_id: 'hanhai-course-agent',
+        agent_id: 'hanhai-course-agent',
+        binding: { profile_id: 'p1', model_id: 'gpt-5.6-sol' },
+      }],
+    },
+  });
+
+  assert.equal(normalized.bindings.global.profile_id, 'p1');
+  assert.equal(normalized.bindings.global.model_id, 'gpt-5.6-sol');
+  assert.equal(normalized.bindings.agents['hanhai-course-agent'].profile_id, 'p1');
+  assert.equal(normalized.bindings.agents['hanhai-course-agent'].model_id, 'gpt-5.6-sol');
+});
+
+test('model profile normalization never creates an api_key field for display', () => {
+  const profile = normalizeModelProfile({
+    id: 'p3',
+    name: 'Masked',
+    api_key_mask: 'sk-••••1234',
+    api_key: 'sk-raw-secret-should-not-be-used-by-ui',
+  });
+  assert.equal(profile.api_key_mask, 'sk-••••1234');
+  assert.equal(Object.hasOwn(profile, 'api_key'), false);
+  assert.equal(Object.hasOwn(profile, 'apiKey'), false);
+  assert.equal(profile.has_api_key, true);
 });

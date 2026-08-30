@@ -8,14 +8,12 @@
       name="description"
       content="面向校园场景的 Agent 应用广场、统一聊天、开发者接入和管理审核工作台。"
     />
+    <link rel="icon" href="/assets/ustc-emblem.jpg" type="image/jpeg" />
     <script src="/hub-theme.js?v=20260808-1"></script>
     <script>
       document.documentElement.dataset.theme = globalThis.HubTheme.readFromGlobal();
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Caveat:wght@500;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260807-28" />
+    <link rel="stylesheet" href="/styles.css?v=20260822-8" />
   </head>
   <body>
     <div class="splash" aria-hidden="true">
@@ -40,10 +38,19 @@
         <nav class="hub-nav">
           <a href="/hub" data-link data-nav="portal"><span aria-hidden="true">⌂</span>主页</a>
           <a href="/hub/agents" data-link data-nav="directory"><span aria-hidden="true">✦</span>Agent 广场</a>
-          <a href="/hub/submit" data-link data-nav="submit"><span aria-hidden="true">＋</span>开发者接入</a>
+          <a href="/hub/submit" data-link data-nav="submit" data-developer-only><span aria-hidden="true">＋</span>开发者接入</a>
+          <a href="/hub/submissions" data-link data-nav="submissions" data-developer-only><span aria-hidden="true">▣</span>我的提交</a>
           <a href="/hub/admin" data-link data-nav="admin" data-admin-only><span aria-hidden="true">◇</span>管理审核</a>
           <a href="/hub/settings" data-link data-nav="settings"><span aria-hidden="true">✎</span>模型配置</a>
         </nav>
+
+        <section class="hub-conversations" aria-label="对话存档">
+          <div class="hub-conversations__head">
+            <span>对话存档 <small id="conversationArchiveMode">普通对话</small></span>
+            <button type="button" class="hub-conversations__new" data-new-conversation aria-label="新建对话" title="新建对话">＋</button>
+          </div>
+          <div id="conversationArchiveList" class="hub-conversations__list"></div>
+        </section>
 
         <div class="hub-sidebar__foot">
           <button id="themeToggle" class="ghost-button" type="button">切换主题</button>
@@ -79,6 +86,6 @@
     </template>
 
     <script src="/splash.js?v=20260807-2" defer></script>
-    <script type="module" src="/app.js?v=20260809-1"></script>
+    <script type="module" src="/app.js?v=20260822-8"></script>
   </body>
 </html>

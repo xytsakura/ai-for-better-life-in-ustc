@@ -248,6 +248,54 @@ def list_agents(
     return result
 
 
+def list_submitted_agents(
+    conn: sqlite3.Connection,
+    *,
+    submitted_by: str | None = None,
+) -> list[dict[str, Any]]:
+    if submitted_by:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT agent_id
+            FROM hub_agent_versions
+            WHERE submitted_by = ?
+            ORDER BY updated_at DESC, rowid DESC
+            """,
+            (submitted_by,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT agent_id
+            FROM hub_agent_versions
+            ORDER BY updated_at DESC, rowid DESC
+            """
+        ).fetchall()
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        record = get_agent(conn, row["agent_id"], include_private=True)
+        if submitted_by:
+            visible_versions = [
+                version for version in record["versions"] if version.get("submitted_by") == submitted_by
+            ]
+            if not visible_versions:
+                continue
+            visible_ids = {version["version_id"] for version in visible_versions}
+            record["versions"] = visible_versions
+            if record.get("active_version") and record["active_version"]["version_id"] not in visible_ids:
+                record["active_version"] = None
+                record["latest_health"] = None
+                record["active_version_id"] = None
+                record["previous_active_version_id"] = None
+                record["featured"] = False
+            record["submitted_versions_count"] = len(visible_versions)
+        else:
+            record["submitted_versions_count"] = len(record.get("versions", []))
+        result.append(record)
+    return result
+
+
 def get_active_version(conn: sqlite3.Connection, agent_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     agent = conn.execute("SELECT * FROM hub_agents WHERE agent_id = ?", (agent_id,)).fetchone()
     if agent is None:

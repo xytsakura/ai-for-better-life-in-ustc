@@ -507,10 +507,15 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     app_script = client.get("/app.js")
     assert app_script.status_code == 200
     assert "from './hub-core.js?v=" in app_script.text
-    reset_handler = app_script.text.split("[data-reset-model]", 1)[1].split("});", 1)[0]
-    assert reset_handler.index("clearSettings();") < reset_handler.index("renderSettings();")
-    assert "form.reset();" not in reset_handler
+    assert "data-model-settings" in app_script.text
+    assert 'id="portalModelStatus"' in app_script.text
+    assert "paintPortalModelStatus" in app_script.text
+    assert "API Key 已安全保存" in app_script.text
+    assert "管理模型配置" in app_script.text
+    assert 'name="api_key" type="password" value=""' in app_script.text
+    assert "clearSettings();" in app_script.text
     assert client.get("/hub-core.js").status_code == 200
+    assert "/api/model-profiles" in client.get("/hub-core.js").text
     assert client.get("/hub-theme.js").status_code == 200
     assert client.get("/starfield.js").status_code == 200
     assert client.get("/assets/ustc-emblem.jpg").status_code == 200
@@ -1035,3 +1040,154 @@ def test_identity_signing_key_survives_hub_restart(tmp_path: Path) -> None:
     )
     assert key_file.is_file()
     assert first.jwks() == second.jwks()
+
+
+def external_link_manifest(*, agent_id: str, version: str = "1.0.0") -> dict[str, Any]:
+    data = manifest(agent_id=agent_id, version=version, mode="link")
+    data["integration"]["launch_url"] = f"https://example.com/{agent_id}"
+    return data
+
+
+def test_t3_registry_and_developer_submission_permissions(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+
+    for headers in ({}, {"X-Hub-User": "demo-c"}):
+        denied = client.post(
+            "/api/registry/agents",
+            json=external_link_manifest(agent_id="denied-agent"),
+            headers=headers,
+        )
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["error"] == "developer_or_admin_required"
+
+        denied_submissions = client.get("/api/developer/submissions", headers=headers)
+        assert denied_submissions.status_code == 403
+        assert denied_submissions.json()["detail"]["error"] == "developer_or_admin_required"
+
+    developer_submission = client.post(
+        "/api/registry/agents",
+        json=external_link_manifest(agent_id="developer-agent"),
+        headers={"X-Hub-User": "demo-b"},
+    )
+    assert developer_submission.status_code == 201, developer_submission.text
+    developer_version = developer_submission.json()["versions"][0]
+    assert developer_version["submitted_by"] == "demo-b"
+
+    admin_submission = client.post(
+        "/api/registry/agents",
+        json={"manifest": manifest(agent_id="admin-agent"), "trust_level": "first_party_internal"},
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert admin_submission.status_code == 201, admin_submission.text
+    assert admin_submission.json()["versions"][0]["submitted_by"] == "demo-a"
+
+    admin_replacement = client.post(
+        "/api/registry/agents",
+        json={
+            "manifest": manifest(agent_id="developer-agent", version="1.1.0"),
+            "trust_level": "first_party_internal",
+        },
+        headers={"X-Hub-User": "demo-a"},
+    )
+    assert admin_replacement.status_code == 201, admin_replacement.text
+    approve(client, "developer-agent", admin_replacement.json()["versions"][0]["version_id"])
+
+    developer_view = client.get(
+        "/api/developer/submissions",
+        headers={"X-Hub-User": "demo-b"},
+    )
+    assert developer_view.status_code == 200
+    developer_agents = developer_view.json()["agents"]
+    assert [agent["agent_id"] for agent in developer_agents] == ["developer-agent"]
+    assert all(
+        version["submitted_by"] == "demo-b"
+        for agent in developer_agents
+        for version in agent["versions"]
+    )
+    assert developer_agents[0]["active_version"] is None
+    assert developer_agents[0]["active_version_id"] is None
+
+    admin_view = client.get("/api/developer/submissions", headers={"X-Hub-User": "demo-a"})
+    assert admin_view.status_code == 200
+    assert {agent["agent_id"] for agent in admin_view.json()["agents"]} == {
+        "developer-agent",
+        "admin-agent",
+    }
+
+
+def test_t3_admin_endpoint_permission_matrix(tmp_path: Path) -> None:
+    def prepare(endpoint_name: str) -> tuple[TestClient, str, str, str | None]:
+        client = make_client(tmp_path / endpoint_name)
+        submitted = submit(client, manifest(mode="connected", protocol="simple-chat", version="1.0.0"))
+        first_version = submitted["versions"][0]["version_id"]
+        credential_id: str | None = None
+
+        if endpoint_name in {"detail", "review", "checks", "audit"}:
+            return client, "demo-agent", first_version, credential_id
+
+        approve(client, "demo-agent", first_version)
+
+        if endpoint_name == "restore":
+            suspended = client.post(
+                "/api/admin/agents/demo-agent/suspend",
+                json={"reason": "prepare restore"},
+                headers={"X-Hub-User": "demo-a"},
+            )
+            assert suspended.status_code == 200
+
+        if endpoint_name == "rollback":
+            second = submit(client, manifest(mode="connected", protocol="simple-chat", version="1.1.0"))
+            approve(client, "demo-agent", second["versions"][0]["version_id"])
+
+        if endpoint_name == "credential_status":
+            credential = client.post(
+                "/api/admin/agents/demo-agent/credentials",
+                headers={"X-Hub-User": "demo-a"},
+            )
+            assert credential.status_code == 201
+            credential_id = credential.json()["credential_id"]
+
+        return client, "demo-agent", first_version, credential_id
+
+    cases = {
+        "list": ("GET", "/api/admin/agents", None),
+        "detail": ("GET", "/api/admin/agents/{agent_id}", None),
+        "review": (
+            "POST",
+            "/api/admin/agents/{agent_id}/versions/{version_id}/review",
+            {"decision": "approved", "notes": "t3 matrix"},
+        ),
+        "checks": ("POST", "/api/admin/agents/{agent_id}/versions/{version_id}/checks", {}),
+        "suspend": ("POST", "/api/admin/agents/{agent_id}/suspend", {"reason": "t3 matrix"}),
+        "restore": ("POST", "/api/admin/agents/{agent_id}/restore", {"reason": "t3 matrix"}),
+        "deprecate": ("POST", "/api/admin/agents/{agent_id}/deprecate", {"reason": "t3 matrix"}),
+        "rollback": ("POST", "/api/admin/agents/{agent_id}/rollback", {"version_id": None, "reason": "t3 matrix"}),
+        "credentials": ("POST", "/api/admin/agents/{agent_id}/credentials", None),
+        "credential_status": (
+            "POST",
+            "/api/admin/agents/{agent_id}/credentials/{credential_id}/status",
+            {"status": "revoked", "reason": "t3 matrix"},
+        ),
+        "health": ("POST", "/api/agents/{agent_id}/health/check", None),
+        "audit": ("GET", "/api/admin/audit", None),
+    }
+
+    for name, (method, template, body) in cases.items():
+        client, agent_id, version_id, credential_id = prepare(name)
+        path = template.format(
+            agent_id=agent_id,
+            version_id=version_id,
+            credential_id=credential_id or "missing-credential",
+        )
+        for headers in ({}, {"X-Hub-User": "demo-c"}, {"X-Hub-User": "demo-b"}):
+            response = client.request(method, path, json=body, headers=headers)
+            assert response.status_code == 403, (name, headers, response.status_code, response.text)
+            assert response.json()["detail"]["error"] == "admin_required"
+
+        admin_response = client.request(
+            method,
+            path,
+            json=body,
+            headers={"X-Hub-User": "demo-a"},
+        )
+        assert admin_response.status_code < 400, (name, admin_response.status_code, admin_response.text)

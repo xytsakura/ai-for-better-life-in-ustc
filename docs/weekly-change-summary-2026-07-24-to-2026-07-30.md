@@ -1,4 +1,4 @@
-# 瀚海行agent 本周改动完整汇总
+# 瀚海行Agent 本周改动完整汇总
 
 > 统计区间：2026-07-24 00:00 至 2026-07-30 23:59，时区为 Asia/Shanghai
 > 生成日期：2026-07-30
@@ -50,7 +50,7 @@
 13. 统一两个角色待机、思考、挥手和看书时的视觉尺寸。
 14. 让气泡根据左右空间自动选边，避免遮挡人物。
 15. 使用上传的 `_AI_.png` 生成产品 Logo，替换原有可见“107”标志。
-16. 将产品名统一为“瀚海行agent”，保留标语“心游文瀚海，志上理云天”。
+16. 将产品名统一为“瀚海行Agent”，保留标语“心游文瀚海，志上理云天”。
 17. 将左侧副标题改为队名“AI for better life in ustc”。
 18. 缩小虚拟形象文本框和字体，加入人物缩放、日程查询、天气查询、文献推荐、考试信息，以及相应的功能开关和文献方向偏好。
 
@@ -307,7 +307,7 @@
   - 左侧品牌区；
   - 首页主视觉；
   - 虚拟形象独立预览页。
-- 产品名统一为“瀚海行agent”。
+- 产品名统一为“瀚海行Agent”。
 - 左侧品牌副标题统一为队名“AI for better life in ustc”。
 - 首页中央保留“心游文瀚海，志上理云天”。
 - 页面标题、输入框提示、关于页、虚拟形象无障碍名称、FastAPI/OpenAPI 标题和 smoke test 断言均已同步。
@@ -402,7 +402,7 @@ Smoke test 当前确认：首页、JavaScript、CSS、KaTeX、SQLite、FTS5、�
 | `apps/course-agent/course_agent/web/app.js` | `+2503/-47` | 主题、日程、个人信息、头像裁剪、双形象、拖动、缩放、快捷查询、用户隔离与异步保护 |
 | `apps/course-agent/course_agent/web/index.html` | `+505/-66` | 新增页面、设置、弹窗、虚拟形象控件和品牌结构 |
 | `apps/course-agent/course_agent/web/styles.css` | `+1483/-61` | 深浅主题、日程、设置、裁剪、人物、气泡、快捷按钮和响应式样式 |
-| `apps/course-agent/scripts/smoke_test.py` | `+2/-1` | 更新为“瀚海行agent”并新增品牌标语断言 |
+| `apps/course-agent/scripts/smoke_test.py` | `+2/-1` | 更新为“瀚海行Agent”并新增品牌标语断言 |
 | `apps/course-agent/tests/test_course_agent.py` | `+344/-0` | 新增天气、主题、日程、设置和状态安全测试 |
 
 合计：`+5007/-176`。

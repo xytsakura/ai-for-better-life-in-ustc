@@ -9,17 +9,17 @@
   <script>
     document.documentElement.dataset.theme = globalThis.CourseAgentTheme.readFromGlobal();
   </script>
-  <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v1">
+  <link rel="icon" type="image/png" href="/assets/product-logo.png?v=product-logo-v3">
   <link rel="stylesheet" href="/assets/vendor/katex/katex.min.css">
-  <link rel="stylesheet" href="/assets/styles.css?v=20260809-1">
+  <link rel="stylesheet" href="/assets/styles.css?v=20260820-4">
 </head>
 <body>
   <aside class="app-sidebar">
     <div class="sidebar-top">
-      <div class="brand" role="img" aria-label="瀚海行agent，AI for better life in ustc">
-        <img class="brand-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="" width="36" height="36">
+      <div class="brand" role="img" aria-label="瀚海行Agent，AI for better life in ustc">
+        <img class="brand-mark" src="/assets/product-logo.png?v=product-logo-v3" alt="" width="36" height="36">
         <div class="brand-text">
-          <div class="brand-title">瀚海行agent</div>
+          <div class="brand-title">瀚海行Agent</div>
           <div class="brand-sub">AI for better life in ustc</div>
         </div>
       </div>
@@ -94,8 +94,10 @@
           <div class="home-conversation" id="home-conversation">
             <div class="home-greeting" id="home-greeting">
               <div class="home-logo">
-                <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v1" alt="瀚海行agent" width="72" height="72">
-                <div class="home-logo-badge">真理如瀚海，求索亦行舟</div>
+                <img class="home-logo-mark" src="/assets/product-logo.png?v=product-logo-v3" alt="瀚海行Agent" width="88" height="88">
+                <div class="home-logo-badge" aria-label="真理如瀚海 求索亦行舟">
+                  <span>真理如瀚海</span><span>求索亦行舟</span>
+                </div>
               </div>
             </div>
           </div>
@@ -107,7 +109,7 @@
                 id="home-question"
                 rows="1"
                 maxlength="2000"
-                placeholder="有问题尽管问瀚海行agent…"
+                placeholder="有问题尽管问瀚海行Agent…"
               ></textarea>
               <div id="home-source-selector" class="home-source-selector hidden" aria-label="知识检索资料选择">
                 <div class="source-selector-header">
@@ -132,9 +134,9 @@
                 <div class="home-input-actions">
                   <label class="compact-field home-model-field" for="home-model-input">
                     <span class="visually-hidden">模型</span>
-                    <input id="home-model-input" type="text" list="home-model-list" placeholder="输入模型名，如 gpt-5" autocomplete="off" aria-label="当前对话模型" />
-                    <datalist id="home-model-list"></datalist>
+                    <select id="home-model-input" aria-label="当前对话模型"></select>
                   </label>
+                  <span id="home-model-source" class="model-source-badge" title="当前模型来源">Agent 本地回退</span>
                   <label class="compact-field home-reasoning-field" for="home-reasoning-effort">
                     <span class="visually-hidden">思考强度</span>
                     <select id="home-reasoning-effort" aria-label="当前对话思考强度"></select>
@@ -160,7 +162,7 @@
         <aside
           class="home-agent-avatar-dock feature-preferences-pending"
           id="home-agent-avatar-dock"
-          aria-label="瀚海行agent 虚拟形象"
+          aria-label="瀚海行Agent 虚拟形象"
           aria-busy="false"
         >
           <div class="home-agent-avatar-speech-zone">
@@ -415,13 +417,15 @@
           <button class="button button-primary" id="marketplace-search-submit" type="button">搜索</button>
         </div>
 
+        <div id="marketplace-overview" class="marketplace-overview" aria-label="知识广场概览"></div>
+
         <nav class="marketplace-tabs" role="tablist" aria-label="知识广场视图">
           <button class="marketplace-tab active" type="button" role="tab" aria-selected="true" data-marketplace-tab="browse">广场</button>
           <button class="marketplace-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="mine">我的投稿</button>
           <button class="marketplace-tab hidden" id="marketplace-review-tab" type="button" role="tab" aria-selected="false" data-marketplace-tab="review">待审核</button>
         </nav>
 
-        <div class="marketplace-layout" id="marketplace-tab-browse">
+        <div class="marketplace-layout marketplace-browse-layout" id="marketplace-tab-browse">
           <section class="marketplace-list-panel" aria-label="公开知识库列表">
             <div class="marketplace-panel-title">
               <h2>公开知识库</h2>
@@ -617,7 +621,7 @@
           <section id="settings-tab-llm" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-llm">
             <div class="settings-card">
               <h3>LLM 服务配置</h3>
-              <p class="settings-desc">配置 OpenAI 兼容接口后，即可使用直接问答与资料检索增强功能。</p>
+              <p class="settings-desc">从 Hub 工作台进入时优先使用平台模型配置；独立运行或平台不可用时，使用这里保存的 Agent 本地回退配置。API Key 不会返回浏览器。</p>
               <form id="settings-form" class="settings-form">
                 <label class="field">
                   <span>Base URL</span>
@@ -625,7 +629,7 @@
                 </label>
                 <label class="field">
                   <span>API Key</span>
-                  <input type="password" id="setting-api-key" placeholder="sk-...">
+                  <input type="password" id="setting-api-key" placeholder="sk-..." autocomplete="current-password">
                   <span class="field-hint">留空表示保持现有密钥不变</span>
                 </label>
                 <label class="field">
@@ -770,7 +774,7 @@
 
           <section id="settings-tab-about" class="settings-tab hidden" role="tabpanel" aria-labelledby="settings-tab-button-about">
             <div class="settings-card">
-              <h3>关于瀚海行agent</h3>
+              <h3>关于瀚海行Agent</h3>
               <p class="settings-desc">中国科学技术大学「一〇七」杯算力与智能体开发大赛参赛项目。</p>
               <div class="about-info">
                 <div class="about-row"><span>版本</span><span id="about-version">-</span></div>
@@ -1035,6 +1039,6 @@
 
   <script src="/assets/vendor/katex/katex.min.js" defer></script>
   <script src="/assets/streaming.js?v=20260809-1" defer></script>
-  <script src="/assets/app.js?v=20260818-1" defer></script>
+  <script src="/assets/app.js?v=20260820-3" defer></script>
 </body>
 </html>

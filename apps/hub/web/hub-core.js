@@ -15,6 +15,14 @@ export const HUB_API = Object.freeze({
   rollback: (id) => `/api/admin/agents/${encodeURIComponent(id)}/rollback`,
   launch: (id) => `/api/agents/${encodeURIComponent(id)}/launch`,
   workspaceStart: (id) => `/api/agents/${encodeURIComponent(id)}/workspace/start`,
+  modelProfiles: '/api/model-profiles',
+  modelProfile: (id) => `/api/model-profiles/${encodeURIComponent(id)}`,
+  modelProfileTest: (id) => `/api/model-profiles/${encodeURIComponent(id)}/test`,
+  modelProfileDiscover: (id) => `/api/model-profiles/${encodeURIComponent(id)}/discover`,
+  modelBindings: '/api/model-bindings',
+  modelBindingGlobal: '/api/model-bindings/global',
+  modelBindingAgent: (id) => `/api/model-bindings/agents/${encodeURIComponent(id)}`,
+  homeAssistant: '/api/home-assistant/chat',
 });
 
 export const ACCESS_LEVELS = Object.freeze({
@@ -38,7 +46,7 @@ export const ACCESS_LEVELS = Object.freeze({
     label: 'Featured Agent',
     tone: 'gold',
     primary: '立即对话',
-    secondary: '进入完整工作台',
+    secondary: '查看详情',
     chatEnabled: true,
     workspaceEnabled: true,
   },
@@ -55,6 +63,14 @@ export const ERROR_MESSAGES = Object.freeze({
   conformance_checks_not_passed: '机器验收尚未通过，不能批准这个版本。',
   request_too_large: '本次请求超过平台允许的大小。',
   response_too_large: 'Agent 返回内容超过平台允许的大小。',
+  model_binding_not_found: '请先在模型配置中设置全局默认模型。',
+  model_profile_disabled: '当前模型配置已停用，请在模型配置中重新启用或切换。',
+  model_not_allowed: '当前选择的模型不可用，请重新发现模型或更新全局绑定。',
+  provider_auth_failed: '模型服务认证失败，请检查 API Key。',
+  provider_rate_limited: '模型服务请求过于频繁，请稍后再试。',
+  provider_unreachable: '暂时无法连接模型服务，请稍后重试。',
+  model_gateway_timeout: '模型响应超时，请稍后重试。',
+  router_output_invalid: '需求路由暂时无法给出可靠推荐，请换一种说法再试。',
 });
 
 export const DEMO_USERS = Object.freeze([
@@ -121,16 +137,140 @@ export function normalizeHealth(health) {
   return { ...health, status, label };
 }
 
-export function getAgentPrimaryHref(agent) {
+export function normalizeModelProfile(raw) {
+  const {
+    api_key: _apiKey,
+    apiKey: _apiKeyCamel,
+    encrypted_api_key: _encryptedApiKey,
+    encryptedApiKey: _encryptedApiKeyCamel,
+    ...source
+  } = raw || {};
+  const models = normalizeProfileModels(source.models || source.available_models || source.model_catalog || []);
+  const defaultModel = source.default_model_id || source.default_model || source.model_id || source.model || models.find((item) => item.default)?.id || '';
+  return {
+    ...source,
+    id: String(source.profile_id || source.id || ''),
+    name: source.name || source.label || '未命名配置',
+    provider: source.provider || 'openai',
+    api_style: source.api_style || source.apiStyle || 'responses',
+    base_url: source.base_url || source.baseUrl || '',
+    status: source.status || (source.enabled === false ? 'disabled' : 'active'),
+    has_api_key: Boolean(source.has_api_key ?? source.hasApiKey ?? source.api_key_fingerprint ?? source.apiKeyFingerprint ?? source.api_key_mask ?? source.mask ?? source.masked_api_key),
+    api_key_mask: source.api_key_mask || source.mask || source.masked_api_key || '',
+    api_key_fingerprint: source.api_key_fingerprint || source.fingerprint || source.apiKeyFingerprint || '',
+    default_model_id: defaultModel,
+    models,
+    last_tested_at: source.last_tested_at || source.lastTestedAt || '',
+    last_error: source.last_error || source.error || '',
+  };
+}
+
+export function normalizeProfileModels(rawModels) {
+  const list = Array.isArray(rawModels)
+    ? rawModels
+    : Array.isArray(rawModels?.models)
+      ? rawModels.models
+      : Array.isArray(rawModels?.data)
+        ? rawModels.data
+        : [];
+  return list.map((item) => {
+    const value = typeof item === 'string' ? { id: item } : item || {};
+    const id = String(value.model_id || value.id || value.name || '');
+    return {
+      ...value,
+      id,
+      model_id: id,
+      display_name: value.display_name || value.displayName || value.name || id,
+      chat_eligible: value.chat_eligible ?? value.chatEligible ?? true,
+      default: Boolean(value.default),
+    };
+  }).filter((item) => item.id);
+}
+
+export function normalizeModelProfilesPayload(payload) {
+  const root = payload?.data && typeof payload.data === 'object' && !Array.isArray(payload.data) ? payload.data : payload;
+  const profilesRaw = Array.isArray(root) ? root : root?.profiles || root?.items || root?.model_profiles || [];
+  const bindingsRaw = Array.isArray(root) ? [] : root?.bindings || root?.model_bindings || {};
+  return {
+    profiles: (Array.isArray(profilesRaw) ? profilesRaw : []).map(normalizeModelProfile).filter((profile) => profile.id),
+    bindings: normalizeModelBindings(bindingsRaw),
+  };
+}
+
+export function normalizeModelBindings(raw) {
+  const result = { global: null, agents: {} };
+  if (!raw) return result;
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const binding = normalizeModelBinding(item);
+      if (binding.scope_type === 'global') result.global = binding;
+      if (binding.scope_type === 'agent' && binding.scope_id) result.agents[binding.scope_id] = binding;
+    }
+    return result;
+  }
+  if (raw.global) result.global = normalizeModelBinding({ ...raw.global, scope_type: 'global' });
+  const agents = raw.agents || raw.agent || {};
+  if (Array.isArray(agents)) {
+    for (const item of agents) {
+      const binding = normalizeModelBinding({ ...item, scope_type: 'agent' });
+      if (binding.scope_id) result.agents[binding.scope_id] = binding;
+    }
+    return result;
+  }
+  for (const [agentId, binding] of Object.entries(agents)) {
+    result.agents[agentId] = normalizeModelBinding({ ...binding, scope_type: 'agent', scope_id: agentId });
+  }
+  return result;
+}
+
+function normalizeModelBinding(raw) {
+  const wrapper = raw || {};
+  const source = wrapper.binding && typeof wrapper.binding === 'object'
+    ? { ...wrapper, ...wrapper.binding }
+    : wrapper;
+  return {
+    ...source,
+    scope_type: source.scope_type || source.scopeType || 'global',
+    scope_id: source.scope_id || source.scopeId || source.agent_id || source.agentId || '',
+    profile_id: source.profile_id || source.profileId || '',
+    model_id: source.model_id || source.modelId || source.default_model_id || '',
+  };
+}
+
+export function getAgentPrimaryAction(raw) {
+  const agent = normalizeAgent(raw);
   const level = normalizeAccessLevel(agent);
-  if (level === 'link') return HUB_API.launch(agent.id);
-  return `/hub/agents/${encodeURIComponent(agent.id)}/chat`;
+  if (level === 'link') {
+    return {
+      kind: 'launch',
+      href: HUB_API.launch(agent.id),
+      label: ACCESS_LEVELS.link.primary,
+      external: true,
+    };
+  }
+  if (level === 'featured') {
+    return {
+      kind: 'workspace',
+      href: '',
+      label: ACCESS_LEVELS.featured.primary,
+      external: false,
+    };
+  }
+  return {
+    kind: 'chat',
+    href: `/hub/agents/${encodeURIComponent(agent.id)}/chat`,
+    label: ACCESS_LEVELS.connected.primary,
+    external: false,
+  };
+}
+
+export function getAgentPrimaryHref(agent) {
+  return getAgentPrimaryAction(agent).href;
 }
 
 export function getAgentSecondaryHref(agent) {
-  const level = normalizeAccessLevel(agent);
-  if (level === 'featured') return agent.integration?.workspace_url || agent.integration?.launch_url || '';
-  return `/hub/agents/${encodeURIComponent(agent.id)}`;
+  const normalized = normalizeAgent(agent);
+  return `/hub/agents/${encodeURIComponent(normalized.id)}`;
 }
 
 export function filterAgents(agents, { query = '', category = '全部', level = '全部', chip = '全部' } = {}) {

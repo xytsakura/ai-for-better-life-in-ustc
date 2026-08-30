@@ -54,7 +54,12 @@ class HubTokenVerifier:
     def __init__(self) -> None:
         self.required = os.getenv("DEMO_AGENT_REQUIRE_HUB_TOKEN", "0") == "1"
         self.jwks_url = os.getenv("DEMO_AGENT_HUB_JWKS_URL", "http://127.0.0.1:8100/.well-known/jwks.json")
-        self.audience = os.getenv("DEMO_AGENT_HUB_AUDIENCE", "campus-helper-demo")
+        configured_audiences = os.getenv("DEMO_AGENT_HUB_AUDIENCES", "")
+        if configured_audiences.strip():
+            self.audiences = tuple(item.strip() for item in configured_audiences.split(",") if item.strip())
+        else:
+            self.audiences = (os.getenv("DEMO_AGENT_HUB_AUDIENCE", "campus-helper-demo"),)
+        self.audience = self.audiences[0]
         self.issuer = os.getenv("DEMO_AGENT_HUB_ISSUER", "campus-agent-hub")
         self.max_token_ttl_seconds = int(os.getenv("DEMO_AGENT_HUB_MAX_TOKEN_TTL_SECONDS", "120"))
         self._jwks: dict[str, Any] | None = None
@@ -111,7 +116,7 @@ class HubTokenVerifier:
             token,
             key=jwt.PyJWK.from_dict(jwk).key,
             algorithms=["EdDSA"],
-            audience=self.audience,
+            audience=list(self.audiences),
             issuer=self.issuer,
             leeway=30,
             options={"require": ["exp", "iat", "iss", "aud", "sub"]},
@@ -130,8 +135,28 @@ def require_hub_identity(
     return verifier.verify(authorization, "chat:invoke")
 
 
-def answer_for(question: str) -> tuple[str, list[Citation]]:
+def answer_for(question: str, audience: str = "campus-helper-demo") -> tuple[str, list[Citation]]:
     normalized = question.casefold()
+    if audience == "course-review-demo":
+        if any(keyword in normalized for keyword in ("老师", "教师", "课程", "选课", "评分", "评价")):
+            return (
+                "【Future Work Demo】评课社区 Agent 可以汇总课程评分、教师评价、课程负担和往届经验，并据此给出建设性的选课建议。当前回答使用固定演示数据，真实评课社区数据接入尚未完成。",
+                [Citation(label="D1", title="评课社区数据接入规划", url=None)],
+            )
+        return (
+            "【Future Work Demo】你可以询问课程评分、老师评价、课程负担或选课建议。真实评课社区数据接入尚未完成，当前仅用于展示 Agent 接入流程。",
+            [],
+        )
+    if audience == "campus-public-service-demo":
+        if any(keyword in normalized for keyword in ("盖章", "签字", "行政", "老师", "办事", "楼", "门牌", "校区")):
+            return (
+                "【Future Work Demo】校园公共服务 Agent 可以查询签字盖章、行政窗口、校区楼宇楼层和门牌信息，也可以沉淀同学分享的办事经验。当前回答使用固定演示数据，真实校内位置与服务目录尚未接入。",
+                [Citation(label="D1", title="校园公共服务数据接入规划", url=None)],
+            )
+        return (
+            "【Future Work Demo】你可以询问签字盖章地点、行政老师、校区楼宇位置或办事经验。真实校园公共服务数据接入尚未完成，当前仅用于展示 Agent 接入流程。",
+            [],
+        )
     if any(keyword in normalized for keyword in ("图书馆", "自习", "座位")):
         return (
             "可以先查看图书馆座位与开放安排，再根据校区和空闲时段选择自习地点。正式使用时，这个 Agent 可以接入校园开放数据；当前演示回答用于验证第三方 Agent 的标准接入流程。",
@@ -173,12 +198,13 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(payload: ChatRequest, _identity: dict[str, Any] = Depends(require_hub_identity)) -> ChatResponse:
+def chat(payload: ChatRequest, identity: dict[str, Any] = Depends(require_hub_identity)) -> ChatResponse:
     user_messages = [message for message in payload.messages if message.role == "user"]
     if not user_messages:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="At least one user message is required")
 
-    content, citations = answer_for(user_messages[-1].content)
+    audience = identity.get("aud") if isinstance(identity.get("aud"), str) else "campus-helper-demo"
+    content, citations = answer_for(user_messages[-1].content, audience)
     return ChatResponse(
         message=Message(id=f"assistant-{secrets.token_hex(8)}", role="assistant", content=content),
         citations=citations,

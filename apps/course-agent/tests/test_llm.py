@@ -6,6 +6,7 @@ import json
 import httpx
 
 from course_agent.config import Settings
+from course_agent.hub import HubModelContext, HubModelGatewayError
 from course_agent.llm import LLMAdapter, LLMStreamComplete, LLMStreamDelta, LLMStreamError
 from course_agent.retrieval import SearchResult
 
@@ -109,6 +110,29 @@ class _UsageClient(_CapturingClient):
         return _UsageResponse()
 
 
+def _platform_settings(tmp_path):
+    return Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="local-key",
+        llm_base_url="https://local-model.example",
+        llm_model="local-server-model",
+        hub_client_secret="agent-secret",
+        hub_model_gateway_enabled=True,
+        hub_model_grant_endpoint="https://hub.example/api/model-gateway/grants/exchange",
+        hub_model_gateway_url="https://hub.example/api/model-gateway/v1/generate",
+    )
+
+
+def _platform_context():
+    return HubModelContext(
+        hub_sub="demo-c",
+        course_user_id="demo-c",
+        display_name="Demo User",
+        delegate_token="opaque-delegation",
+        request_id="req-platform-1",
+    )
+
+
 class _HttpErrorClient:
     def __init__(self, **_: object):
         pass
@@ -182,6 +206,133 @@ def test_direct_mode_does_not_require_citations(monkeypatch, tmp_path):
     assert result.degraded is False
     assert result.citation_ids == []
     assert result.error_code is None
+
+
+def test_platform_gateway_direct_call_uses_delegation_and_selected_model(monkeypatch, tmp_path):
+    settings = _platform_settings(tmp_path)
+    original_client = httpx.Client
+    observed: dict[str, dict] = {}
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if str(request.url) == settings.hub_model_grant_endpoint:
+            observed["grant"] = body
+            auth = request.headers["authorization"]
+            assert auth.startswith("Basic ")
+            assert body["model_delegation_token"] == "opaque-delegation"
+            assert body["request_id"] == "req-platform-1"
+            assert body["requested_model_id"] == "browser-picked-model"
+            assert set(body) == {"model_delegation_token", "request_id", "requested_model_id"}
+            assert "delegation_token" not in body
+            assert "model" not in body
+            return httpx.Response(
+                200,
+                json={
+                    "grant": "short-grant-token",
+                    "model": {"id": "platform-gpt-5.6"},
+                    "expires_in": 120,
+                },
+            )
+        if str(request.url) == settings.hub_model_gateway_url:
+            observed["generate"] = body
+            assert request.headers["authorization"] == "Bearer short-grant-token"
+            assert "model" not in body
+            assert body["messages"][-1]["content"].endswith("解释一致连续。")
+            return httpx.Response(
+                200,
+                json={
+                    "answer": "平台回答",
+                    "model": "platform-gpt-5.6",
+                    "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+                },
+            )
+        raise AssertionError(f"unexpected URL {request.url}")
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_client(*args, **kwargs):
+        return original_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.hub.httpx.Client", mocked_client)
+
+    result = LLMAdapter(settings).generate_direct(
+        "解释一致连续。",
+        model="browser-picked-model",
+        platform_context=_platform_context(),
+    )
+
+    assert observed["grant"]["model_delegation_token"] == "opaque-delegation"
+    assert observed["generate"]["instructions"]
+    assert result.answer == "平台回答"
+    assert result.model == "platform-gpt-5.6"
+    assert result.model_source == "platform"
+    assert result.degraded is False
+
+
+def test_platform_gateway_falls_back_to_agent_model_when_unavailable(
+    monkeypatch,
+    tmp_path,
+):
+    settings = _platform_settings(tmp_path)
+
+    class UnavailableGateway:
+        @staticmethod
+        def is_configured():
+            return True
+
+        @staticmethod
+        def generate(**kwargs):
+            raise HubModelGatewayError(
+                "model_binding_not_found",
+                "no binding",
+                allow_fallback=True,
+            )
+
+    _CapturingClient.last_payload = None
+    monkeypatch.setattr("course_agent.llm.httpx.Client", _CapturingClient)
+    adapter = LLMAdapter(settings)
+    adapter.platform_gateway = UnavailableGateway()
+
+    result = adapter.generate_direct(
+        "解释一致连续。",
+        model="browser-picked-model",
+        platform_context=_platform_context(),
+    )
+
+    assert result.model == "local-server-model"
+    assert result.model_source == "agent"
+    assert _CapturingClient.last_payload["model"] == "local-server-model"
+
+
+def test_platform_gateway_security_error_does_not_fallback(monkeypatch, tmp_path):
+    settings = _platform_settings(tmp_path)
+
+    class ForbiddenGateway:
+        @staticmethod
+        def is_configured():
+            return True
+
+        @staticmethod
+        def generate(**kwargs):
+            raise HubModelGatewayError(
+                "model_grant_invalid",
+                "forbidden",
+                allow_fallback=False,
+            )
+
+    monkeypatch.setattr("course_agent.llm.httpx.Client", _MalformedClient)
+    adapter = LLMAdapter(settings)
+    adapter.platform_gateway = ForbiddenGateway()
+
+    result = adapter.generate_direct(
+        "解释一致连续。",
+        model="browser-picked-model",
+        platform_context=_platform_context(),
+    )
+
+    assert result.degraded is True
+    assert result.model_source == "platform"
+    assert result.error_code == "model_grant_invalid"
 
 
 def test_direct_mode_forwards_conversation_history(monkeypatch, tmp_path):
@@ -516,11 +667,85 @@ def test_direct_mode_forwards_model_reasoning_and_normalizes_usage(monkeypatch, 
     }
 
 
-def _stream_response(payloads: list[dict]) -> bytes:
+def _stream_response(payloads: list[dict], *, event_field_only: bool = False) -> bytes:
     chunks: list[bytes] = []
     for payload in payloads:
-        chunks.append(f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode())
+        data = dict(payload)
+        event = str(data.get("type") or "message")
+        prefix = ""
+        if event_field_only:
+            data.pop("type", None)
+            prefix = f"event: {event}\n"
+        chunks.append(
+            f"{prefix}data: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+        )
     return b"".join(chunks)
+
+
+def test_platform_gateway_stream_direct_parses_model_events(monkeypatch, tmp_path):
+    settings = _platform_settings(tmp_path)
+    original_async_client = httpx.AsyncClient
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == settings.hub_model_grant_endpoint:
+            body = json.loads(request.content)
+            assert body["model_delegation_token"] == "opaque-delegation"
+            assert body["request_id"] == "req-platform-1"
+            assert body["requested_model_id"] == "browser-picked-model"
+            assert set(body) == {"model_delegation_token", "request_id", "requested_model_id"}
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "stream-grant-token",
+                    "model": {"id": "platform-stream-model"},
+                },
+            )
+        if str(request.url) == settings.hub_model_gateway_url:
+            body = json.loads(request.content)
+            assert body["stream"] is True
+            assert "model" not in body
+            assert request.headers["authorization"] == "Bearer stream-grant-token"
+            return httpx.Response(
+                200,
+                content=_stream_response(
+                    [
+                        {"type": "model.started", "model": "platform-stream-model"},
+                        {"type": "model.output_text.delta", "delta": "平台"},
+                        {"type": "model.output_text.delta", "delta": "流式"},
+                        {
+                            "type": "model.completed",
+                            "model": "platform-stream-model",
+                            "answer": "平台流式",
+                            "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+                        },
+                    ],
+                    event_field_only=True,
+                ),
+            )
+        raise AssertionError(f"unexpected URL {request.url}")
+
+    transport = httpx.MockTransport(upstream)
+
+    def mocked_async_client(*args, **kwargs):
+        return original_async_client(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr("course_agent.hub.httpx.AsyncClient", mocked_async_client)
+
+    events = asyncio.run(
+        _collect_stream(
+            LLMAdapter(settings).stream_direct(
+                "测试平台流式",
+                model="browser-picked-model",
+                platform_context=_platform_context(),
+            )
+        )
+    )
+
+    assert [event.text for event in events if isinstance(event, LLMStreamDelta)] == ["平台", "流式"]
+    complete = next(event for event in events if isinstance(event, LLMStreamComplete))
+    assert complete.result.answer == "平台流式"
+    assert complete.result.model == "platform-stream-model"
+    assert complete.result.model_source == "platform"
 
 
 def test_stream_direct_parses_responses_sse_deltas_and_completed(monkeypatch, tmp_path):
