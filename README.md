@@ -123,6 +123,8 @@ Contract v1 的统一交互边界使用 `@ag-ui/core@0.0.57` 的 `RunAgentInput`
 
 - [项目更新日志](./CHANGELOG.md)：按日期和提交号记录平台级功能、修复、验证和重要文档变化。
 - [项目产品文档](./项目产品文档.md)：当前产品定义、架构边界、MVP、评测、分工和风险，是现阶段实施依据。
+- [设计文档](./设计文档.md)：面向比赛提交的完整设计思路、技术架构、功能模块、技术难点和验收证据。
+- [作品简介](./作品简介.md)：面向报名和作品提交的简明介绍、模型/API 说明与创新点。
 - [Hub 顶层设计](./docs/superpowers/specs/2026-08-05-campus-agent-hub-top-level-design.md)：当前实现的安全边界、身份协议与三种接入等级。
 - [USTC-Agent-Hub Contract v1](./contracts/campus-agent-hub/v1/README.md)：Manifest、Health、simple-chat Schema、示例和契约测试。
 - [首页需求路由 Skill](./apps/hub/skills/agent-routing/SKILL.md) 与 [Agent 功能检索表](./apps/hub/skills/agent-routing/AGENT_CATALOG.md)：维护需求匹配规则与可推荐 Agent 的简短公开能力摘要。
