@@ -2,6 +2,14 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-08-31：修复本地启动时知识广场为空 / 资料回答无依据
+
+- `start-local.sh` 此前只执行 `init-db` 和 `import-manifest`，遗漏了 `deploy/compose.yaml` 中的 `seed-marketplace` 步骤，导致从 Docker 切换到本地启动后，知识广场（`marketplace_course_metadata` / `published_libraries`）为空，而个人与共享空间的资料不受影响。
+- 已在本地启动脚本补上 `seed-marketplace`，并在脚本中注明必须与 `deploy/compose.yaml` 保持一致。
+- 该命令幂等，重复执行不会覆盖已分配的封面或已有订阅：`{'created': 0, 'skipped': 6}`。
+- 恢复后知识广场共 6 门课程：数学分析 B1 期末复习库（25 份文档，真实资料）与 5 门演示占位库（0 份文档，属预期设计）。
+- **修复资料回答无依据**：即使知识广场 seeded 完成，默认用户 `demo-a` 并未订阅公开库，检索访问控制 `accessible_document_ids` 会返回空集合，前端因此显示“当前可访问的知识库资料中没有找到足够依据”。已在 `seed-marketplace` 中对 `demo_kind: real` 的课程自动为种子作者（默认 `demo-a`）写入 `library_subscriptions` 活跃订阅，本地 demo 启动后即可直接检索。
+
 ## 2026-08-20：知识广场预生成封面池
 
 - 新增由 6 张透明课程插画组成的封面池，覆盖不同主题色与图标组合。

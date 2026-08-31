@@ -346,6 +346,17 @@ def seed_marketplace(settings: Settings, manifest_path: Path) -> dict:
             except Exception as exc:
                 failed.append({"slug": str(item.get("slug", "<unknown>")) if isinstance(item, dict) else "<invalid>", "error": str(exc)})
 
+            # Auto-subscribe the seed author to real marketplace libraries so the
+            # local demo can retrieve from them immediately after bootstrap.
+            if demo_kind == "real" and library_id and author_id:
+                conn.execute(
+                    """INSERT OR IGNORE INTO library_subscriptions
+                       (library_id, user_id, status, subscribed_at)
+                       VALUES (?, ?, 'active', CURRENT_TIMESTAMP)""",
+                    (library_id, author_id),
+                )
+                conn.commit()
+
     return {
         "created": created,
         "skipped": skipped,
