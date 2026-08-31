@@ -1,5 +1,91 @@
 # Campus Agent Hub 更新日志
 
+## 2026-08-31
+
+### `fix(hub)`：修复配置页面被浏览器缓存导致卡住
+
+- 模型配置页 `/hub/settings` 的 JS/CSS 资源由 FastAPI `FileResponse` 原样返回，只带 `Last-Modified`/`ETag`，未设置 `Cache-Control`。Safari 会基于 ETag 强缓存带查询参数的脚本，导致旧版 `app.js` 滞留，页面卡在骨架屏。
+- 为 `/app.js`、`/hub-core.js`、`/styles.css` 等静态资源以及 `/hub` SPA 响应统一添加 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`。
+- 在 `index.html` 中增加 `<meta http-equiv="Cache-Control">` 作为双重保险。
+- 为 `paintModelSettings` 增加错误边界：若渲染阶段抛出异常，不再停留在骨架屏，而是显示带重试按钮的错误状态并输出 `console.error`。
+- **修复恢复 `renderModelSettingsOverview` 时误删 `renderBindingText` 导致的运行时错误**：该函数在概览步骤和模型列表摘要中均被调用，缺失后页面直接报错「Can't find variable: renderBindingText」并进入错误状态；已重新声明并验证概览页加载。
+- **移除首页模型状态条**：用户反馈首页不需要显示 DeepSeek API Key 掩码、全局默认、瀚海行模型绑定等配置摘要。已删除 `portal-model-status` 区块、`paintPortalModelStatus` 函数、首页对 `loadModelProfiles()` 的调用，并清理对应 CSS；首页初始化不再请求模型配置，渲染更快更干净。
+- **左侧对话存档支持删除**：每条历史对话右侧显示一个 `×` 删除按钮，hover/focus 时出现；删除后从 `localStorage` 中移除并同步左侧列表。若删除的是当前活跃对话，则自动清空画布新建一个空对话。
+- **修复编辑 Profile 时保存失败（HTTP 400 / 422）**：后端 PATCH 只要 body 里出现 `base_url` 就要求同时提供 `api_key`；前端原本每次编辑都会把 `base_url` 和 `default_model_id` 等字段全部发回去，导致只改名称也会触发该校验。现在 `saveModelProfile` 会对当前 Profile 做差分，只发送真正变化的字段；若用户确实改了 `base_url` 但未填 `api_key`，则在提交前用 toast 提示并聚焦输入框。
+- **改进错误提示**：将 `api_key_required_for_base_url_change` 加入 `ERROR_MESSAGES`；`normalizeHttpError` 现在能正确解析 FastAPI 数组型验证错误（如 `api_key` 长度不足），并拼接字段名与消息。
+- 前端 JavaScript 测试 39/39 通过。
+
+### `fix(hub)`：本地启动脚本启用 Model Profile 与 provider 白名单
+
+- `start-local.sh` 启用 `HUB_MODEL_PROFILES_ENABLED` 并自动生成 master key（`var/hub-secrets/model-profile-master.key`，权限 600，仅生成一次），`/api/model-profiles` 从 404 变为可用，配置页面不再显示「服务暂不可用」。
+- 新增 `HUB_MODEL_PROVIDER_ORIGIN_ALLOWLIST`：部分网络（Clash/Surge fake-ip 模式）会把公网模型域名解析到 `198.18.0.0/15` 等保留段，被 SSRF 防护正确拦截。白名单仅放行指定的可信服务商来源，其余地址仍受防护。
+- 修复脚本中一处会静默丢环境变量的问题：反斜杠续行的 env 前缀内不能插入注释行，否则续行会把注释吞掉并截断后续变量赋值。
+
+### `test(hub)`：DeepSeek 配置端到端打通
+
+- 新建 Profile → 测试连接（277ms）→ 发现 3 个模型（`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` / `deepseek-v4-pro`）→ 设置默认 → 绑定全局与 Agent。
+- 首页助手两种模式均通：`instant` 流式返回正常；`route_stream` 对「期末复习」正确推荐瀚海行。
+- Agent 委派链路全通：签发 workspace delegation → 换取 grant → Gateway 生成成功返回。
+- 重启后 Profile、加密 API Key 与绑定关系完整保留（API Key 仅以掩码 `••••2403` 回显，不落明文）。
+- 前端 JavaScript 测试 39/39 通过；后端 pytest 57 通过 2 失败，两处失败均为本机 fake-ip DNS 导致 `private_url_not_allowed`，与本次改动无关（未修改任何 Python 文件）。
+
+### `refactor(hub)`：简化多模型配置中心界面
+
+- 本地启动时启用 Model Profile 功能（`HUB_MODEL_PROFILES_ENABLED=true` + 32 字节 master key），`/api/model-profiles` 从 404 变为可用，配置页面不再显示「服务暂不可用」空状态。
+- 精简页面文案：
+  - 页面副标题由「集中维护多套模型配置，可设置全局默认或按 Agent 单独绑定」移除冗余，保留核心说明
+  - 数据安全提醒从两行长文改为「请求会发送到你配置的 Base URL；请只添加你信任的服务商」
+  - 进度概览标题由「MODEL ROUTING FLOW / 从配置到 Agent 调用的闭环」改为「PROGRESS / 配置到 Agent 调用」，删除解释段落和底部统计行
+- 重构 Profile 编辑器表单：
+  - 标签缩短：配置名称→名称，Provider→服务商，API 协议→协议，Base URL 保持，API Key（留空表示不替换）→API Key，启用状态→状态，默认模型保持
+  - 字段分组为两列（服务商/协议、状态/默认模型）和通栏（名称、Base URL、API Key），减少垂直高度
+  - 操作按钮缩短：创建 Profile→创建，保存修改→保存，测试连接→测试，发现模型保持；新增 `.action-row--compact` 缩小按钮尺寸
+  - API Key placeholder 根据是否已保存动态显示，去掉头部冗余说明
+  - 空模型列表文案从长句改为「未发现模型」
+- 配置档案列表头移除「已保存 N 套/还没有服务端 Profile」的二级说明，空状态文案精简。
+- 旧版本地配置迁移横幅文案精简：「发现旧版本地配置」→「旧配置待迁移」，按钮「暂不迁移/确认迁移」→「忽略/迁移」。
+- 更新 T4 测试断言以匹配新的文案；前端测试 39/39 通过。
+
+### `refactor(hub)`：移除 Agent 广场卡片的能力小标签
+
+- 广场卡片不再渲染能力标签列表（`hub-card__subskills`），卡片结构简化为：图标 + 名称 + 等级徽章 / 描述 / 健康点 + 使用次数 / 操作按钮。相关 CSS 规则（`.hub-card__subskills`、`.tag--count`）同步删除，卡片更紧凑、底部操作行仍自动对齐。
+
+### `refactor(hub)`：统一前端设计标尺
+
+- `styles.css` 原先存在四层叠加样式，其中两层 teal 主题被后面的深色主题整体覆盖，导致生效的圆角只有 4/6/8/8px、`--shadow-sm` 为 `none`。已删除失效主题层，只保留一份 token 定义。
+- 新增几何与排版标尺：圆角 6 级（6/8/12/16/20/999px）、阴影 4 级（深浅主题各一套）、间距 7 级（4px 基准）、字号 5 级，并全量替换 40 余处硬编码数值。
+- 硬编码颜色（`#5269c8`、`#334b93`、`#2e3857`、`#0f766e`、`#8f5b16`、`#343945` 等）改为 `color-mix()` 派生的主题变量，深浅主题不再依赖逐条补丁覆盖。
+- 修复失效选择器：`.agent-card` 实际类名应为 `.hub-card`，此前卡片 hover 上浮从未生效；侧边导航 `aria-current` 高亮被后续规则覆盖，已恢复并改用 accent 配色。
+- 删除死代码：`.portal-search` 整套（79 行，HTML 中已无对应结构）、`.filter-panel`、`.hub-tabs`、`.tab`。
+
+### `refactor(hub)`：首页视觉重构
+
+- 首屏英文 kicker 由 36px 衬线大字降级为 12px 字距标签加两侧渐隐细线，色值改用主题 accent，消除与全站配色的冲突。
+- 主标题由「中文衬线 + 英文无衬线」混排改为统一无衬线，字号改为 `clamp(30px, 4.4vw, 44px)`，中英文之间补充空格。
+- 品牌区与对话区收窄到同一条 780px 列，消除原先三段各自居中导致的错位；移除固定高度与 `overflow: hidden`，对话态不再挤压消息区。
+- 模型状态条由 5 列 grid 悬浮胶囊改为输入框下方的居中脚注，正文字号从 10px 提升到 11/12px，窄屏隐藏次要项。
+- 输入框新增 `focus-within` 聚焦环；品牌区与对话区加入 320ms 入场动画，自动遵守 `prefers-reduced-motion`。
+
+### `refactor(hub)`：Agent 卡片与筛选区重构
+
+- 卡片信息由 6 层精简为 4 层：移除分类、维护者和版本号（详情页「接入信息」已完整展示这三项），能力标签由 4 个改为 3 个加 `+N` 计数。
+- 健康状态由完整徽章改为色点加文字，与接入等级徽章在视觉上分离；卡名改无衬线并单行省略。
+- 底栏改为 `margin-top: auto` 吸底，同一行卡片的操作按钮始终对齐，不再因描述长短而参差。
+- 卡片图标由正圆形改为 12px 圆角方形，避免裁切 Agent logo；移除 `style="margin-top:14px"` 内联样式。
+- 网格由固定两列改为 `repeat(auto-fill, minmax(300px, 1fr))`，宽屏自动增加列数。
+- 修复首页「为你推荐」快捷卡片竖向堆叠的问题：`.hub-card--quick` 未声明 `flex-direction`，被后写的 `.hub-card` 覆盖为 `column`，现改回横向布局。
+- 筛选区由默认折叠的 `<details>` 面板改为常驻三行结构（分类 / 接入 / 标签），标签改用 `flex-wrap` 换行而非横向滚动，超过 8 个折叠为 `+N`，且选中项始终可见。
+
+### `fix(hub)`：恢复多模型配置进度概览
+
+- 恢复误删的 `renderModelSettingsOverview`：该函数在未提交的视觉改动中被移除，但 14 条配套 CSS 规则全部保留，属于不完整删除，导致模型配置中心缺少配置进度引导。
+- 恢复后同步将区块内残留的间距、圆角、字号硬编码纳入新标尺。
+
+### `test(hub)`：模块缓存版本断言改为动态比对
+
+- `t4-model-settings-contract.test.mjs` 原先硬编码 `20260822-8`，每次更新缓存版本号都会失败。现改为从 `index.html` 读取入口版本，再断言 `app.js`、`hub-core.js`、`styles.css` 三处一致，保留防缓存错位的守卫能力。
+- 前端 JavaScript 测试 39 项全部通过。
+
 ## 2026-08-22
 
 - `route_stream` 与兼容 `auto` 路由新增 active Registry 约束下的高置信匹配，保证期末复习、数学分析复习和签字盖章地点等核心演示需求稳定生成正确 Agent 卡片。

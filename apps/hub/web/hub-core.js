@@ -71,6 +71,7 @@ export const ERROR_MESSAGES = Object.freeze({
   provider_unreachable: '暂时无法连接模型服务，请稍后重试。',
   model_gateway_timeout: '模型响应超时，请稍后重试。',
   router_output_invalid: '需求路由暂时无法给出可靠推荐，请换一种说法再试。',
+  api_key_required_for_base_url_change: '修改 Base URL 后需要重新输入 API Key。',
 });
 
 export const DEMO_USERS = Object.freeze([

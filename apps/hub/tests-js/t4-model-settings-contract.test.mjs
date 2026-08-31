@@ -39,9 +39,23 @@ test('T4 legacy migration is explicit and rejects non-local plain HTTP secrets',
 test('T4 keeps request identity aligned with active demo user and bumps module cache versions', () => {
   assert.match(appSource, /'X-Hub-User':\s*state\.user\.id/);
   assert.doesNotMatch(appSource, /options\.admin\s*\?\s*['"]demo-a['"]/);
-  assert.match(appSource, /hub-core\.js\?v=20260822-8/);
-  assert.match(indexSource, /styles\.css\?v=20260822-8/);
-  assert.match(indexSource, /app\.js\?v=20260822-8/);
+
+  // Browser ES module caching means the entry, its dependency and the stylesheet
+  // must all carry the same version, otherwise a bumped entry still loads a stale
+  // dependency and the page renders blank. Compare against the entry's version
+  // instead of a hardcoded string so routine bumps do not break this guard.
+  const entryVersion = indexSource.match(/app\.js\?v=([\w-]+)/)?.[1];
+  assert.ok(entryVersion, 'index.html must pin a cache version on app.js');
+  const versions = [
+    appSource.match(/hub-core\.js\?v=([\w-]+)/)?.[1],
+    indexSource.match(/styles\.css\?v=([\w-]+)/)?.[1],
+    indexSource.match(/app\.js\?v=([\w-]+)/)?.[1],
+  ];
+  assert.deepEqual(
+    versions,
+    [entryVersion, entryVersion, entryVersion],
+    'app.js, hub-core.js and styles.css must share one cache version',
+  );
 });
 
 test('T4 only offers declared platform agents and chat-eligible models for bindings', () => {
@@ -53,8 +67,9 @@ test('T4 only offers declared platform agents and chat-eligible models for bindi
 
 test('T4 shows a complete model routing progress summary instead of a vague form', () => {
   assert.match(appSource, /function renderModelSettingsOverview/);
-  assert.match(appSource, /MODEL ROUTING FLOW/);
-  assert.match(appSource, /创建 Profile/);
+  assert.match(appSource, /PROGRESS/);
+  assert.match(appSource, /配置到 Agent 调用/);
+  assert.match(appSource, /创建配置/);
   assert.match(appSource, /发现模型/);
   assert.match(appSource, /全局默认/);
   assert.match(appSource, /Agent 绑定/);
