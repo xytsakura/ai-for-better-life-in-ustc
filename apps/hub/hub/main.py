@@ -750,16 +750,21 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
             )
 
     @app.get("/", include_in_schema=False)
+    def hub_root() -> FileResponse:
+        return FileResponse(web_root / "index.html")
+
+    no_cache = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+
     @app.get("/hub", include_in_schema=False)
     @app.get("/hub/{path:path}", include_in_schema=False)
     def hub_spa(path: str = "") -> FileResponse:
-        return FileResponse(web_root / "index.html")
+        return FileResponse(web_root / "index.html", headers=no_cache)
 
     @app.get("/{filename}", include_in_schema=False)
     def hub_static_file(filename: str) -> FileResponse:
         if filename not in {"app.js", "hub-core.js", "hub-theme.js", "splash.js", "starfield.js", "styles.css"}:
             raise HTTPException(status.HTTP_404_NOT_FOUND)
-        return FileResponse(web_root / filename)
+        return FileResponse(web_root / filename, headers=no_cache)
 
     return app
 

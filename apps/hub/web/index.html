@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate" />
     <title>Campus Agent Hub</title>
     <meta
       name="description"
@@ -13,7 +14,7 @@
     <script>
       document.documentElement.dataset.theme = globalThis.HubTheme.readFromGlobal();
     </script>
-    <link rel="stylesheet" href="/styles.css?v=20260822-8" />
+    <link rel="stylesheet" href="/styles.css?v=20260831-10" />
   </head>
   <body>
     <div class="splash" aria-hidden="true">
@@ -28,7 +29,6 @@
     <div id="app" class="hub-shell" data-route="portal">
       <aside class="hub-sidebar" aria-label="Hub 导航">
         <a class="brand" href="/hub" data-link>
-          <span class="brand__mark"><img src="/assets/ustc-emblem.jpg" alt="" /></span>
           <span>
             <span class="brand__title">AI FOR USTCERS</span>
             <span class="brand__subtitle">Campus Agent Hub</span>
@@ -86,6 +86,6 @@
     </template>
 
     <script src="/splash.js?v=20260807-2" defer></script>
-    <script type="module" src="/app.js?v=20260822-8"></script>
+    <script type="module" src="/app.js?v=20260831-10"></script>
   </body>
 </html>

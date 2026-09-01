@@ -18,7 +18,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js?v=20260822-8';
+} from './hub-core.js?v=20260831-10';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({
@@ -88,6 +88,12 @@ function bindGlobalEvents() {
   document.body.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : event.target?.parentElement;
     if (!target) return;
+    const deleteConversation = target.closest('[data-delete-conversation]');
+    if (deleteConversation) {
+      event.stopPropagation();
+      deletePortalConversation(deleteConversation.dataset.deleteConversation);
+      return;
+    }
     const conversation = target.closest('[data-conversation-id]');
     if (conversation) {
       openPortalConversation(conversation.dataset.conversationId);
@@ -303,13 +309,12 @@ async function renderPortal() {
   view.innerHTML = renderPortalStage();
   mountPortalEffects();
   bindPortalAssistant();
-  const [agentsResult, modelsResult] = await Promise.allSettled([
-    loadAgents(),
-    loadModelProfiles(),
-  ]);
+  try {
+    state.agents = await loadAgents();
+  } catch {
+    state.agents = [];
+  }
   if (generation !== state.generation || state.route.name !== 'portal') return;
-  if (agentsResult.status === 'fulfilled') state.agents = agentsResult.value;
-  paintPortalModelStatus(modelsResult.status === 'fulfilled' ? modelsResult.value : null);
   state.loading = false;
 }
 
@@ -323,7 +328,7 @@ function renderPortalStage() {
       <div class="portal-stage__content">
         <div class="portal-stage__brand" aria-label="Campus Agent Hub">
           <p class="portal-kicker">AI FOR USTCERS</p>
-          <h1>为科大学生服务的智能 <span class="latin">Agent</span></h1>
+          <h1>为科大学生服务的多功能 Agent 平台</h1>
         </div>
         <section class="portal-assistant" aria-label="平台 AI 助手">
           <div class="portal-assistant__header">
@@ -342,9 +347,6 @@ function renderPortalStage() {
             <button class="portal-assistant__cancel" type="button" data-assistant-cancel ${session.pending ? '' : 'hidden'} aria-label="取消本轮回答" title="取消">×</button>
             <button class="portal-assistant__send" type="submit" ${session.pending ? 'disabled' : ''} aria-label="发送" title="发送">↑</button>
           </form>
-        </section>
-        <section id="portalModelStatus" class="portal-model-status is-loading" aria-label="当前模型配置" aria-live="polite">
-          <span>正在读取模型配置…</span>
         </section>
       </div>
     </section>
@@ -485,8 +487,37 @@ function renderConversationArchive() {
     <button type="button" class="hub-conversation" data-conversation-id="${escapeAttr(entry.id)}" ${entry.id === workspace.active.id ? 'aria-current="true"' : ''}>
       <span class="hub-conversation__dot" aria-hidden="true"></span>
       <span class="hub-conversation__title">${escapeHtml(entry.title || '新对话')}</span>
+      <span class="hub-conversation__delete" role="button" tabindex="0" data-delete-conversation="${escapeAttr(entry.id)}" aria-label="删除对话" title="删除对话">×</span>
     </button>
   `).join('');
+}
+
+function deletePortalConversation(id) {
+  const workspace = getPortalAssistantWorkspace();
+  const wasActive = workspace.active.id === id;
+  workspace.archives = workspace.archives.filter((entry) => entry.id !== id);
+  const all = loadJson(STORAGE.conversations, {});
+  const userId = state.user?.id || 'anonymous';
+  if (all[userId]) {
+    const key = state.portalAssistantMode;
+    all[userId][key] = workspace.archives.map((entry) => ({
+      id: entry.id,
+      title: entry.title,
+      thread: entry.thread.map(normalizePortalConversationMessage).filter(Boolean),
+      updatedAt: entry.updatedAt,
+      createdAt: entry.createdAt,
+    }));
+    if (!all[userId][key].length) delete all[userId][key];
+    if (!Object.keys(all[userId]).length) delete all[userId];
+    localStorage.setItem(STORAGE.conversations, JSON.stringify(all));
+  }
+  if (wasActive) {
+    workspace.active = createPortalConversation({}, state.portalAssistantMode, userId);
+    if (state.route.name === 'portal') render();
+    else navigate('/hub');
+  } else {
+    renderConversationArchive();
+  }
 }
 
 function startNewPortalConversation() {
@@ -691,59 +722,6 @@ function syncPortalAssistantPending(pending) {
   if (form) form.toggleAttribute('aria-busy', pending);
 }
 
-function paintPortalModelStatus(payload) {
-  const container = document.querySelector('#portalModelStatus');
-  if (!container) return;
-  container.classList.remove('is-loading');
-  if (!payload) {
-    container.innerHTML = `
-      <div class="portal-model-status__copy">
-        <strong>模型配置暂不可用</strong>
-        <span>瀚海行仍可使用 Agent 本地回退配置。</span>
-      </div>
-      <a class="portal-model-status__action" href="/hub/settings" data-link>检查配置</a>
-    `;
-    return;
-  }
-
-  const { profiles, bindings } = payload;
-  const hanhai = state.agents.find((agent) => normalizeAgent(agent).name.includes('瀚海行'));
-  const hanhaiBinding = hanhai ? bindings.agents[normalizeAgent(hanhai).id] : null;
-  const effectiveBinding = hanhaiBinding?.profile_id ? hanhaiBinding : bindings.global;
-  const profile = profiles.find((item) => item.id === effectiveBinding?.profile_id) || profiles[0] || null;
-  const eligibleCount = (profile?.models || []).filter((model) => model.chat_eligible).length;
-
-  if (!profile) {
-    container.innerHTML = `
-      <div class="portal-model-status__copy">
-        <strong>还没有模型 Profile</strong>
-        <span>添加 API 配置后，可给瀚海行和其他兼容 Agent 统一供给模型。</span>
-      </div>
-      <a class="portal-model-status__action" href="/hub/settings" data-link>添加模型配置</a>
-    `;
-    return;
-  }
-
-  const globalModel = bindings.global?.model_id || '未设置';
-  const hanhaiModel = hanhaiBinding?.model_id || (bindings.global?.model_id ? `${bindings.global.model_id}（继承全局）` : '未设置');
-  container.innerHTML = `
-    <div class="portal-model-status__identity">
-      <span class="portal-model-status__dot" aria-hidden="true"></span>
-      <span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profile.api_key_mask || 'API Key 已安全保存')}</small></span>
-    </div>
-    <div class="portal-model-status__route">
-      <span>全局默认</span>
-      <strong>${escapeHtml(globalModel)}</strong>
-    </div>
-    <div class="portal-model-status__route">
-      <span>瀚海行Agent</span>
-      <strong>${escapeHtml(hanhaiModel)}</strong>
-    </div>
-    <div class="portal-model-status__models">${eligibleCount ? `${eligibleCount} 个可用模型` : '等待发现模型'}</div>
-    <a class="portal-model-status__action" href="/hub/settings" data-link>管理模型配置</a>
-  `;
-}
-
 function renderPortalQuickRow() {
   return `
     <section class="portal-quickrow" aria-label="Agent 广场快捷入口">
@@ -841,22 +819,46 @@ function renderDirectoryShell(title, subtitle, loading) {
         <div><p class="eyebrow">CAMPUS AGENTS</p><h2>${escapeHtml(title)}</h2></div>
         <span>${agents.length ? `${agents.length} 个 Agent 已通过平台验收` : escapeHtml(subtitle)}</span>
       </header>
-      <details class="filter-panel" aria-label="Agent 筛选">
-        <summary>筛选 Agent</summary>
-        <div class="hub-tabs" role="tablist" aria-label="分类">
-          ${categories.map((category) => `<button class="tab" type="button" data-category="${escapeAttr(category)}" aria-selected="${category === state.category}">${escapeHtml(category)}</button>`).join('')}
-        </div>
-        <div class="hub-filters" aria-label="接入等级与能力">
-          ${['全部', ACCESS_LEVELS.link.label, ACCESS_LEVELS.connected.label, ACCESS_LEVELS.featured.label].map((level) => `<button class="chip" type="button" data-level="${escapeAttr(level)}" aria-pressed="${level === state.level}">${escapeHtml(level)}</button>`).join('')}
-        </div>
-        <div class="hub-filters" aria-label="标签">
-          ${chips.map((chip) => `<button class="chip" type="button" data-chip="${escapeAttr(chip)}" aria-pressed="${chip === state.chip}">${escapeHtml(chip)}</button>`).join('')}
-        </div>
-      </details>
+      ${renderFilterPanel({ categories, chips })}
       <section id="agentGrid" class="hub-grid" aria-live="polite">
         ${loading ? document.querySelector('#skeletonCards')?.innerHTML || '' : ''}
       </section>
     </section>
+  `;
+}
+
+// Tags are capped so the row wraps to at most two lines; the rest sit behind a
+// "+N" toggle instead of an off-screen horizontal scroll.
+const CHIP_COLLAPSE_LIMIT = 8;
+
+function renderFilterPanel({ categories, chips }) {
+  const levels = ['全部', ACCESS_LEVELS.link.label, ACCESS_LEVELS.connected.label, ACCESS_LEVELS.featured.label];
+  return `
+    <section class="hub-filters" aria-label="Agent 筛选">
+      ${renderFilterRow('分类', 'category', categories, state.category)}
+      ${renderFilterRow('接入', 'level', levels, state.level)}
+      ${chips.length > 1 ? renderFilterRow('标签', 'chip', chips, state.chip, CHIP_COLLAPSE_LIMIT) : ''}
+    </section>
+  `;
+}
+
+function renderFilterRow(label, role, items, selected, limit = 0) {
+  const attr = `data-${role}`;
+  const stateAttr = role === 'category' ? 'aria-selected' : 'aria-pressed';
+  const buttons = items.map((item, index) => {
+    // The active item always stays reachable, even past the collapse limit.
+    const collapsed = limit > 0 && index >= limit && item !== selected;
+    return `<button class="chip${collapsed ? ' chip--collapsed' : ''}" type="button" ${attr}="${escapeAttr(item)}" ${stateAttr}="${item === selected}">${escapeHtml(item)}</button>`;
+  }).join('');
+  const hidden = limit > 0 ? items.filter((item, index) => index >= limit && item !== selected).length : 0;
+  const more = hidden
+    ? `<button class="chip chip--more" type="button" data-chip-more aria-expanded="false" aria-label="展开另外 ${hidden} 个标签">+${hidden}</button>`
+    : '';
+  return `
+    <div class="filter-row${limit ? ' filter-row--collapsible' : ''}">
+      <span class="filter-row__label">${escapeHtml(label)}</span>
+      <div class="filter-row__items">${buttons}${more}</div>
+    </div>
   `;
 }
 
@@ -880,6 +882,15 @@ function bindFilters() {
       state.chip = button.dataset.chip;
       updateAgentGrid();
       refreshPressedState();
+    });
+  });
+  document.querySelectorAll('[data-chip-more]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const row = button.closest('.filter-row');
+      if (!row) return;
+      const expanded = row.classList.toggle('is-expanded');
+      button.setAttribute('aria-expanded', String(expanded));
+      button.hidden = expanded;
     });
   });
 }
@@ -922,24 +933,19 @@ function renderAgentCard(raw) {
     <article class="hub-card hub-card--${escapeAttr(normalizeAccessLevel(agent))}" data-id="${escapeAttr(agent.id)}" tabindex="0" aria-label="${escapeAttr(agent.name)}">
       <div class="hub-card__head">
         ${renderAgentIcon(agent)}
-        <div class="hub-card__titleblock">
-          <h3 class="hub-card__name">${escapeHtml(agent.name)}</h3>
-          <span class="hub-card__category">${escapeHtml(agent.category)} · ${escapeHtml(agent.owner)}</span>
-        </div>
+        <h3 class="hub-card__name">${escapeHtml(agent.name)}</h3>
         <span class="badge badge--${meta.tone}">${meta.label}</span>
       </div>
       <p class="hub-card__desc">${escapeHtml(agent.description)}</p>
-      <div class="hub-card__subskills">
-        ${agent.capabilities.slice(0, 3).map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')}
-        ${agent.capabilities.length > 3 ? `<span class="tag">+${agent.capabilities.length - 3}</span>` : ''}
-      </div>
       <div class="hub-card__foot">
-        <span>${formatUsage(agent.usage_count)} 次使用</span>
-        <span>${healthBadge(agent.health)} <span class="tag">v${escapeHtml(agent.version)}</span></span>
-      </div>
-      <div class="action-row" style="margin-top:14px">
-        ${primary}
-        <a class="link-button" href="/hub/agents/${encodeURIComponent(agent.id)}" data-link data-details-action>${escapeHtml(meta.secondary)}</a>
+        <span class="hub-card__meta">
+          ${renderHealthDot(agent.health)}
+          <span>${formatUsage(agent.usage_count)} 次使用</span>
+        </span>
+        <div class="action-row">
+          ${primary}
+          <a class="link-button" href="/hub/agents/${encodeURIComponent(agent.id)}" data-link data-details-action>${escapeHtml(meta.secondary)}</a>
+        </div>
       </div>
     </article>
   `;
@@ -1290,6 +1296,7 @@ async function renderSubmissions() {
 
 const SETTINGS_KEY = 'hub_user_model_settings';
 let modelSettingsDraft = null;
+let currentEditingProfile = null;
 
 async function renderSettings() {
   const generation = state.generation;
@@ -1301,7 +1308,7 @@ async function renderSettings() {
       <div>
         <p class="eyebrow">SETTINGS</p>
         <h1>多模型配置中心</h1>
-        <p class="lead">在 Hub 集中维护多套模型 Profile。接入平台能力的 Agent 会通过 Hub Model Gateway 使用授权配置，第三方 Agent 不会拿到明文 API Key。</p>
+        <p class="lead">集中维护多套模型配置，可设置全局默认或按 Agent 单独绑定。</p>
       </div>
     </section>
     <section class="model-settings" aria-busy="true">
@@ -1318,7 +1325,13 @@ async function renderSettings() {
     return;
   }
   if (generation !== state.generation) return;
-  paintModelSettings(payload);
+  try {
+    paintModelSettings(payload);
+  } catch (error) {
+    console.error('paintModelSettings failed:', error);
+    view.innerHTML = errorState('模型配置加载失败', readableError(error), '重试', '/hub/settings');
+    document.querySelector('[data-retry]')?.addEventListener('click', () => renderSettings());
+  }
 }
 
 function paintModelSettings(payload) {
@@ -1328,6 +1341,7 @@ function paintModelSettings(payload) {
     : profiles[0]?.id || '';
   const selectedProfile = profiles.find((profile) => profile.id === selectedId) || null;
   const editing = modelSettingsDraft?.mode === 'new' ? modelSettingsDraft : selectedProfile;
+  currentEditingProfile = editing;
   const legacy = loadSettings();
   const showMigration = hasLegacySettings(legacy);
   const compatibleAgents = state.agents.filter((agent) => {
@@ -1342,26 +1356,23 @@ function paintModelSettings(payload) {
       <div>
         <p class="eyebrow">SETTINGS</p>
         <h1>多模型配置中心</h1>
-        <p class="lead">保存多个 OpenAI / DeepSeek / 自定义兼容配置，给全局默认和具体 Agent 绑定不同模型。</p>
+        <p class="lead">集中维护多套模型配置，可设置全局默认或按 Agent 单独绑定。</p>
       </div>
     </section>
     <section class="model-settings" data-model-settings>
       <div class="model-settings__notice">
-        <strong>数据发送提醒</strong>
-        <span>你在对话中输入的内容、被 Agent 引用的上下文和必要元数据，会发送到你选择的模型服务商；请只配置你信任的 Base URL。</span>
+        <strong>数据安全</strong>
+        <span>请求会发送到你配置的 Base URL；请只添加你信任的服务商。</span>
       </div>
       ${showMigration ? renderLegacyMigration(legacy) : ''}
       ${renderModelSettingsOverview(profiles, bindings, compatibleAgents)}
       <div class="model-settings__grid">
         <aside class="model-settings__list" aria-label="Model Profile 列表">
           <div class="model-settings__list-head">
-            <div>
-              <h2>配置档案</h2>
-              <p>${profiles.length ? `已保存 ${profiles.length} 套配置` : '还没有服务端 Profile'}</p>
-            </div>
+            <h2>配置档案</h2>
             <button class="button" type="button" data-new-profile>新增</button>
           </div>
-          ${profiles.length ? profiles.map((profile) => renderProfileSummary(profile, bindings, profile.id === selectedId)).join('') : emptyState('暂无模型配置', '点击“新增”创建第一套 Profile。')}
+          ${profiles.length ? profiles.map((profile) => renderProfileSummary(profile, bindings, profile.id === selectedId)).join('') : emptyState('暂无配置', '点击“新增”添加你的第一套模型配置。')}
         </aside>
         <div class="model-settings__editor">
           ${renderModelProfileEditor(editing)}
@@ -1375,6 +1386,8 @@ function paintModelSettings(payload) {
   bindModelSettings({ profiles, bindings });
 }
 
+// Progress summary for the four-step config flow. Sits above the editor so a
+// first-time visitor can see what is still missing instead of facing an empty form.
 function renderModelSettingsOverview(profiles, bindings, agents) {
   const chatModelCount = profiles.reduce((sum, profile) => (
     sum + (profile.models || []).filter((model) => model.chat_eligible).length
@@ -1386,20 +1399,19 @@ function renderModelSettingsOverview(profiles, bindings, agents) {
     return binding?.profile_id && binding?.model_id;
   }).length;
   const steps = [
-    { title: '创建 Profile', detail: `${profiles.length} 套服务端配置`, done: profiles.length > 0 },
-    { title: '发现模型', detail: `${chatModelCount} 个可聊天模型`, done: chatModelCount > 0 },
-    { title: '全局默认', detail: globalReady ? renderBindingText(bindings.global, profiles) : '尚未设置', done: globalReady },
-    { title: 'Agent 绑定', detail: agents.length ? `${boundAgentCount}/${agents.length} 个兼容 Agent 已绑定` : '暂无声明平台模型能力的 Agent', done: agents.length > 0 && boundAgentCount > 0 },
+    { title: '创建配置', detail: `${profiles.length} 套`, done: profiles.length > 0 },
+    { title: '发现模型', detail: `${chatModelCount} 个`, done: chatModelCount > 0 },
+    { title: '全局默认', detail: globalReady ? renderBindingText(bindings.global, profiles) : '未设置', done: globalReady },
+    { title: 'Agent 绑定', detail: agents.length ? `${boundAgentCount}/${agents.length}` : '0', done: agents.length > 0 && boundAgentCount > 0 },
   ];
   return `
-    <section class="model-settings__overview" aria-label="多模型配置进度">
+    <section class="model-settings__overview" aria-label="配置进度">
       <div class="model-settings__overview-head">
         <div>
-          <p class="eyebrow">MODEL ROUTING FLOW</p>
-          <h2>从配置到 Agent 调用的闭环</h2>
-          <p>先创建 Profile，再发现模型；设置全局默认后，瀚海行等兼容 Agent 可继承，也可单独绑定更合适的模型。</p>
+          <p class="eyebrow">PROGRESS</p>
+          <h2>配置到 Agent 调用</h2>
         </div>
-        <span class="badge badge--${globalReady || boundAgentCount ? 'success' : 'neutral'}">${globalReady || boundAgentCount ? '已有可用绑定' : '等待配置'}</span>
+        <span class="badge badge--${globalReady || boundAgentCount ? 'success' : 'neutral'}">${globalReady || boundAgentCount ? '已就绪' : '待配置'}</span>
       </div>
       <ol class="model-settings__steps">
         ${steps.map((step, index) => `
@@ -1412,12 +1424,6 @@ function renderModelSettingsOverview(profiles, bindings, agents) {
           </li>
         `).join('')}
       </ol>
-      <div class="model-settings__summary">
-        <span>Profile：${profiles.length}</span>
-        <span>可聊天模型：${chatModelCount}</span>
-        <span>全局默认：${globalReady ? escapeHtml(renderBindingText(bindings.global, profiles)) : '未设置'}</span>
-        <span>Agent 专属：${boundAgentCount}</span>
-      </div>
     </section>
   `;
 }
@@ -1462,13 +1468,13 @@ function renderLegacyMigration(legacy, disabled = false) {
   return `
     <div class="model-settings__migration" data-legacy-migration>
       <div>
-        <strong>发现旧版本地配置</strong>
+        <strong>旧配置待迁移</strong>
         <p>${escapeHtml(reason)}</p>
-        <p class="small-muted">旧配置：${escapeHtml(legacy.provider || 'custom')} · ${escapeHtml(legacy.model || '未填写模型')} · ${escapeHtml(maskBaseUrl(legacy.baseUrl || ''))}</p>
+        <p class="small-muted">${escapeHtml(legacy.provider || 'custom')} · ${escapeHtml(legacy.model || '未填写模型')} · ${escapeHtml(maskBaseUrl(legacy.baseUrl || ''))}</p>
       </div>
-      <div class="action-row">
-        <button class="ghost-button" type="button" data-dismiss-legacy>暂不迁移</button>
-        <button class="button" type="button" data-migrate-legacy ${blocked ? 'disabled' : ''}>确认迁移</button>
+      <div class="action-row action-row--compact">
+        <button class="ghost-button" type="button" data-dismiss-legacy>忽略</button>
+        <button class="button" type="button" data-migrate-legacy ${blocked ? 'disabled' : ''}>迁移</button>
       </div>
     </div>
   `;
@@ -1495,41 +1501,41 @@ function renderModelProfileEditor(profile) {
   const isNew = draft.mode === 'new' || !draft.id;
   const modelOptions = draft.models?.length
     ? draft.models.map((model) => `<option value="${escapeAttr(model.id)}" ${model.id === draft.default_model_id ? 'selected' : ''}>${escapeHtml(model.display_name || model.id)}</option>`).join('')
-    : '<option value="">先点击“发现模型”</option>';
+    : '<option value="">发现模型后可选</option>';
+  const keyHint = draft.has_api_key ? `已保存 ${escapeHtml(draft.api_key_mask || '••••••')}` : '服务端加密存储';
   return `
-    <form id="modelProfileForm" class="model-profile-form form-grid" data-profile-id="${escapeAttr(draft.id || '')}">
+    <form id="modelProfileForm" class="model-profile-form" data-profile-id="${escapeAttr(draft.id || '')}">
       <div class="model-profile-form__head">
-        <div>
-          <h2>${isNew ? '新增 Profile' : '编辑 Profile'}</h2>
-          <p>${isNew ? 'API Key 只会通过服务端加密保存，不再写入 localStorage。' : renderKeySummary(draft)}</p>
-        </div>
+        <h2>${isNew ? '新增配置' : '编辑配置'}</h2>
         ${isNew ? '' : `<button class="danger-button" type="button" data-delete-profile="${escapeAttr(draft.id)}">删除</button>`}
       </div>
-      <label class="field"><span>配置名称</span><input name="name" value="${escapeAttr(draft.name || '')}" placeholder="例如 GPT 主力 / DeepSeek 经济版" required /></label>
-      <div class="model-settings__two-col">
-        <label class="field"><span>Provider</span><select name="provider">
-          <option value="openai" ${draft.provider === 'openai' ? 'selected' : ''}>OpenAI 兼容</option>
-          <option value="deepseek" ${draft.provider === 'deepseek' ? 'selected' : ''}>DeepSeek 兼容</option>
-          <option value="custom" ${draft.provider === 'custom' ? 'selected' : ''}>自定义兼容网关</option>
-        </select></label>
-        <label class="field"><span>API 协议</span><select name="api_style">
-          <option value="responses" ${draft.api_style === 'responses' ? 'selected' : ''}>Responses API</option>
-          <option value="chat_completions" ${draft.api_style === 'chat_completions' ? 'selected' : ''}>Chat Completions</option>
-        </select></label>
+      <div class="model-profile-form__body">
+        <label class="field field--wide"><span>名称</span><input name="name" value="${escapeAttr(draft.name || '')}" placeholder="GPT 主力" required /></label>
+        <div class="field-pair">
+          <label class="field"><span>服务商</span><select name="provider">
+            <option value="openai" ${draft.provider === 'openai' ? 'selected' : ''}>OpenAI 兼容</option>
+            <option value="deepseek" ${draft.provider === 'deepseek' ? 'selected' : ''}>DeepSeek 兼容</option>
+            <option value="custom" ${draft.provider === 'custom' ? 'selected' : ''}>自定义网关</option>
+          </select></label>
+          <label class="field"><span>协议</span><select name="api_style">
+            <option value="responses" ${draft.api_style === 'responses' ? 'selected' : ''}>Responses</option>
+            <option value="chat_completions" ${draft.api_style === 'chat_completions' ? 'selected' : ''}>Chat Completions</option>
+          </select></label>
+        </div>
+        <label class="field field--wide"><span>Base URL</span><input name="base_url" value="${escapeAttr(draft.base_url || '')}" placeholder="https://api.openai.com/v1" autocomplete="off" required /></label>
+        <label class="field field--wide"><span>API Key</span><input name="api_key" type="password" value="" placeholder="${keyHint}" autocomplete="new-password" /></label>
+        <div class="field-pair">
+          <label class="field"><span>状态</span><select name="status">
+            <option value="active" ${draft.status === 'active' ? 'selected' : ''}>启用</option>
+            <option value="disabled" ${draft.status === 'disabled' ? 'selected' : ''}>禁用</option>
+          </select></label>
+          <label class="field"><span>默认模型</span><select name="default_model_id">${modelOptions}</select></label>
+        </div>
       </div>
-      <label class="field"><span>Base URL</span><input name="base_url" value="${escapeAttr(draft.base_url || '')}" placeholder="https://api.openai.com/v1" autocomplete="off" required /></label>
-      <label class="field"><span>API Key（留空表示不替换）</span><input name="api_key" type="password" value="" placeholder="${draft.has_api_key ? '已保存，输入新 Key 才会替换' : 'sk-...'}" autocomplete="new-password" /></label>
-      <div class="model-settings__two-col">
-        <label class="field"><span>启用状态</span><select name="status">
-          <option value="active" ${draft.status === 'active' ? 'selected' : ''}>启用</option>
-          <option value="disabled" ${draft.status === 'disabled' ? 'selected' : ''}>禁用</option>
-        </select></label>
-        <label class="field"><span>默认模型</span><select name="default_model_id">${modelOptions}</select></label>
-      </div>
-      ${draft.last_error ? `<div class="model-settings__error">最近错误：${escapeHtml(draft.last_error)}</div>` : ''}
-      <div class="action-row">
-        <button class="button" type="submit">${isNew ? '创建 Profile' : '保存修改'}</button>
-        <button class="ghost-button" type="button" data-test-profile ${isNew ? 'disabled' : ''}>测试连接</button>
+      ${draft.last_error ? `<div class="model-settings__error">${escapeHtml(draft.last_error)}</div>` : ''}
+      <div class="action-row action-row--compact">
+        <button class="button" type="submit">${isNew ? '创建' : '保存'}</button>
+        <button class="ghost-button" type="button" data-test-profile ${isNew ? 'disabled' : ''}>测试</button>
         <button class="ghost-button" type="button" data-discover-models ${isNew ? 'disabled' : ''}>发现模型</button>
       </div>
       ${renderModelList(draft.models || [])}
@@ -1537,13 +1543,8 @@ function renderModelProfileEditor(profile) {
   `;
 }
 
-function renderKeySummary(profile) {
-  if (!profile.has_api_key) return '尚未保存 API Key。';
-  return `API Key 已保存：${escapeHtml(profile.api_key_mask || '••••••')} ${profile.api_key_fingerprint ? `· 指纹 ${escapeHtml(profile.api_key_fingerprint)}` : ''}`;
-}
-
 function renderModelList(models) {
-  if (!models.length) return '<div class="model-list model-list--empty">暂无模型清单。点击“发现模型”后可选择默认模型。</div>';
+  if (!models.length) return '<div class="model-list model-list--empty">未发现模型</div>';
   return `
     <div class="model-list" aria-label="可用模型">
       ${models.map((model) => `
@@ -1679,7 +1680,8 @@ function bindLegacyMigration(disabled) {
 
 async function saveModelProfile(form) {
   const id = form.dataset.profileId;
-  const body = {
+  const isNew = !id;
+  const rawBody = {
     name: fieldValue(form, 'name').trim(),
     provider: fieldValue(form, 'provider'),
     api_style: fieldValue(form, 'api_style'),
@@ -1688,18 +1690,47 @@ async function saveModelProfile(form) {
     default_model_id: fieldValue(form, 'default_model_id'),
   };
   const apiKey = fieldValue(form, 'api_key').trim();
-  if (apiKey) body.api_key = apiKey;
+  if (apiKey) rawBody.api_key = apiKey;
+
+  const body = isNew
+    ? rawBody
+    : diffModelProfileBody(rawBody, currentEditingProfile);
+
+  // If the user changed Base URL but did not provide a new API Key, the backend
+  // refuses to rotate the endpoint without a key. Fail fast with a clear hint.
+  if (!isNew && 'base_url' in body && !('api_key' in body)) {
+    toast('修改 Base URL 后需要重新输入 API Key 才能保存。');
+    form.querySelector('input[name="api_key"]')?.focus();
+    return;
+  }
+
   try {
-    const saved = id
-      ? await apiJson(HUB_API.modelProfile(id), { method: 'PATCH', body })
-      : await apiJson(HUB_API.modelProfiles, { method: 'POST', body });
+    const saved = isNew
+      ? await apiJson(HUB_API.modelProfiles, { method: 'POST', body })
+      : await apiJson(HUB_API.modelProfile(id), { method: 'PATCH', body });
     const profile = normalizeModelProfile(saved.profile || saved);
     modelSettingsDraft = { id: profile.id || id };
-    toast(id ? 'Profile 已保存。' : 'Profile 已创建。');
+    toast(isNew ? '配置已创建。' : '配置已保存。');
     renderSettings();
   } catch (error) {
     toast(`保存失败：${readableError(error)}`);
   }
+}
+
+function diffModelProfileBody(raw, current) {
+  if (!current) return raw;
+  const body = {};
+  const currentBase = String(current.base_url || '').replace(/\/$/, '');
+  const newBase = String(raw.base_url || '').replace(/\/$/, '');
+  for (const key of Object.keys(raw)) {
+    if (key === 'base_url') {
+      if (newBase !== currentBase) body[key] = raw[key];
+      continue;
+    }
+    if (raw[key] !== current[key]) body[key] = raw[key];
+  }
+  if ('api_key' in raw) body.api_key = raw.api_key;
+  return body;
 }
 
 async function runModelProfileAction(id, action) {
@@ -2437,23 +2468,51 @@ function renderAdminDetail(raw) {
     { name: 'Manifest Schema', status: version.review_status === 'approved' ? 'passed' : 'pending', detail: '等待服务端自动检查结果' },
   ];
   return `
-    <h2>${escapeHtml(agent.name)}</h2>
-    <p class="lead">${escapeHtml(agent.description)}</p>
-    <div class="tag-list">${statusBadge(raw.status || agent.status || 'pending')} ${accessBadge(agent)}</div>
-    <h3>自动检查</h3>
-    <div class="check-list">
-      ${checks.map((check) => `<div class="check-item"><span>${statusDot(check.status)}</span><span><strong>${escapeHtml(check.name)}</strong><br><span class="small-muted">${escapeHtml(check.detail || check.safe_detail || check.error_code || '')}</span></span></div>`).join('')}
-    </div>
-    <h3>Manifest</h3>
-    <pre class="manifest-box">${escapeHtml(JSON.stringify(raw.active_version?.manifest || raw.manifest || raw, null, 2))}</pre>
-    <div class="action-row" style="margin-top:14px">
-      <button class="ghost-button" type="button" data-run-checks data-version="${escapeAttr(versionId)}">重新执行机器验收</button>
-      ${version.review_status === 'pending' || raw.review_status === 'pending' || raw.status === 'pending' ? `<button class="button" type="button" data-review="approved" data-version="${escapeAttr(versionId)}">批准</button><button class="danger-button" type="button" data-review="rejected" data-version="${escapeAttr(versionId)}">拒绝</button>` : ''}
-      ${version.review_status === 'pending' && versionIsConnected ? `<button class="ghost-button" type="button" data-review-featured data-version="${escapeAttr(versionId)}">批准为 Featured</button>` : ''}
-      ${raw.status === 'active' ? `<button class="danger-button" type="button" data-status-action="suspend">暂停</button>` : ''}
-      ${raw.status === 'suspended' ? `<button class="button" type="button" data-status-action="restore">恢复</button>` : ''}
-      ${['active', 'suspended'].includes(raw.status) ? `<button class="danger-button" type="button" data-status-action="deprecate">废弃</button>` : ''}
-      <button class="ghost-button" type="button" data-status-action="rollback">回滚</button>
+    <header class="admin-detail__header">
+      <div class="admin-detail__title">
+        ${renderAgentIcon(agent)}
+        <div>
+          <h2>${escapeHtml(agent.name)}</h2>
+          <p class="lead">${escapeHtml(agent.description)}</p>
+        </div>
+      </div>
+      <div class="tag-list">${statusBadge(raw.status || agent.status || 'pending')} ${accessBadge(agent)}</div>
+    </header>
+    <dl class="admin-detail__meta">
+      <div><dt>分类</dt><dd>${escapeHtml(agent.category)}</dd></div>
+      <div><dt>版本</dt><dd>v${escapeHtml(agent.version)}</dd></div>
+      <div><dt>提交时间</dt><dd>${escapeHtml(raw.submitted_at || raw.updated_at || '')}</dd></div>
+    </dl>
+    <section class="admin-section">
+      <h3>自动检查</h3>
+      <div class="check-list">
+        ${checks.map((check) => `<div class="check-item"><span>${statusDot(check.status)}</span><span><strong>${escapeHtml(check.name)}</strong><br><span class="small-muted">${escapeHtml(check.detail || check.safe_detail || check.error_code || '')}</span></span></div>`).join('')}
+      </div>
+    </section>
+    <section class="admin-section">
+      <details class="admin-manifest">
+        <summary>查看 Manifest</summary>
+        <pre class="manifest-box">${escapeHtml(JSON.stringify(raw.active_version?.manifest || raw.manifest || raw, null, 2))}</pre>
+      </details>
+    </section>
+    <div class="admin-actions">
+      <div class="admin-actions__group">
+        <span class="admin-actions__label">审核决策</span>
+        <div class="action-row">
+          <button class="ghost-button" type="button" data-run-checks data-version="${escapeAttr(versionId)}">重新执行机器验收</button>
+          ${version.review_status === 'pending' || raw.review_status === 'pending' || raw.status === 'pending' ? `<button class="button" type="button" data-review="approved" data-version="${escapeAttr(versionId)}">批准</button><button class="danger-button" type="button" data-review="rejected" data-version="${escapeAttr(versionId)}">拒绝</button>` : ''}
+          ${version.review_status === 'pending' && versionIsConnected ? `<button class="ghost-button" type="button" data-review-featured data-version="${escapeAttr(versionId)}">批准为 Featured</button>` : ''}
+        </div>
+      </div>
+      <div class="admin-actions__group">
+        <span class="admin-actions__label">生命周期治理</span>
+        <div class="action-row">
+          ${raw.status === 'active' ? `<button class="danger-button" type="button" data-status-action="suspend">暂停</button>` : ''}
+          ${raw.status === 'suspended' ? `<button class="button" type="button" data-status-action="restore">恢复</button>` : ''}
+          ${['active', 'suspended'].includes(raw.status) ? `<button class="danger-button" type="button" data-status-action="deprecate">废弃</button>` : ''}
+          <button class="ghost-button" type="button" data-status-action="rollback">回滚</button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2617,8 +2676,19 @@ async function normalizeHttpError(response) {
     // keep empty payload
   }
   const detail = payload.detail || payload;
-  const code = detail.error || detail.code || response.statusText || 'upstream_error';
-  return { code, status: response.status, message: ERROR_MESSAGES[code] || detail.message || `HTTP ${response.status}` };
+  let code;
+  let message;
+  if (Array.isArray(detail)) {
+    // FastAPI validation error: [{"loc": [...], "msg": "...", "type": "..."}]
+    const first = detail[0] || {};
+    code = `validation_error_${first.type || 'unknown'}`;
+    const field = Array.isArray(first.loc) ? first.loc.slice(1).join('.') : '请求';
+    message = first.msg ? `${field}: ${first.msg}` : ERROR_MESSAGES.upstream_error;
+  } else {
+    code = detail.error || detail.code || response.statusText || 'upstream_error';
+    message = ERROR_MESSAGES[code] || detail.message || detail.error || `HTTP ${response.status}`;
+  }
+  return { code, status: response.status, message };
 }
 
 function renderAgentIcon(agent) {
@@ -2631,13 +2701,21 @@ function renderAgentIcon(agent) {
   return `<span class="agent-icon" aria-hidden="true"><img src="${escapeAttr(src)}" alt="" loading="lazy" /></span>`;
 }
 
-function healthBadge(health) {
+function healthTone(health) {
   const status = health?.status || 'unknown';
-  const tone = status === 'ok' || status === 'healthy' ? 'success'
-    : status === 'degraded' || status === 'unknown' ? 'warning'
-    : status === 'offline' || status === 'error' ? 'danger'
-    : 'neutral';
-  return `<span class="badge badge--${tone}">${escapeHtml(health?.label || '未检查')}</span>`;
+  if (status === 'ok' || status === 'healthy') return 'success';
+  if (status === 'degraded' || status === 'unknown') return 'warning';
+  if (status === 'offline' || status === 'error') return 'danger';
+  return 'neutral';
+}
+
+function healthBadge(health) {
+  return `<span class="badge badge--${healthTone(health)}">${escapeHtml(health?.label || '未检查')}</span>`;
+}
+
+function renderHealthDot(health) {
+  const label = escapeHtml(health?.label || '未检查');
+  return `<span class="health-dot health-dot--${healthTone(health)}"><i aria-hidden="true"></i>${label}</span>`;
 }
 
 function formatDataPolicy(policy) {

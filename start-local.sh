@@ -31,6 +31,13 @@ COURSE_DATA="$RUNTIME_DIR/course-agent"
 SECRETS_DIR="$RUNTIME_DIR/hub-secrets"
 mkdir -p "$HUB_DATA" "$COURSE_DATA" "$SECRETS_DIR"
 
+# Master key for Model Profile encryption; generate once and reuse.
+MODEL_PROFILE_MASTER_KEY_FILE="$SECRETS_DIR/model-profile-master.key"
+if [[ ! -f "$MODEL_PROFILE_MASTER_KEY_FILE" ]]; then
+  "$ROOT/apps/hub/.venv/bin/python" -c "import base64, os; open('$MODEL_PROFILE_MASTER_KEY_FILE','w').write(base64.urlsafe_b64encode(os.urandom(32)).decode() + '\n')"
+  chmod 600 "$MODEL_PROFILE_MASTER_KEY_FILE"
+fi
+
 COURSE_SECRET_FILE="$SECRETS_DIR/course-agent.secret"
 
 # 统一 URL（本地全部用 127.0.0.1，替换 compose 里的容器名）
@@ -51,6 +58,11 @@ sleep 1
 
 # ---------- 1. Hub ----------
 log "启动 Hub @ $HUB_PUBLIC_PORT"
+# Note: never put comment lines inside this backslash-continued env prefix — the
+# continuation would swallow them and silently drop every variable below.
+# Some networks (Clash/Surge fake-ip mode) resolve public model hosts into a
+# reserved range such as 198.18.0.0/15, which the SSRF guard correctly rejects.
+# Listing the trusted provider origin here keeps the guard on for everything else.
 HUB_DEMO_MODE="${HUB_DEMO_MODE:-true}" \
 HUB_HOST=127.0.0.1 \
 HUB_PORT="${HUB_PUBLIC_PORT:-8100}" \
@@ -58,6 +70,10 @@ HUB_DATABASE_PATH="$HUB_DATA/hub.sqlite3" \
 HUB_PUBLIC_BASE_URL="$HUB_URL" \
 HUB_INTERNAL_URL_ALLOWLIST="$COURSE_INTERNAL,$DEMO_INTERNAL" \
 HUB_CORS_ALLOW_ORIGINS="$HUB_URL" \
+HUB_MODEL_PROFILES_ENABLED=true \
+HUB_MODEL_PROFILE_MASTER_KEY_FILE="$MODEL_PROFILE_MASTER_KEY_FILE" \
+HUB_ALLOW_LOCAL_MODEL_PROVIDERS=true \
+HUB_MODEL_PROVIDER_ORIGIN_ALLOWLIST="https://api.deepseek.com" \
 PYTHONPATH="$ROOT/apps/hub" \
   "$ROOT/apps/hub/.venv/bin/python" -m uvicorn hub.main:app \
   --host 127.0.0.1 --port "${HUB_PUBLIC_PORT:-8100}" \
@@ -94,6 +110,11 @@ PYTHONPATH="$ROOT/apps/course-agent" \
 PYTHONPATH="$ROOT/apps/course-agent" \
   "$ROOT/apps/course-agent/.venv/bin/python" -m course_agent.cli import-manifest \
   "$ROOT/data/manifests/math-analysis-b1.yaml"
+# Must mirror deploy/compose.yaml: without this the knowledge square (知识广场)
+# stays empty even though the personal/shared spaces imported fine.
+PYTHONPATH="$ROOT/apps/course-agent" \
+  "$ROOT/apps/course-agent/.venv/bin/python" -m course_agent.cli seed-marketplace \
+  "$ROOT/data/manifests/marketplace-demo.yaml"
 
 log "启动 course-agent @ $COURSE_AGENT_PUBLIC_PORT"
 COURSE_AGENT_DEMO_MODE=true \
