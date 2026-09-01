@@ -23,3 +23,14 @@ test('T3 role navigation exposes developer and admin modules separately', () => 
   assert.match(appSource, /function renderSubmissions/);
   assert.match(stylesSource, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
 });
+
+test('Agent directory keeps a two-column desktop grid and a one-column mobile grid', () => {
+  assert.match(
+    stylesSource,
+    /\.hub-grid,\s*\.skeleton-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/s,
+  );
+  assert.match(
+    stylesSource,
+    /@media \(max-width:\s*640px\)[\s\S]*?\.hub-grid,\s*\.skeleton-grid\s*\{[^}]*grid-template-columns:\s*1fr/s,
+  );
+});

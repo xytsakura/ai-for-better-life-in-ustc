@@ -493,9 +493,15 @@ def test_workspace_start_requires_featured_agent(tmp_path: Path) -> None:
 
 def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     client = make_client(tmp_path)
-    assert client.get("/").status_code == 200
+    root = client.get("/")
+    assert root.status_code == 200
+    assert root.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
+    hub_root = client.get("/hub")
+    assert hub_root.status_code == 200
+    assert hub_root.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
     deep_link = client.get("/hub/agents/demo/chat")
     assert deep_link.status_code == 200
+    assert deep_link.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
     assert "Campus Agent Hub" in deep_link.text
     assert 'href="/styles.css?' in deep_link.text
     assert 'src="/assets/ustc-emblem.jpg"' in deep_link.text
@@ -506,18 +512,22 @@ def test_hub_serves_spa_and_static_assets(tmp_path: Path) -> None:
     assert 'src="./' not in deep_link.text
     app_script = client.get("/app.js")
     assert app_script.status_code == 200
+    assert app_script.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
     assert "from './hub-core.js?v=" in app_script.text
     assert "data-model-settings" in app_script.text
-    assert 'id="portalModelStatus"' in app_script.text
-    assert "paintPortalModelStatus" in app_script.text
-    assert "API Key 已安全保存" in app_script.text
-    assert "管理模型配置" in app_script.text
+    assert "多模型配置中心" in app_script.text
+    assert "data-new-profile" in app_script.text
+    assert "发现模型" in app_script.text
     assert 'name="api_key" type="password" value=""' in app_script.text
     assert "clearSettings();" in app_script.text
-    assert client.get("/hub-core.js").status_code == 200
+    for asset_path in ("/hub-core.js", "/hub-theme.js", "/splash.js", "/starfield.js", "/styles.css"):
+        asset = client.get(asset_path)
+        assert asset.status_code == 200
+        assert asset.headers["cache-control"] == "no-store, no-cache, must-revalidate, max-age=0"
     assert "/api/model-profiles" in client.get("/hub-core.js").text
-    assert client.get("/hub-theme.js").status_code == 200
-    assert client.get("/starfield.js").status_code == 200
+
+    # Fingerprinted and mounted assets keep their own cache behavior; only the
+    # mutable SPA entry points and top-level bundles are forced to revalidate.
     assert client.get("/assets/ustc-emblem.jpg").status_code == 200
 
 

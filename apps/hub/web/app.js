@@ -18,7 +18,7 @@ import {
   renderMarkdownSafe,
   safeUrl,
   validateManifest,
-} from './hub-core.js?v=20260831-10';
+} from './hub-core.js?v=20260901-1';
 import { mountStarfield } from './starfield.js';
 
 const STORAGE = Object.freeze({

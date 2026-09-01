@@ -1,5 +1,15 @@
 # Campus Agent Hub 更新日志
 
+## 2026-09-01
+
+- 修复合并后 Agent 广场在宽屏重新变成三列的视觉回归，恢复瀚海行位于左上角的两列布局；移动端继续使用单列，并补充布局契约测试。
+- Windows 干净环境部署验证补齐课程 Agent 的 Python 模块路径，避免首次初始化时报找不到 `course_agent`。
+
+### `fix(hub)`：补齐根入口缓存收口
+
+- `/`、`/hub`、`/hub/...` 与顶层 JS/CSS 统一返回 `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`，从比赛常用根入口进入时不再遗漏缓存保护。
+- 回归测试同时确认带指纹的 `/assets` 和 Agent 图标继续保留原有缓存策略，不扩大禁缓存范围。
+
 ## 2026-08-31
 
 ### `fix(hub)`：修复配置页面被浏览器缓存导致卡住

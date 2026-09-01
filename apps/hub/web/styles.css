@@ -453,7 +453,7 @@ h3 {
 .hub-grid,
 .skeleton-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -2758,7 +2758,7 @@ body[data-route='portal'] .hub-view {
 
 .hub-grid,
 .skeleton-grid {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-4);
 }
 

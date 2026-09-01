@@ -2,6 +2,11 @@
 
 本文件记录课程复习 Agent 的主要功能、修复、文档和验证变化。内容以 Git 提交为依据；尚未实现的规划会明确标记为待办，不计入已交付功能。
 
+## 2026-09-01：知识广场 seed 异常路径收口
+
+- real 课程的种子作者订阅只在当前 Manifest 项校验成功且知识库已创建或解析后写入。
+- 无效首项与后续无效项只进入 `failed` 结果，不再触发未初始化变量、复用上一轮状态或误订阅；混合 Manifest 和重复 seed 已加入回归测试。
+
 ## 2026-08-31：修复本地启动时知识广场为空 / 资料回答无依据
 
 - `start-local.sh` 此前只执行 `init-db` 和 `import-manifest`，遗漏了 `deploy/compose.yaml` 中的 `seed-marketplace` 步骤，导致从 Docker 切换到本地启动后，知识广场（`marketplace_course_metadata` / `published_libraries`）为空，而个人与共享空间的资料不受影响。

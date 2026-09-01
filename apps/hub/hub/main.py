@@ -749,11 +749,11 @@ def create_app(settings: Settings | None = None, identity: IdentityService | Non
                 identity=identity,
             )
 
+    no_cache = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+
     @app.get("/", include_in_schema=False)
     def hub_root() -> FileResponse:
-        return FileResponse(web_root / "index.html")
-
-    no_cache = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+        return FileResponse(web_root / "index.html", headers=no_cache)
 
     @app.get("/hub", include_in_schema=False)
     @app.get("/hub/{path:path}", include_in_schema=False)

@@ -46,6 +46,7 @@
 - Demo 使用 FastAPI、SQLite FTS5、PyMuPDF、jieba 和服务端 Responses-compatible 模型配置；运行时数据库和上传目录只放在 `var/`。
 - 当前演示语料为 25 份唯一 PDF、510 页；2026-08-03 已完成 DeepSeek-OCR-2 Markdown 全量回填，500 页可检索、10 个空白页不入索引、686 个分块。
 - 本地完整演示是三个进程承载四个逻辑 Agent：Hub `8100`、瀚海行 `8002`、共享 Demo 服务 `8101`；`8101` 同时接受校园助手、评课社区和校园公共服务三个 audience。无 Docker 时统一运行 `deploy/run-demo-local.ps1`，不能只启动 Hub 或只注册一个 Demo audience。
+- Docker、PowerShell 和 Shell 演示入口必须保持 `init-db -> import-manifest -> seed-marketplace -> 服务启动 -> bootstrap/验收` 的一致顺序；Windows 原生入口还必须先加载 `.env` 并生成模型配置主密钥。修改任一入口时用部署脚本一致性测试防止再次漂移。
 
 ## 知识库与课程 Agent 约定
 

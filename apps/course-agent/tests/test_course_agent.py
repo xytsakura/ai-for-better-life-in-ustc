@@ -2017,6 +2017,63 @@ courses:
     assert math_document["can_download"] is False
 
 
+def test_seed_marketplace_skips_invalid_items_without_leaking_subscription_state(tmp_path: Path):
+    settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
+    manifest = tmp_path / "marketplace-invalid-items.yaml"
+    manifest.write_text(
+        """
+version: 1
+courses:
+  - not-a-course-mapping
+  - slug: valid-real
+    library_id: marketplace-library-valid-real
+    space_id: marketplace-space-valid-real
+    version_id: marketplace-version-valid-real
+    name: Valid real library
+    course: Valid course
+    author_id: demo-a
+    demo_kind: real
+  - slug: invalid-cover
+    library_id: marketplace-library-invalid-cover
+    space_id: marketplace-space-invalid-cover
+    version_id: marketplace-version-invalid-cover
+    name: Invalid cover library
+    course: Invalid course
+    author_id: demo-b
+    demo_kind: real
+    cover_asset: https://example.com/not-local.png
+  - slug: valid-placeholder
+    library_id: marketplace-library-valid-placeholder
+    space_id: marketplace-space-valid-placeholder
+    version_id: marketplace-version-valid-placeholder
+    name: Valid placeholder library
+    course: Placeholder course
+    author_id: demo-b
+    demo_kind: demo-placeholder
+""",
+        encoding="utf-8",
+    )
+
+    first = seed_marketplace(settings, manifest)
+    second = seed_marketplace(settings, manifest)
+
+    assert first["created"] == 2
+    assert first["skipped"] == 0
+    assert [item["slug"] for item in first["failed"]] == ["<invalid>", "invalid-cover"]
+    assert second["created"] == 0
+    assert second["skipped"] == 2
+    assert [item["slug"] for item in second["failed"]] == ["<invalid>", "invalid-cover"]
+
+    with sqlite3.connect(settings.database_path) as conn:
+        assert conn.execute(
+            "SELECT count(*) FROM published_libraries WHERE id = 'marketplace-library-invalid-cover'"
+        ).fetchone()[0] == 0
+        subscriptions = conn.execute(
+            "SELECT library_id, user_id, status FROM library_subscriptions ORDER BY library_id, user_id"
+        ).fetchall()
+    assert subscriptions == [("marketplace-library-valid-real", "demo-a", "active")]
+
+
 def test_init_database_adds_cover_asset_to_legacy_marketplace_metadata(tmp_path: Path):
     settings = Settings(runtime_dir=tmp_path, session_secret="test-secret")
     settings.ensure_directories()

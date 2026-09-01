@@ -28,8 +28,10 @@ Git 忽略，Compose 只把这些值注入瀚海行容器。
 Windows 下也可以直接运行：
 
 ```powershell
-.\deploy\run-demo.ps1
+.\deploy\run-demo.ps1 -Detached
 ```
+
+该入口会先检查 Docker Desktop 与 Compose v2、校验 `.env` 和 Compose 配置；后台启动时会等待 Hub、瀚海行和 Demo Agent 三个健康接口，并确认四个 Agent 全部完成注册审核。只有这些条件全部满足后才会报告部署成功。省略 `-Detached` 时保持前台日志模式，适合排障。
 
 没有 Docker、但三个应用的 `.venv` 已安装完成时，使用完整本地启动入口：
 
@@ -37,7 +39,13 @@ Windows 下也可以直接运行：
 .\deploy\run-demo-local.ps1
 ```
 
-该入口会启动 `8100` Hub、`8002` 瀚海行和 `8101` Demo 服务，并执行四个 Agent 的注册、契约检查、审核、健康检查和一轮端到端验收。`8101` 同时承载校园助手、评课社区和校园公共服务三个 Demo 身份；不要只启动 Hub，否则广场会缺少卡片或显示离线。
+该入口会安全读取根目录 `.env`，在服务启动前生成并复用模型配置主密钥，依次执行数据库初始化、25 份资料导入和知识广场 seed，然后启动 `8100` Hub、`8002` 瀚海行和 `8101` Demo 服务，并执行四个 Agent 的注册、契约检查、审核、健康检查和一轮端到端验收。`8101` 同时承载校园助手、评课社区和校园公共服务三个 Demo 身份；不要只启动 Hub，否则广场会缺少卡片或显示离线。
+
+需要在不影响现有 `var/` 的隔离目录中复现时，可以使用：
+
+```powershell
+.\deploy\run-demo-local.ps1 -RuntimeRoot var\clean-demo
+```
 
 bootstrap 行为：
 
@@ -51,8 +59,9 @@ bootstrap 行为：
    - `campus-public-service-demo`：Connected Future Work Demo；
 5. 为 `hanhai-course-agent` 生成 Hub client credential；
 6. 只把 client secret 以权限收紧的原始 secret 文件写入 Docker runtime volume `hub-secrets`，瀚海行通过 `COURSE_AGENT_HUB_CLIENT_SECRET_FILE` 读取；命令行和普通环境变量不承载明文密钥；
-7. 瀚海行启动时幂等初始化数据库，并导入 `math-analysis-b1.yaml` 中的 25 份 OCR 课程资料；
-8. 等待 Demo Agent 服务就绪并自动执行四个 Agent 的健康检查，应用广场首次打开即可显示当前状态。
+7. 瀚海行启动时幂等初始化数据库，导入 `math-analysis-b1.yaml` 中的 25 份 OCR 课程资料，并 seed 六门课程的知识广场；
+8. 为真实数学分析 seed 库写入种子作者订阅，使本地 Demo 启动后可直接执行资料检索；
+9. 等待 Demo Agent 服务就绪并自动执行四个 Agent 的健康检查，应用广场首次打开即可显示当前状态。
 
 Hub 的 Ed25519 签名私钥默认保存在 `hub-data` volume 中，容器重启后继续使用同一签名身份；Featured client secret 仍单独保存在 `hub-secrets` volume。两者都不进入 Git。
 

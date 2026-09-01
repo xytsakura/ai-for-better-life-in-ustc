@@ -6,7 +6,7 @@
 
 > 当前状态：Campus Agent Hub `v0.2.0`、瀚海行 `v0.9.0` 和三个独立 Demo Agent 已形成可演示闭环。Hub 已实现 Contract v1、版本级自动验收、审批门禁、Registry、Gateway、持久限流、异步健康监测、Agent Portal、首页即时对话与需求路由、统一聊天、Featured 工作台授权和多模型配置中心；瀚海行保留数学分析 B1 知识库、引用、OCR 资料、课程知识广场和完整工作台。
 
-> 新电脑部署：安装 Docker 后运行 `./deploy/run-demo.ps1`，即可构建三项服务、注册并审核四个 Agent（含两个 Future Work Demo）、生成运行时凭据并导入 25 份数学分析资料。模型 API 只填写在本地 `.env`，不得提交到 Git。
+> 新电脑部署：安装并启动 Docker Desktop 后运行 `./deploy/run-demo.ps1 -Detached`，脚本会校验 Compose 配置、构建三项服务、注册并审核四个 Agent（含两个 Future Work Demo）、生成运行时凭据、导入 25 份数学分析资料，并在三个健康接口和四个 Agent 全部就绪后报告成功。模型 API 只填写在本地 `.env`，不得提交到 Git。
 
 > 身份说明：当前 `demo-a`、`demo-b`、`demo-c` 和 `X-Hub-User` 只用于比赛演示与权限流程验收，不是生产登录方案。若部署到公开网络，必须先接入真实身份认证并移除浏览器端演示身份切换。
 
