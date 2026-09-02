@@ -18,6 +18,7 @@ def test_windows_local_demo_bootstraps_runtime_data_and_model_key() -> None:
 
     assert positions == sorted(positions)
     assert 'dotenv_values(sys.argv[1])' in script
+    assert 'IsNullOrWhiteSpace([string]$property.Value)' in script
     assert '[string]$RuntimeRoot' in script
     assert 'HUB_MODEL_PROFILES_ENABLED = "true"' in script
     assert r'$env:PYTHONPATH = Join-Path $repoRoot "apps\course-agent"' in script

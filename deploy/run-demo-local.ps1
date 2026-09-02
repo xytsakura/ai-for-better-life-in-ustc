@@ -35,7 +35,9 @@ print(json.dumps({key: value for key, value in dotenv_values(sys.argv[1]).items(
 if ($LASTEXITCODE -ne 0) { throw "Failed to load .env." }
 $dotenv = $dotenvJson | ConvertFrom-Json
 foreach ($property in $dotenv.PSObject.Properties) {
-    if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($property.Name, "Process"))) {
+    # An empty value in the root template must not shadow the app-local .env.
+    # This matters for COURSE_AGENT_LLM_BASE_URL and other optional settings.
+    if (-not [string]::IsNullOrWhiteSpace([string]$property.Value) -and [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($property.Name, "Process"))) {
         [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, "Process")
     }
 }

@@ -7,6 +7,11 @@
 - real 课程的种子作者订阅只在当前 Manifest 项校验成功且知识库已创建或解析后写入。
 - 无效首项与后续无效项只进入 `failed` 结果，不再触发未初始化变量、复用上一轮状态或误订阅；混合 Manifest 和重复 seed 已加入回归测试。
 
+## 2026-09-02：修复 Windows 本地启动覆盖模型地址
+
+- 根目录 `.env` 模板中的空模型配置不再覆盖课程 Agent 自己的 `.env`，避免 `COURSE_AGENT_LLM_BASE_URL` 变为空值后被误报为模型不可用。
+- 重启本地服务后，模型健康检查和实际流式问答均恢复正常；原有 Hub 模型网关和直接调用路径不变。
+
 ## 2026-08-31：修复本地启动时知识广场为空 / 资料回答无依据
 
 - `start-local.sh` 此前只执行 `init-db` 和 `import-manifest`，遗漏了 `deploy/compose.yaml` 中的 `seed-marketplace` 步骤，导致从 Docker 切换到本地启动后，知识广场（`marketplace_course_metadata` / `published_libraries`）为空，而个人与共享空间的资料不受影响。
