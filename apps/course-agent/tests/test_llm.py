@@ -70,6 +70,21 @@ class _Client:
         return _Response()
 
 
+def test_request_url_adds_v1_for_provider_root(tmp_path):
+    settings = Settings(
+        runtime_dir=tmp_path,
+        llm_api_key="test-key",
+        llm_base_url="https://models.example.com",
+        llm_model="gpt-5.6-sol",
+        llm_api_style="responses",
+    )
+    adapter = LLMAdapter(settings)
+    assert adapter._request_url() == "https://models.example.com/v1/responses"
+
+    settings.llm_api_style = "chat_completions"
+    assert adapter._request_url() == "https://models.example.com/v1/chat/completions"
+
+
 class _CapturingClient:
     last_url: str | None = None
     last_payload: dict | None = None
@@ -356,7 +371,7 @@ def test_direct_mode_forwards_conversation_history(monkeypatch, tmp_path):
 
     payload = _CapturingClient.last_payload
     assert payload is not None
-    assert _CapturingClient.last_url == "https://example.invalid/responses"
+    assert _CapturingClient.last_url == "https://example.invalid/v1/responses"
     assert "instructions" in payload
     assert "messages" not in payload
     assert "max_tokens" not in payload
@@ -593,7 +608,7 @@ def test_retrieval_mode_uses_responses_payload_and_preserves_citations(monkeypat
     payload = _CitationCapturingClient.last_payload
     assert result.degraded is False
     assert result.citation_ids == ["S1"]
-    assert _CitationCapturingClient.last_url == "https://example.invalid/responses"
+    assert _CitationCapturingClient.last_url == "https://example.invalid/v1/responses"
     assert "instructions" in payload
     assert "messages" not in payload
     assert [message["role"] for message in payload["input"]] == ["user", "user"]
@@ -758,7 +773,7 @@ def test_stream_direct_parses_responses_sse_deltas_and_completed(monkeypatch, tm
     original_async_client = httpx.AsyncClient
 
     def upstream(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://example.invalid/responses"
+        assert request.url == "https://example.invalid/v1/responses"
         body = json.loads(request.content)
         assert body["stream"] is True
         return httpx.Response(

@@ -10,6 +10,14 @@
 - 一次提交尽量只处理一个主题；提交信息使用 `feat`、`fix`、`docs`、`refactor`、`test` 或 `chore` 等清晰前缀。
 - 尚未实现的想法放入设计文档或待办，不写成已经交付的更新。
 
+## 2026-09-04
+
+### `fix(model-gateway)`：兼容 CC switch 的根地址配置
+
+- Hub 模型网关和瀚海行直连适配器现在同时接受两种 Base URL：服务根地址（例如 `https://host`）和已经带 `/v1` 的 API 基地址。
+- 当用户填写服务根地址时，实际的模型发现、Responses 和 Chat Completions 请求会自动补上 `/v1`，与 CC switch 的请求约定保持一致；已有 `/v1` 配置不会重复拼接。
+- 增加根地址、显式 `/v1` 和自定义 `/api` 路径的回归测试，避免修复影响其他 OpenAI-compatible 服务。
+
 ## 2026-09-03
 
 ### `fix(deploy)`：修复阿里云公网瀚海行工作台回调

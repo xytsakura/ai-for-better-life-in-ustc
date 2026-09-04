@@ -1522,7 +1522,7 @@ function renderModelProfileEditor(profile) {
             <option value="chat_completions" ${draft.api_style === 'chat_completions' ? 'selected' : ''}>Chat Completions</option>
           </select></label>
         </div>
-        <label class="field field--wide"><span>Base URL</span><input name="base_url" value="${escapeAttr(draft.base_url || '')}" placeholder="https://api.openai.com/v1" autocomplete="off" required /></label>
+        <label class="field field--wide"><span>Base URL</span><input name="base_url" value="${escapeAttr(draft.base_url || '')}" placeholder="https://api.openai.com/v1" autocomplete="off" required /><small class="field-hint">可填写服务根地址或已带 /v1 的地址，平台会按兼容方式调用。</small></label>
         <label class="field field--wide"><span>API Key</span><input name="api_key" type="password" value="" placeholder="${keyHint}" autocomplete="new-password" /></label>
         <div class="field-pair">
           <label class="field"><span>状态</span><select name="status">

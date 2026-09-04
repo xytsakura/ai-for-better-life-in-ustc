@@ -450,6 +450,20 @@ def validate_provider_dns_safety(url: str, settings: Settings) -> None:
 
 
 def _provider_endpoint(base_url: str, path: str) -> str:
+    """Build an OpenAI-compatible endpoint from either a root or API base URL.
+
+    CC switch (and the Codex client it configures) accepts a provider root such
+    as ``https://host`` and adds the conventional ``/v1`` prefix internally.
+    The Hub settings page accepts both that form and an explicit
+    ``https://host/v1``.  Keep the value stored by the user intact, but apply
+    the same prefix rule at the final request boundary so both forms behave
+    identically.
+    """
+    parsed = urlparse(base_url.strip())
+    if not parsed.path.strip("/"):
+        base_url = urlunparse(
+            (parsed.scheme, parsed.netloc, "/v1", "", "", "")
+        )
     return urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
 
 

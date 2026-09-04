@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse, urlunparse
 
 import httpx
 
@@ -62,7 +63,11 @@ class LLMAdapter:
 
     def _request_url(self) -> str:
         path = "/chat/completions" if self._api_style() == "chat_completions" else "/responses"
-        return self.settings.llm_base_url.rstrip("/") + path
+        base_url = self.settings.llm_base_url.strip()
+        parsed = urlparse(base_url)
+        if not parsed.path.strip("/"):
+            base_url = urlunparse((parsed.scheme, parsed.netloc, "/v1", "", "", ""))
+        return base_url.rstrip("/") + path
 
     def _build_payload(
         self,

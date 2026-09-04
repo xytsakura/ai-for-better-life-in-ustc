@@ -12,6 +12,7 @@ from hub.config import Settings
 from hub.db import database
 from hub.gateway import _record_invocation_end
 from hub.main import create_app
+from hub.model_gateway import _provider_endpoint
 
 
 def settings_for_models(tmp_path: Path, *, enabled: bool = True, allow_local: bool = True) -> Settings:
@@ -33,6 +34,18 @@ def settings_for_models(tmp_path: Path, *, enabled: bool = True, allow_local: bo
 
 def model_client(tmp_path: Path, *, enabled: bool = True, allow_local: bool = True) -> TestClient:
     return TestClient(create_app(settings=settings_for_models(tmp_path, enabled=enabled, allow_local=allow_local)))
+
+
+def test_provider_endpoint_matches_cc_switch_root_and_explicit_v1_forms() -> None:
+    assert _provider_endpoint("https://models.example.com", "responses") == (
+        "https://models.example.com/v1/responses"
+    )
+    assert _provider_endpoint("https://models.example.com/v1", "responses") == (
+        "https://models.example.com/v1/responses"
+    )
+    assert _provider_endpoint("https://models.example.com/api", "responses") == (
+        "https://models.example.com/api/responses"
+    )
 
 
 def platform_manifest(*, agent_id: str = "hanhai-agent", api_style: str = "responses") -> dict[str, Any]:
