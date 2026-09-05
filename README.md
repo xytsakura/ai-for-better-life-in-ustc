@@ -250,4 +250,4 @@ git push
 - [比赛通知](https://mp.weixin.qq.com/s/AZKK8QSrTQWR3u0yO4d_kA)
 - [本科生算力平台](https://107.ustc.edu.cn/)
 - [USTC 评课社区](https://icourse.club/)
-- [GitHub 私有仓库](https://github.com/xytsakura/ai-for-better-life-in-ustc)
+- [GitHub 公开仓库](https://github.com/xytsakura/ai-for-better-life-in-ustc)

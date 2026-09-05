@@ -4,7 +4,7 @@
 
 - 本目录用于筹备中国科学技术大学“一〇七”杯算力与智能体开发大赛。
 - 队伍名称为 `AI for better life In ustc`，共 3 名本科生，已报名本科生组智能体赛道。
-- GitHub 私有仓库为 `xytsakura/ai-for-better-life-in-ustc`。
+- GitHub 公开仓库为 `xytsakura/ai-for-better-life-in-ustc`。
 - 两名队友的 GitHub 用户名为 `wml-wml294` 和 `ysyzynx`；协作记录只使用 GitHub 用户名，不保存个人邮箱。
 - 官方比赛要求以公众号原文和组委会最新通知为准，本地文档只用于整理。
 

@@ -1,6 +1,6 @@
 # 课程复习 Agent 部署与审计指南
 
-本文档面向第一次接触仓库的队友、Codex/Claude Code 等代码 Agent，以及负责复现和审计 Demo 的开发者。目标是在一台没有本项目运行状态的新电脑上，仅依赖 GitHub 私有仓库和一组独立提供的模型 API 配置，完整运行当前课程复习 Agent。
+本文档面向第一次接触仓库的队友、Codex/Claude Code 等代码 Agent，以及负责复现和审计 Demo 的开发者。目标是在一台没有本项目运行状态的新电脑上，仅依赖 GitHub 公开仓库和一组独立提供的模型 API 配置，完整运行当前课程复习 Agent。
 
 ## 1. 部署完成后能得到什么
 
@@ -58,7 +58,7 @@ Manifest 有 26 条记录，其中两份 PDF 内容重复。首次导入的正�
 
 推荐环境：
 
-- 已获邀访问私有仓库 `xytsakura/ai-for-better-life-in-ustc`；
+- 可访问公开仓库 `xytsakura/ai-for-better-life-in-ustc`；
 - Git；
 - 64 位 Python 3.10 至 3.12，推荐 Python 3.12；
 - 能访问 Python 包源；
@@ -78,7 +78,7 @@ Windows 主流程使用 Python Launcher 明确选择 3.12，避免 Anaconda 或�
 
 以下命令均在 PowerShell 中执行。
 
-### 第一步：克隆私有仓库
+### 第一步：克隆公开仓库
 
 ```powershell
 git clone https://github.com/xytsakura/ai-for-better-life-in-ustc.git
